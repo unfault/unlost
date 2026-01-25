@@ -338,6 +338,81 @@ fn compute_workspace_id(workspace_root: &std::path::Path) -> Option<(String, Str
     ))
 }
 
+fn collect_git_history_summary(
+    root: &std::path::Path,
+    max_commits: usize,
+) -> anyhow::Result<Option<String>> {
+    if max_commits == 0 {
+        return Ok(None);
+    }
+    if git_toplevel(root).is_none() {
+        return Ok(None);
+    }
+
+    let n = max_commits.min(50);
+    let n_str = n.to_string();
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["log", "-n", n_str.as_str(), "--pretty=format:%H%x1f%ct%x1f%s%x1e"])
+        .output()
+        .context("failed to run git log")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut out = String::new();
+    out.push_str(&format!("commits: {n}\n"));
+
+    let mut total = 0usize;
+    for rec in raw.split('\x1e') {
+        let rec = rec.trim();
+        if rec.is_empty() {
+            continue;
+        }
+        let mut parts = rec.split('\x1f');
+        let hash = parts.next().unwrap_or("").trim();
+        let ts = parts.next().unwrap_or("").trim();
+        let subj = parts.next().unwrap_or("").trim();
+        if hash.is_empty() {
+            continue;
+        }
+
+        let files = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["diff-tree", "--no-commit-id", "--name-only", "-r", hash])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        let mut files = files;
+        if files.len() > 10 {
+            files.truncate(10);
+        }
+
+        let short = if hash.len() >= 7 { &hash[..7] } else { hash };
+        let line = if files.is_empty() {
+            format!("- {short} ts={ts} {subj}\n")
+        } else {
+            format!("- {short} ts={ts} {subj} [files: {}]\n", files.join(", "))
+        };
+        total += line.len();
+        if total > 20_000 {
+            out.push_str("- ... (truncated)\n");
+            break;
+        }
+        out.push_str(&line);
+    }
+
+    if out.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(out))
+    }
+}
+
 fn load_workspace_config() -> WorkspaceConfig {
     let p = unlost_config_path();
     if let Ok(s) = std::fs::read_to_string(&p) {
@@ -1237,6 +1312,14 @@ enum Command {
         /// Disable LLM summaries for init
         #[arg(long, default_value_t = false)]
         no_llm: bool,
+
+        /// Include recent git history (commit subjects + touched files) when available
+        #[arg(long, default_value_t = true)]
+        git_history: bool,
+
+        /// Max commits to consider for git history (bounded)
+        #[arg(long, default_value_t = 50)]
+        git_commits: usize,
 
         /// LLM model to use for init summaries
         #[arg(long)]
@@ -2970,6 +3053,7 @@ async fn llm_init_capsules(
     hotspots: &[(usize, String)],
     deps: &[(usize, String)],
     file_paths: &[String],
+    git_history: Option<&str>,
 ) -> anyhow::Result<(String, Vec<IntentCapsule>)> {
     // Keep this tightly bounded: small prompt, small output.
     let mut context = String::new();
@@ -3013,14 +3097,23 @@ async fn llm_init_capsules(
         context.push('\n');
     }
 
+    if let Some(gh) = git_history {
+        if !gh.trim().is_empty() {
+            context.push_str("recent git history (bounded):\n");
+            context.push_str(gh.trim());
+            context.push_str("\n\n");
+        }
+    }
+
     let preamble = "You are unlost init. Write a compact, colleague-like baseline understanding of this codebase.\n\
-Return JSON only.\n\
-Provide a `debrief` field: 6-10 sentences, conversational, no bullets, no headings.\n\
-Then provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\
-Each capsule schema: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
-Use categories like: Snapshot:Project, Snapshot:Architecture, Snapshot:DataModel, Snapshot:Runtime, Snapshot:Risks, Snapshot:NextSteps.\n\
-Do not include long excerpts; do not include any tool/system boilerplate.\n\
-Populate symbols with real identifiers, file paths, and endpoints when available.";
+ Return JSON only.\n\
+ Provide a `debrief` field: 6-10 sentences, conversational, no bullets, no headings.\n\
+ Then provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\
+ Each capsule schema: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+ Use categories like: Snapshot:Project, Snapshot:Architecture, Snapshot:DataModel, Snapshot:Runtime, Snapshot:Risks, Snapshot:NextSteps.\n\
+ If git history is provided, add a couple of Snapshot:History capsules about recent evolution and intent (no code excerpts).\n\
+ Do not include long excerpts; do not include any tool/system boilerplate.\n\
+ Populate symbols with real identifiers, file paths, and endpoints when available.";
 
     let InitCapsulesOutput { debrief, mut capsules } = llm_extract::<InitCapsulesOutput>(
         llm_model_override,
@@ -3042,6 +3135,8 @@ async fn run_init(
     embed_model: &str,
     embed_cache_dir: Option<&str>,
     no_llm: bool,
+    git_history: bool,
+    git_commits: usize,
     llm_model: Option<&str>,
     llm_max_capsules: usize,
     max_capsules: usize,
@@ -3123,6 +3218,12 @@ async fn run_init(
     }
 
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+
+    let git_history_summary = if git_history {
+        collect_git_history_summary(root_path, git_commits).ok().flatten()
+    } else {
+        None
+    };
 
     let mut capsules: Vec<(IntentCapsule, ResponseMeta)> = Vec::new();
 
@@ -3254,6 +3355,7 @@ async fn run_init(
                 &top_hotspots,
                 &deps,
                 &file_paths,
+                git_history_summary.as_deref(),
             )
             .await
             {
@@ -3280,6 +3382,31 @@ async fn run_init(
                 Err(e) => {
                     warn!(error = ?e, "init LLM summaries failed; continuing with structural init only");
                 }
+            }
+        }
+    }
+
+    // If we have git history and no LLM, still seed one lightweight capsule.
+    if no_llm {
+        if let Some(gh) = git_history_summary.as_deref() {
+            if capsules.len() < max_capsules {
+                let preview = gh.lines().take(12).collect::<Vec<_>>().join("\n");
+                capsules.push((
+                    IntentCapsule {
+                        category: "Snapshot:History".to_string(),
+                        intent: "Capture recent evolution signals".to_string(),
+                        decision: preview,
+                        rationale: String::new(),
+                        next_steps: Vec::new(),
+                        symbols: vec!["git".to_string()],
+                    },
+                    ResponseMeta {
+                        source: "init".to_string(),
+                        upstream_host: "init".to_string(),
+                        request_path: "init".to_string(),
+                        http_status: 0,
+                    },
+                ));
             }
         }
     }
@@ -4181,6 +4308,8 @@ async fn main() -> anyhow::Result<()> {
             embed_cache_dir,
             max_capsules,
             no_llm,
+            git_history,
+            git_commits,
             llm_model,
             llm_max_capsules,
         } => {
@@ -4190,6 +4319,8 @@ async fn main() -> anyhow::Result<()> {
                 &embed_model,
                 embed_cache_dir.as_deref(),
                 no_llm,
+                git_history,
+                git_commits,
                 llm_model.as_deref(),
                 llm_max_capsules,
                 max_capsules,
