@@ -53,6 +53,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -361,6 +362,154 @@ fn save_workspace_config(cfg: &WorkspaceConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn serve_request(
+    client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
+    conn_id: u64,
+    analysis_tx: kanal::Sender<AnalysisMsg>,
+    analysis_drops_logged: Arc<AtomicBool>,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
+    let (workspace_id, provider, stripped_pq) = match parse_multiplexed_uri(req.uri()) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(conn_id, error = ?e, "bad multiplexed uri");
+            let resp = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(text_body(b"expected /w/<workspace_id>/<provider>/..."))
+                .unwrap();
+            return Ok(resp);
+        }
+    };
+
+    let upstream_host = provider.upstream_host().to_string();
+    let upstream_port: u16 = 443;
+    let upstream_uri = match Uri::builder()
+        .scheme("https")
+        .authority(format!("{}:{}", upstream_host, upstream_port))
+        .path_and_query(stripped_pq.as_str())
+        .build()
+    {
+        Ok(u) => u,
+        Err(e) => {
+            warn!(conn_id, error = ?e, "failed to build upstream uri");
+            let resp = Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(text_body(b"bad request"))
+                .unwrap();
+            return Ok(resp);
+        }
+    };
+
+    let (mut parts, body) = req.into_parts();
+    let method = parts.method.clone();
+    let version = parts.version;
+    parts.uri = Uri::builder()
+        .path_and_query(stripped_pq.as_str())
+        .build()
+        .unwrap_or_else(|_| Uri::from_static("/"));
+    let request_path = parts
+        .uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/")
+        .to_string();
+    let headers = sanitize_request_headers(parts.headers, &upstream_host);
+
+    const MAX_REQ_BODY: usize = 2 * 1024 * 1024;
+    let req_body_bytes = match read_incoming_body_limited(body, MAX_REQ_BODY).await {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(conn_id, error = ?e, "request body capture failed");
+            let resp = Response::builder()
+                .status(StatusCode::PAYLOAD_TOO_LARGE)
+                .body(text_body(b"payload too large"))
+                .unwrap();
+            return Ok(resp);
+        }
+    };
+
+    let mut out_req = Request::builder()
+        .method(method)
+        .uri(upstream_uri)
+        .version(version)
+        .body(bytes_body(req_body_bytes.clone()))
+        .unwrap();
+    *out_req.headers_mut() = headers;
+
+    let res = match client.request(out_req).await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(conn_id, error = ?e, "upstream request failed");
+            let resp = Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(text_body(b"bad gateway"))
+                .unwrap();
+            return Ok(resp);
+        }
+    };
+
+    let (res_parts, res_body) = res.into_parts();
+    let res_headers = sanitize_response_headers(res_parts.headers);
+    let content_type = res_headers
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let meta = AnalysisMeta {
+        workspace_id,
+        upstream_host: upstream_host.clone(),
+        request_path: request_path.clone(),
+        http_status: res_parts.status.as_u16(),
+        content_type,
+    };
+    let _ = analysis_tx.try_send(AnalysisMsg::ExchangeStart {
+        meta,
+        request_body: req_body_bytes,
+    });
+
+    let tx = analysis_tx;
+    let drops_logged = analysis_drops_logged;
+    let stream = futures_util::stream::unfold(
+        (BodyStream::new(res_body), tx, drops_logged, false),
+        move |(mut bs, tx, drops_logged, ended)| async move {
+            if ended {
+                return None;
+            }
+            match bs.try_next().await {
+                Ok(Some(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        match tx.try_send(AnalysisMsg::ResponseChunk(data.clone())) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                if !drops_logged.swap(true, Ordering::Relaxed) {
+                                    info!(conn_id, "analysis channel full; dropping response bytes");
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    Some((Ok(frame), (bs, tx, drops_logged, false)))
+                }
+                Ok(None) => {
+                    let _ = tx.try_send(AnalysisMsg::ResponseEnd);
+                    None
+                }
+                Err(e) => {
+                    let _ = tx.try_send(AnalysisMsg::ResponseEnd);
+                    Some((Err(e), (bs, tx, drops_logged, true)))
+                }
+            }
+        },
+    );
+
+    let out_body = StreamBody::new(stream).boxed();
+    let mut out_res = Response::new(out_body);
+    *out_res.status_mut() = res_parts.status;
+    *out_res.version_mut() = res_parts.version;
+    *out_res.headers_mut() = res_headers;
+    Ok(out_res)
+}
+
 fn get_llm_config() -> Option<LlmConfig> {
     load_workspace_config().llm
 }
@@ -609,6 +758,65 @@ fn handle_llm_command(cmd: LlmCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn ensure_object(v: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
+    if !v.is_object() {
+        *v = serde_json::Value::Object(serde_json::Map::new());
+    }
+    v.as_object_mut().unwrap()
+}
+
+fn set_nested_string(root: &mut serde_json::Value, path: &[&str], value: String) {
+    let mut cur = root;
+    for (i, key) in path.iter().enumerate() {
+        let is_last = i + 1 == path.len();
+        let obj = ensure_object(cur);
+        if is_last {
+            obj.insert((*key).to_string(), serde_json::Value::String(value));
+            return;
+        }
+        cur = obj.entry((*key).to_string()).or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    }
+}
+
+fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
+    match cmd {
+        AgentCommand::Opencode { path, server } => {
+            let root = git_toplevel(std::path::Path::new(&path))
+                .unwrap_or_else(|| canonicalize_dir(std::path::Path::new(&path)).unwrap_or_else(|_| std::path::PathBuf::from(&path)));
+            let root = canonicalize_dir(&root)?;
+
+            let (workspace_id, _src) = compute_workspace_id(&root)
+                .ok_or_else(|| anyhow::anyhow!("unable to compute workspace id"))?;
+
+            let server = server.trim_end_matches('/');
+            let base_url = format!("{server}/w/{workspace_id}/opencode/zen/v1");
+
+            let cfg_path = root.join("opencode.json");
+            let mut json = match std::fs::read_to_string(&cfg_path) {
+                Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Object(serde_json::Map::new()),
+                Err(e) => return Err(e.into()),
+            };
+
+            set_nested_string(
+                &mut json,
+                &["$schema"],
+                "https://opencode.ai/config.json".to_string(),
+            );
+            set_nested_string(
+                &mut json,
+                &["provider", "opencode", "options", "baseURL"],
+                base_url,
+            );
+
+            let rendered = serde_json::to_string_pretty(&json)?;
+            std::fs::write(&cfg_path, rendered)?;
+            println!("configured: {}", cfg_path.display());
+        }
+    }
+    Ok(())
+}
+
 static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -621,6 +829,7 @@ struct ResponseMeta {
 
 #[derive(Debug, Clone)]
 struct AnalysisMeta {
+    workspace_id: String,
     upstream_host: String,
     request_path: String,
     http_status: u16,
@@ -882,6 +1091,22 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Global recorder that multiplexes workspaces via base URL
+    Serve {
+        /// Bind address. Accepts either `port` or `ip:port`.
+        /// Examples: `3000`, `127.0.0.1:3000`.
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        bind: String,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Record live LLM conversations (captures and summarizes)
     #[command(alias = "proxy")]
     Record {
@@ -1028,6 +1253,7 @@ enum Command {
     },
 
     /// Manage configuration (LLM provider, etc.)
+    #[command(alias = "configure")]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -1047,6 +1273,26 @@ enum ConfigCommand {
     Llm {
         #[command(subcommand)]
         command: LlmCommand,
+    },
+
+    /// Configure an agent workspace to talk to unlost
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Configure OpenCode via opencode.json in the workspace
+    Opencode {
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// unlost server base URL (loopback)
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        server: String,
     },
 }
 
@@ -2953,8 +3199,258 @@ async fn run_init(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpstreamProvider {
+    Openai,
+    Anthropic,
+    Opencode,
+}
+
+impl UpstreamProvider {
+    fn from_path_segment(s: &str) -> Option<Self> {
+        match s {
+            "openai" => Some(Self::Openai),
+            "anthropic" => Some(Self::Anthropic),
+            "opencode" => Some(Self::Opencode),
+            _ => None,
+        }
+    }
+
+    fn upstream_host(self) -> &'static str {
+        match self {
+            Self::Openai => "api.openai.com",
+            Self::Anthropic => "api.anthropic.com",
+            Self::Opencode => "opencode.ai",
+        }
+    }
+}
+
+fn parse_multiplexed_uri(uri: &Uri) -> anyhow::Result<(String, UpstreamProvider, String)> {
+    let path = uri.path();
+    let segs = path.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>();
+    if segs.len() < 3 || segs[0] != "w" {
+        anyhow::bail!("expected path /w/<workspace_id>/<provider>/... (got {path})");
+    }
+    let workspace_id = segs[1].to_string();
+    let provider = UpstreamProvider::from_path_segment(segs[2])
+        .ok_or_else(|| anyhow::anyhow!("unknown provider '{}'", segs[2]))?;
+
+    let rest = &segs[3..];
+    let mut new_path = String::from("/");
+    if !rest.is_empty() {
+        new_path.push_str(&rest.join("/"));
+    }
+    if let Some(q) = uri.query() {
+        new_path.push('?');
+        new_path.push_str(q);
+    }
+
+    Ok((workspace_id, provider, new_path))
+}
+
+#[derive(Clone)]
+struct ServeState {
+    embedder: Embedder,
+    db_cache: Arc<Mutex<HashMap<String, Connection>>>,
+}
+
+impl ServeState {
+    fn new(embedder: Embedder) -> Self {
+        Self {
+            embedder,
+            db_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn workspace_paths(&self, workspace_id: &str) -> WorkspacePaths {
+        let ws_dir = unlost_workspace_dir(workspace_id);
+        WorkspacePaths {
+            id: workspace_id.to_string(),
+            db_dir: ws_dir.join("lancedb"),
+            capsules_jsonl: ws_dir.join("capsules.jsonl"),
+        }
+    }
+
+    async fn db_for(&self, workspace_id: &str) -> anyhow::Result<Connection> {
+        {
+            let cache = self.db_cache.lock().await;
+            if let Some(c) = cache.get(workspace_id) {
+                return Ok(c.clone());
+            }
+        }
+
+        let ws = self.workspace_paths(workspace_id);
+        std::fs::create_dir_all(&ws.db_dir)?;
+        let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+            .execute()
+            .await?;
+        let _ = ensure_capsules_table(&db).await?;
+
+        let mut cache = self.db_cache.lock().await;
+        cache.insert(workspace_id.to_string(), db.clone());
+        Ok(db)
+    }
+}
+
+async fn analysis_worker_multiplex(rx: AsyncReceiver<AnalysisMsg>, state: ServeState, conn_id: u64) {
+    debug!(conn_id, "analysis worker started");
+
+    let mut exchange_seq: u64 = 0;
+    let mut pending_start: Option<(AnalysisMeta, Bytes)> = None;
+
+    loop {
+        let (meta, request_body) = if let Some(p) = pending_start.take() {
+            p
+        } else {
+            match rx.recv().await {
+                Ok(AnalysisMsg::ExchangeStart { meta, request_body }) => (meta, request_body),
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        };
+
+        exchange_seq += 1;
+
+        let user_text = decode_json_lossy(&request_body)
+            .and_then(|v| {
+                if meta.request_path.contains("/v1/messages") {
+                    extract_anthropic_user_text(&v).or_else(|| extract_openai_message_text(&v))
+                } else {
+                    extract_openai_message_text(&v).or_else(|| extract_anthropic_user_text(&v))
+                }
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let mut assistant_text = String::new();
+        let mut sse_buf: Vec<u8> = Vec::new();
+        let mut raw_buf: Vec<u8> = Vec::new();
+        let sse = is_event_stream(meta.content_type.as_deref());
+
+        loop {
+            let msg = match rx.recv().await {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+
+            match msg {
+                AnalysisMsg::ResponseEnd => break,
+                AnalysisMsg::ExchangeStart { meta: next_meta, request_body: next_req } => {
+                    pending_start = Some((next_meta, next_req));
+                    break;
+                }
+                AnalysisMsg::ResponseChunk(b) => {
+                    if sse {
+                        sse_buf.extend_from_slice(&b);
+                        sse_extract_deltas(&mut sse_buf, &mut assistant_text);
+                    } else {
+                        raw_buf.extend_from_slice(&b);
+                    }
+
+                    if assistant_text.len() > 512 * 1024 {
+                        assistant_text.truncate(512 * 1024);
+                    }
+                    if raw_buf.len() > 2 * 1024 * 1024 {
+                        raw_buf.truncate(2 * 1024 * 1024);
+                    }
+                }
+            }
+        }
+
+        if !sse {
+            if let Some(v) = decode_json_lossy(&raw_buf) {
+                if meta.request_path.contains("/v1/messages") {
+                    assistant_text = extract_anthropic_assistant_text_from_json(&v)
+                        .or_else(|| extract_openai_assistant_text_from_json(&v))
+                        .unwrap_or_default();
+                } else {
+                    assistant_text = extract_openai_assistant_text_from_json(&v)
+                        .or_else(|| extract_anthropic_assistant_text_from_json(&v))
+                        .unwrap_or_default();
+                }
+            }
+        }
+
+        let assistant_text = assistant_text.trim().to_string();
+        if user_text.is_none() && assistant_text.is_empty() {
+            continue;
+        }
+
+        let mut input = String::new();
+        if let Some(u) = user_text.as_deref() {
+            input.push_str("User:\n");
+            input.push_str(u);
+            input.push_str("\n\n");
+        }
+        if !assistant_text.is_empty() {
+            input.push_str("Assistant:\n");
+            input.push_str(&assistant_text);
+        }
+
+        let preamble = "You are unlost. Extract a short, high-signal intent capsule from this conversation turn.\n\
+Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Rules:\n\
+- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
+- Ignore tool/proxy/streaming metadata and any system boilerplate.\n\
+- Keep each field concise; next_steps max 3.\n\
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
+
+        let capsule = match llm_extract::<IntentCapsule>(None, preamble, &input).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(conn_id, exchange_seq, error = ?e, "capsule extraction failed");
+                continue;
+            }
+        };
+
+        let ts_ms = now_ms();
+        let store_meta = ResponseMeta {
+            source: "record".to_string(),
+            upstream_host: meta.upstream_host.clone(),
+            request_path: meta.request_path.clone(),
+            http_status: meta.http_status,
+        };
+
+        let ws_paths = state.workspace_paths(&meta.workspace_id);
+        if let Err(e) = append_capsule_jsonl(
+            &ws_paths.capsules_jsonl,
+            ts_ms,
+            conn_id,
+            exchange_seq,
+            &store_meta,
+            &capsule,
+        ) {
+            warn!(conn_id, exchange_seq, error = ?e, "failed to append capsule jsonl");
+        }
+
+        match state.db_for(&meta.workspace_id).await {
+            Ok(db) => {
+                if let Err(e) = insert_capsule_row(
+                    &db,
+                    &state.embedder,
+                    conn_id,
+                    exchange_seq,
+                    ts_ms,
+                    &store_meta,
+                    &capsule,
+                )
+                .await
+                {
+                    warn!(conn_id, exchange_seq, error = ?e, "failed to insert capsule into lancedb");
+                }
+            }
+            Err(e) => {
+                warn!(conn_id, exchange_seq, error = ?e, "failed to open workspace db");
+            }
+        }
+    }
+
+    debug!(conn_id, "analysis worker finished");
+}
+
 async fn proxy_request(
     client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
+    workspace_id: String,
     upstream_host: String,
     upstream_port: u16,
     conn_id: u64,
@@ -3030,6 +3526,7 @@ async fn proxy_request(
 
     // Notify analyzer of a new exchange. No headers, no SSE framing, just structured text extraction.
     let meta = AnalysisMeta {
+        workspace_id,
         upstream_host: upstream_host.clone(),
         request_path: request_path.clone(),
         http_status: res_parts.status.as_u16(),
@@ -3085,6 +3582,65 @@ async fn proxy_request(
     Ok(out_res)
 }
 
+async fn run_serve(bind: SocketAddr, embedder: Embedder) -> anyhow::Result<()> {
+    let https = HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .context("no native root CA certificates found")?
+        .https_only()
+        .enable_http1()
+        .build();
+
+    let client: Client<_, BoxBody<Bytes, hyper::Error>> =
+        Client::builder(TokioExecutor::new()).build(https);
+
+    let listener = TcpListener::bind(bind).await?;
+    let addr = listener.local_addr()?;
+    info!(%addr, "unlost serve active");
+    println!("unlost serve active on {}", addr);
+    println!("expected base URLs like: http://{}:{}/w/<workspace_id>/anthropic/v1/messages", addr.ip(), addr.port());
+
+    let state = ServeState::new(embedder);
+
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
+        info!(conn_id, ?peer, "connection accepted");
+
+        let io = TokioIo::new(stream);
+        let client = client.clone();
+        let state = state.clone();
+
+        tokio::spawn(async move {
+            const ANALYSIS_CHAN_CAP: usize = 256;
+            let (analysis_tx, analysis_rx) = kanal::bounded::<AnalysisMsg>(ANALYSIS_CHAN_CAP);
+            tokio::spawn(analysis_worker_multiplex(
+                analysis_rx.to_async(),
+                state.clone(),
+                conn_id,
+            ));
+            let drops_logged = Arc::new(AtomicBool::new(false));
+
+            let service = hyper::service::service_fn(move |req| {
+                serve_request(
+                    client.clone(),
+                    conn_id,
+                    analysis_tx.clone(),
+                    drops_logged.clone(),
+                    req,
+                )
+            });
+
+            let res = http1::Builder::new()
+                .keep_alive(true)
+                .serve_connection(io, service)
+                .await;
+            if let Err(e) = res {
+                warn!(conn_id, error = ?e, "connection error");
+            }
+        });
+    }
+}
+
 async fn run_proxy(
     bind: SocketAddr,
     upstream_host: String,
@@ -3113,6 +3669,8 @@ async fn run_proxy(
     info!(%addr, %upstream_host, upstream_port, "unlost recording active");
     println!("unlost recording active on :{}", addr.port());
 
+    let workspace_id = ws.id.clone();
+
     loop {
         let (stream, peer) = listener.accept().await?;
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -3125,6 +3683,7 @@ async fn run_proxy(
         let embedder = embedder.clone();
 
         let capsules_jsonl = capsules_jsonl.clone();
+        let workspace_id = workspace_id.clone();
         tokio::spawn(async move {
             // One analysis worker per TCP connection. Requests on the same
             // connection (HTTP keep-alive) share this worker.
@@ -3142,6 +3701,7 @@ async fn run_proxy(
             let service = hyper::service::service_fn(move |req| {
                 proxy_request(
                     client.clone(),
+                    workspace_id.clone(),
                     upstream_host.clone(),
                     upstream_port,
                     conn_id,
@@ -3169,7 +3729,7 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.command.is_none() {
         Cli::command().print_help()?;
-        println!("\n\nTry:\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost record --bind 3000 --upstream-host api.anthropic.com\n- unlost init --path .\n- unlost query \"what are the routes available?\"\n");
+        println!("\n\nTry:\n- unlost serve --bind 127.0.0.1:3000\n- unlost configure agent opencode --path . --server http://127.0.0.1:3000\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost init --path .\n- unlost recall\n- unlost query \"what are the routes available?\"\n");
         return Ok(());
     }
 
@@ -3403,6 +3963,9 @@ async fn main() -> anyhow::Result<()> {
             ConfigCommand::Llm { command } => {
                 handle_llm_command(command)?;
             }
+            ConfigCommand::Agent { command } => {
+                handle_agent_command(command)?;
+            }
         },
         Command::Clear { path } => {
             clear_workspace(std::path::Path::new(&path))?;
@@ -3444,6 +4007,16 @@ async fn main() -> anyhow::Result<()> {
                     println!("inspect failed: {e}");
                 }
             }
+        }
+        Command::Serve { bind, embed_model, embed_cache_dir } => {
+            let bind = parse_bind(&bind)?;
+            let embedder = load_embedder(
+                &embed_model,
+                embed_cache_dir.as_deref().map(std::path::PathBuf::from),
+                false,
+            )
+            .await?;
+            run_serve(bind, embedder).await?;
         }
         Command::Record { bind, upstream_host, upstream_port, embed_model, embed_cache_dir } => {
             if upstream_host.trim().is_empty() {
