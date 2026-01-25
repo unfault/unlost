@@ -62,7 +62,7 @@ use std::collections::HashMap;
 use petgraph::visit::EdgeRef;
 use sha2::{Digest, Sha256};
 use ignore::WalkBuilder;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 use fastembed::{EmbeddingModel, InitOptions as FastEmbedInitOptions, TextEmbedding};
 use unfault_core::{
@@ -339,21 +339,35 @@ fn compute_workspace_id(workspace_root: &std::path::Path) -> Option<(String, Str
 }
 
 fn collect_git_history_summary(
-    root: &std::path::Path,
+    repo_root: &std::path::Path,
+    scope_rel: Option<&str>,
     max_commits: usize,
 ) -> anyhow::Result<Option<String>> {
     if max_commits == 0 {
         return Ok(None);
     }
-    if git_toplevel(root).is_none() {
+    if git_toplevel(repo_root).is_none() {
         return Ok(None);
     }
 
     let n = max_commits.min(50);
     let n_str = n.to_string();
+    let mut log_args: Vec<String> = vec![
+        "log".to_string(),
+        "-n".to_string(),
+        n_str,
+        "--pretty=format:%H%x1f%ct%x1f%s%x1e".to_string(),
+    ];
+    if let Some(scope) = scope_rel {
+        if !scope.trim().is_empty() {
+            log_args.push("--".to_string());
+            log_args.push(scope.to_string());
+        }
+    }
+
     let output = std::process::Command::new("git")
-        .current_dir(root)
-        .args(["log", "-n", n_str.as_str(), "--pretty=format:%H%x1f%ct%x1f%s%x1e"])
+        .current_dir(repo_root)
+        .args(&log_args)
         .output()
         .context("failed to run git log")?;
     if !output.status.success() {
@@ -379,8 +393,20 @@ fn collect_git_history_summary(
         }
 
         let files = std::process::Command::new("git")
-            .current_dir(root)
-            .args(["diff-tree", "--no-commit-id", "--name-only", "-r", hash])
+            .current_dir(repo_root)
+            .args([
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                hash,
+            ])
+            .args(
+                scope_rel
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| vec!["--", s])
+                    .unwrap_or_default(),
+            )
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -613,6 +639,10 @@ where
                 openai::Client::builder().api_key(&api_key);
             if let Some(base) = base_url.as_deref() {
                 builder = builder.base_url(base);
+            } else {
+                // Avoid accidentally routing the extractor through unlost itself if the user set
+                // OPENAI_BASE_URL/OPENAI_API_BASE in their shell for other tools.
+                builder = builder.base_url("https://api.openai.com/v1");
             }
             let client = builder.build().context("failed to build OpenAI client")?;
             Ok(client
@@ -628,6 +658,9 @@ where
                 anthropic::Client::builder().api_key(api_key);
             if let Some(base) = base_url.as_deref() {
                 builder = builder.base_url(base);
+            } else {
+                // Same idea as OpenAI: keep extractor traffic off the local recorder.
+                builder = builder.base_url("https://api.anthropic.com");
             }
             let client = builder.build().context("failed to build Anthropic client")?;
             Ok(client
@@ -734,7 +767,7 @@ fn get_or_create_workspace_paths(workspace_root: &std::path::Path) -> anyhow::Re
     })
 }
 
-fn clear_workspace(workspace_root: &std::path::Path) -> anyhow::Result<()> {
+fn clear_workspace(workspace_root: &std::path::Path, yes: bool) -> anyhow::Result<()> {
     let root = git_toplevel(workspace_root)
         .unwrap_or_else(|| canonicalize_dir(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf()));
     let root = canonicalize_dir(&root)?;
@@ -754,6 +787,36 @@ fn clear_workspace(workspace_root: &std::path::Path) -> anyhow::Result<()> {
     };
 
     let ws_dir = unlost_workspace_dir(&workspace_id);
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!("refusing to clear without --yes in non-interactive mode");
+        }
+
+        let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let (warn_on, warn_off) = if use_color {
+            ("\x1b[33;1m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        let (dim_on, dim_off) = if use_color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+
+        println!("{warn_on}This will permanently delete unlost data{warn_off}");
+        println!("workspace: {workspace_id}");
+        println!("{dim_on}path:{dim_off} {root_str}");
+        println!("{dim_on}data:{dim_off} {}", ws_dir.display());
+        print!("{warn_on}Continue?{warn_off} [y/N]: ");
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        let ans = line.trim().to_ascii_lowercase();
+        if ans != "y" && ans != "yes" {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+
     if ws_dir.exists() {
         std::fs::remove_dir_all(&ws_dir)
             .with_context(|| format!("failed to delete {}", ws_dir.display()))?;
@@ -1321,6 +1384,10 @@ enum Command {
         #[arg(long, default_value_t = 50)]
         git_commits: usize,
 
+        /// Limit git history to a subdirectory (relative to repo root). Defaults to --path.
+        #[arg(long)]
+        git_path: Option<String>,
+
         /// LLM model to use for init summaries
         #[arg(long)]
         llm_model: Option<String>,
@@ -1348,6 +1415,10 @@ enum Command {
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -2927,14 +2998,22 @@ Output format:
         .narrative)
 }
 
-fn query_spinner_enabled(output: OutputFormat) -> bool {
+fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {
     if output != OutputFormat::Ansi {
-        return false;
+        return None;
     }
     if std::env::var_os("NO_COLOR").is_some() {
-        return false;
+        return None;
     }
-    std::io::stdout().is_terminal()
+
+    // Prefer stdout so the user sees it even if stderr is hidden.
+    if std::io::stdout().is_terminal() {
+        return Some(ProgressDrawTarget::stdout());
+    }
+    if std::io::stderr().is_terminal() {
+        return Some(ProgressDrawTarget::stderr());
+    }
+    None
 }
 
 fn capsule_embed_text(c: &IntentCapsule) -> String {
@@ -3137,13 +3216,15 @@ async fn run_init(
     no_llm: bool,
     git_history: bool,
     git_commits: usize,
+    git_path: Option<&str>,
     llm_model: Option<&str>,
     llm_max_capsules: usize,
     max_capsules: usize,
     ws: WorkspacePaths,
 ) -> anyhow::Result<()> {
-    let root_path = std::path::Path::new(root);
-    let files = collect_source_files(root_path)?;
+    let root_path = canonicalize_dir(std::path::Path::new(root))
+        .unwrap_or_else(|_| std::path::PathBuf::from(root));
+    let files = collect_source_files(&root_path)?;
     if files.is_empty() {
         anyhow::bail!("no supported source files found under {root}");
     }
@@ -3220,7 +3301,32 @@ async fn run_init(
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
 
     let git_history_summary = if git_history {
-        collect_git_history_summary(root_path, git_commits).ok().flatten()
+        let repo_root = git_toplevel(&root_path);
+        if let Some(repo_root) = repo_root {
+            let scope_abs = if let Some(p) = git_path {
+                let p = std::path::Path::new(p);
+                if p.is_absolute() {
+                    canonicalize_dir(p).unwrap_or_else(|_| p.to_path_buf())
+                } else {
+                    repo_root.join(p)
+                }
+            } else {
+                root_path.to_path_buf()
+            };
+
+            let scope_rel = scope_abs
+                .strip_prefix(&repo_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|s| s.trim_matches('/'))
+                .filter(|s| !s.is_empty());
+
+            collect_git_history_summary(&repo_root, scope_rel, git_commits)
+                .ok()
+                .flatten()
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -3349,7 +3455,7 @@ async fn run_init(
             match llm_init_capsules(
                 llm_model,
                 llm_limit,
-                root_path,
+                &root_path,
                 &stats,
                 &top_routes,
                 &top_hotspots,
@@ -3943,8 +4049,51 @@ async fn run_serve(bind: SocketAddr, embedder: Embedder) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
     info!(%addr, "unlost serve active");
-    println!("unlost serve active on {}", addr);
-    println!("expected base URLs like: http://{}:{}/w/<workspace_id>/anthropic/v1/messages", addr.ip(), addr.port());
+
+    let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let (title_on, title_off) = if use_color {
+        ("\x1b[36;1m", "\x1b[0m") // bold cyan
+    } else {
+        ("", "")
+    };
+    let (ok_on, ok_off) = if use_color {
+        ("\x1b[32;1m", "\x1b[0m") // bold green
+    } else {
+        ("", "")
+    };
+    let (dim_on, dim_off) = if use_color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+
+    let host = if addr.ip().is_unspecified() {
+        "127.0.0.1".to_string()
+    } else {
+        addr.ip().to_string()
+    };
+    let base = format!("http://{host}:{}", addr.port());
+
+    println!("{title_on}unlost serve{title_off} {ok_on}listening{ok_off} on {base}");
+    println!("{dim_on}Multiplexing via URL: /w/<workspace_id>/<provider>/...{dim_off}");
+    println!("{dim_on}Providers: openai | anthropic | opencode{dim_off}");
+    println!();
+    println!("Examples:");
+    println!("  {dim_on}Anthropic:{dim_off} {base}/w/<workspace_id>/anthropic/v1/messages");
+    println!("  {dim_on}OpenAI:{dim_off}    {base}/w/<workspace_id>/openai/v1/chat/completions");
+    println!("  {dim_on}OpenCode:{dim_off}  {base}/w/<workspace_id>/opencode/zen/v1/responses");
+    println!();
+    println!("Next:");
+    println!(
+        "  {dim_on}Write agent config:{dim_off} unlost configure agent opencode --path . --server {base}"
+    );
+
+    if use_color {
+        let openai_env = std::env::var("OPENAI_BASE_URL")
+            .ok()
+            .or_else(|| std::env::var("OPENAI_API_BASE").ok());
+        let anthropic_env = std::env::var("ANTHROPIC_BASE_URL").ok();
+        if openai_env.is_some() || anthropic_env.is_some() {
+            println!();
+            println!("{dim_on}Note:{dim_off} if you set base-url env vars in this shell (e.g. OPENAI_BASE_URL), unlost will ignore them for its own extractor calls.");
+        }
+    }
 
     let state = ServeState::new(embedder);
 
@@ -4144,10 +4293,11 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
 
-            let spinner = if query_spinner_enabled(output) {
+            let spinner = if let Some(target) = spinner_draw_target(output) {
                 let pb = ProgressBar::new_spinner();
+                pb.set_draw_target(target);
                 pb.set_style(
-                    ProgressStyle::with_template("{spinner} {msg}")
+                    ProgressStyle::with_template("{spinner:.cyan} {msg:.dim}")
                         .unwrap()
                         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
                 );
@@ -4240,6 +4390,21 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let ws = get_or_create_workspace_paths(&std::env::current_dir()?)?;
 
+            let spinner = if let Some(target) = spinner_draw_target(output) {
+                let pb = ProgressBar::new_spinner();
+                pb.set_draw_target(target);
+                pb.set_style(
+                    ProgressStyle::with_template("{spinner:.cyan} {msg:.dim}")
+                        .unwrap()
+                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+                );
+                pb.enable_steady_tick(Duration::from_millis(80));
+                pb.set_message("Let me recall...");
+                Some(pb)
+            } else {
+                None
+            };
+
             let scope = target.join(" ");
             let scope = scope.trim().to_string();
             let scope_opt = (!scope.is_empty()).then_some(scope);
@@ -4291,6 +4456,9 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if hits.is_empty() {
+                if let Some(pb) = spinner.as_ref() {
+                    pb.finish_and_clear();
+                }
                 if let Some(s) = scope_opt {
                     println!("No capsules found yet for: {s}");
                 } else {
@@ -4299,7 +4467,14 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
 
+            if let Some(pb) = spinner.as_ref() {
+                pb.set_message("Weaving threads...");
+            }
             let narrative = llm_recall_narrative(llm_model.as_deref(), scope_opt.as_deref(), &hits).await?;
+
+            if let Some(pb) = spinner.as_ref() {
+                pb.finish_and_clear();
+            }
             println!("{}\n", render_narrative(output, &narrative));
         }
         Command::Init {
@@ -4310,6 +4485,7 @@ async fn main() -> anyhow::Result<()> {
             no_llm,
             git_history,
             git_commits,
+            git_path,
             llm_model,
             llm_max_capsules,
         } => {
@@ -4321,6 +4497,7 @@ async fn main() -> anyhow::Result<()> {
                 no_llm,
                 git_history,
                 git_commits,
+                git_path.as_deref(),
                 llm_model.as_deref(),
                 llm_max_capsules,
                 max_capsules,
@@ -4342,8 +4519,8 @@ async fn main() -> anyhow::Result<()> {
                 handle_agent_command(command)?;
             }
         },
-        Command::Clear { path } => {
-            clear_workspace(std::path::Path::new(&path))?;
+        Command::Clear { path, yes } => {
+            clear_workspace(std::path::Path::new(&path), yes)?;
         }
         Command::Inspect { path, limit, filter } => {
             let ws = get_or_create_workspace_paths(std::path::Path::new(&path))?;
@@ -4354,6 +4531,7 @@ async fn main() -> anyhow::Result<()> {
                         let cap = hit.capsule;
                         let meta = hit.meta;
                         println!("---");
+                        println!("chunked_at: {}", hit.ts_ms);
                         println!("source:    {}", meta.source);
                         println!("category:  {}", cap.category);
                         println!("upstream:  {}", meta.upstream_host);
