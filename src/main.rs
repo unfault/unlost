@@ -55,6 +55,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use std::collections::HashMap;
@@ -1770,6 +1771,205 @@ fn append_capsule_jsonl(
     Ok(())
 }
 
+fn contains_hex_hash(s: &str) -> bool {
+    for tok in s
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+    {
+        if tok.len() < 7 || tok.len() > 40 {
+            continue;
+        }
+        if tok.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F')) {
+            return true;
+        }
+    }
+    false
+}
+
+fn looks_like_commit_or_pr(s: &str) -> bool {
+    let s = s.to_ascii_lowercase();
+    if s.contains("git commit") || s.contains("commit:") || s.contains("commit ") {
+        return true;
+    }
+    if s.contains("pull request") || s.contains("merge request") {
+        return true;
+    }
+    if s.contains("pr #") || s.contains("pr#") {
+        return true;
+    }
+
+    // cheap hash heuristic (7+ hex) preceded by common tokens
+    if s.contains("sha") || s.contains("hash") || s.contains("commit") {
+        if contains_hex_hash(&s) {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Debug, Clone)]
+struct ChunkInput {
+    conn_id: u64,
+    upstream_host: String,
+    request_path: String,
+    http_status: u16,
+    exchange_text: String,
+    commit_mentioned: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FlushJob {
+    workspace_id: String,
+    conn_id: u64,
+    exchange_seq: u64,
+    ts_ms: i64,
+    meta: ResponseMeta,
+    input: String,
+}
+
+struct WorkspaceBuffer {
+    next_seq: u64,
+    last_activity: Instant,
+    last_conn_id: u64,
+    last_upstream_host: String,
+    last_request_path: String,
+    last_http_status: u16,
+    total_chars: usize,
+    turns: Vec<String>,
+    saw_commit: bool,
+}
+
+impl WorkspaceBuffer {
+    fn new(now: Instant) -> Self {
+        Self {
+            next_seq: 0,
+            last_activity: now,
+            last_conn_id: 0,
+            last_upstream_host: String::new(),
+            last_request_path: String::new(),
+            last_http_status: 0,
+            total_chars: 0,
+            turns: Vec::new(),
+            saw_commit: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WorkspaceChunker {
+    buffers: Arc<Mutex<HashMap<String, WorkspaceBuffer>>>,
+    flush_tx: kanal::AsyncSender<FlushJob>,
+}
+
+impl WorkspaceChunker {
+    const IDLE_FLUSH_AFTER: Duration = Duration::from_secs(2);
+    const MAX_TOTAL_CHARS: usize = 16 * 1024;
+    const MAX_TURNS: usize = 8;
+
+    fn new(flush_tx: kanal::AsyncSender<FlushJob>) -> Self {
+        Self {
+            buffers: Arc::new(Mutex::new(HashMap::new())),
+            flush_tx,
+        }
+    }
+
+    async fn ingest(&self, workspace_id: String, item: ChunkInput) {
+        let now = Instant::now();
+        let mut maybe_flush: Option<FlushJob> = None;
+
+        {
+            let mut map = self.buffers.lock().await;
+            let buf = map.entry(workspace_id.clone()).or_insert_with(|| WorkspaceBuffer::new(now));
+
+            // If this buffer has been idle, flush it before appending new content.
+            if !buf.turns.is_empty() && now.duration_since(buf.last_activity) >= Self::IDLE_FLUSH_AFTER {
+                maybe_flush = Some(build_flush_job(workspace_id.clone(), buf));
+                *buf = WorkspaceBuffer::new(now);
+            }
+
+            buf.last_activity = now;
+            buf.last_conn_id = item.conn_id;
+            buf.last_upstream_host = item.upstream_host;
+            buf.last_request_path = item.request_path;
+            buf.last_http_status = item.http_status;
+            buf.saw_commit |= item.commit_mentioned;
+
+            buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
+            buf.turns.push(item.exchange_text);
+
+            // Force flush boundaries.
+            let too_big = buf.total_chars >= Self::MAX_TOTAL_CHARS;
+            let too_many = buf.turns.len() >= Self::MAX_TURNS;
+            let milestone = item.commit_mentioned;
+            if too_big || too_many || milestone {
+                if maybe_flush.is_none() {
+                    maybe_flush = Some(build_flush_job(workspace_id.clone(), buf));
+                    *buf = WorkspaceBuffer::new(now);
+                }
+            }
+        }
+
+        if let Some(job) = maybe_flush {
+            let _ = self.flush_tx.send(job).await;
+        }
+    }
+
+    async fn flush_idle(&self) {
+        let now = Instant::now();
+        let mut jobs: Vec<FlushJob> = Vec::new();
+
+        {
+            let mut map = self.buffers.lock().await;
+            for (ws_id, buf) in map.iter_mut() {
+                if buf.turns.is_empty() {
+                    continue;
+                }
+                if now.duration_since(buf.last_activity) < Self::IDLE_FLUSH_AFTER {
+                    continue;
+                }
+                jobs.push(build_flush_job(ws_id.clone(), buf));
+                *buf = WorkspaceBuffer::new(now);
+            }
+        }
+
+        for j in jobs {
+            let _ = self.flush_tx.send(j).await;
+        }
+    }
+}
+
+fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob {
+    buf.next_seq += 1;
+    let exchange_seq = buf.next_seq;
+    let ts_ms = now_ms();
+
+    let mut input = String::new();
+    input.push_str("Signals:\n");
+    input.push_str(&format!("commit_mentioned={}\n\n", buf.saw_commit));
+    input.push_str("Conversation slice (newest last):\n\n");
+    for (i, t) in buf.turns.iter().enumerate() {
+        input.push_str(&format!("Turn {}:\n", i + 1));
+        input.push_str(t);
+        input.push_str("\n\n");
+    }
+
+    let meta = ResponseMeta {
+        source: "record".to_string(),
+        upstream_host: buf.last_upstream_host.clone(),
+        request_path: buf.last_request_path.clone(),
+        http_status: buf.last_http_status,
+    };
+
+    FlushJob {
+        workspace_id,
+        conn_id: buf.last_conn_id,
+        exchange_seq,
+        ts_ms,
+        meta,
+        input,
+    }
+}
+
 fn query_capsules_jsonl(path: &str, query: &str, limit: usize) -> anyhow::Result<()> {
     #[derive(serde::Deserialize)]
     struct Row {
@@ -1851,14 +2051,10 @@ fn query_capsules_jsonl(path: &str, query: &str, limit: usize) -> anyhow::Result
 
 async fn analysis_worker(
     rx: AsyncReceiver<AnalysisMsg>,
-    db: Connection,
-    embedder: Embedder,
-    capsules_jsonl: std::path::PathBuf,
+    chunker: WorkspaceChunker,
     conn_id: u64,
 ) {
     debug!(conn_id, "analysis worker started");
-
-    let mut exchange_seq: u64 = 0;
     let mut pending_start: Option<(AnalysisMeta, Bytes)> = None;
 
     loop {
@@ -1871,8 +2067,6 @@ async fn analysis_worker(
                 Err(_) => break,
             }
         };
-
-        exchange_seq += 1;
 
         let user_text = decode_json_lossy(&request_body)
             .and_then(|v| {
@@ -1954,53 +2148,16 @@ async fn analysis_worker(
             input.push_str(&assistant_text);
         }
 
-        let preamble = "You are unlost. Extract a short, high-signal intent capsule from this conversation turn.\n\
-Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
-Rules:\n\
-- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
-- Ignore tool/proxy/streaming metadata and any system boilerplate.\n\
-- Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
-
-        let capsule = match llm_extract::<IntentCapsule>(
-            None,
-            preamble,
-            &input,
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(conn_id, exchange_seq, error = ?e, "capsule extraction failed");
-                continue;
-            }
-        };
-
-        let now_ms = now_ms();
-        let store_meta = ResponseMeta {
-            source: "record".to_string(),
+        let commit_mentioned = looks_like_commit_or_pr(&input);
+        let item = ChunkInput {
+            conn_id,
             upstream_host: meta.upstream_host.clone(),
             request_path: meta.request_path.clone(),
             http_status: meta.http_status,
+            exchange_text: input,
+            commit_mentioned,
         };
-
-        if let Err(e) = append_capsule_jsonl(&capsules_jsonl, now_ms, conn_id, exchange_seq, &store_meta, &capsule) {
-            warn!(conn_id, exchange_seq, error = ?e, "failed to append capsule jsonl");
-        }
-
-        if let Err(e) = insert_capsule_row(
-            &db,
-            &embedder,
-            conn_id,
-            exchange_seq,
-            now_ms,
-            &store_meta,
-            &capsule,
-        )
-        .await
-        {
-            warn!(conn_id, exchange_seq, error = ?e, "failed to insert capsule into lancedb");
-        }
+        chunker.ingest(meta.workspace_id.clone(), item).await;
     }
 
     debug!(conn_id, "analysis worker finished");
@@ -3292,10 +3449,121 @@ impl ServeState {
     }
 }
 
-async fn analysis_worker_multiplex(rx: AsyncReceiver<AnalysisMsg>, state: ServeState, conn_id: u64) {
-    debug!(conn_id, "analysis worker started");
+async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Rules:\n\
+- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
+- Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
+- Keep each field concise; next_steps max 3.\n\
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
 
-    let mut exchange_seq: u64 = 0;
+    loop {
+        let job = match rx.recv().await {
+            Ok(j) => j,
+            Err(_) => break,
+        };
+
+        let capsule = match llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(workspace_id = %job.workspace_id, conn_id = job.conn_id, exchange_seq = job.exchange_seq, error = ?e, "capsule extraction failed");
+                continue;
+            }
+        };
+
+        let ws_paths = state.workspace_paths(&job.workspace_id);
+        if let Err(e) = append_capsule_jsonl(
+            &ws_paths.capsules_jsonl,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            &capsule,
+        ) {
+            warn!(workspace_id = %job.workspace_id, error = ?e, "failed to append capsule jsonl");
+        }
+
+        match state.db_for(&job.workspace_id).await {
+            Ok(db) => {
+                if let Err(e) = insert_capsule_row(
+                    &db,
+                    &state.embedder,
+                    job.conn_id,
+                    job.exchange_seq,
+                    job.ts_ms,
+                    &job.meta,
+                    &capsule,
+                )
+                .await
+                {
+                    warn!(workspace_id = %job.workspace_id, error = ?e, "failed to insert capsule into lancedb");
+                }
+            }
+            Err(e) => {
+                warn!(workspace_id = %job.workspace_id, error = ?e, "failed to open workspace db");
+            }
+        }
+    }
+}
+
+async fn process_flush_jobs_proxy(
+    rx: AsyncReceiver<FlushJob>,
+    ws: WorkspacePaths,
+    db: Connection,
+    embedder: Embedder,
+) {
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Rules:\n\
+- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
+- Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
+- Keep each field concise; next_steps max 3.\n\
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
+
+    loop {
+        let job = match rx.recv().await {
+            Ok(j) => j,
+            Err(_) => break,
+        };
+
+        let capsule = match llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(workspace_id = %job.workspace_id, conn_id = job.conn_id, exchange_seq = job.exchange_seq, error = ?e, "capsule extraction failed");
+                continue;
+            }
+        };
+
+        if let Err(e) = append_capsule_jsonl(
+            &ws.capsules_jsonl,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            &capsule,
+        ) {
+            warn!(workspace_id = %job.workspace_id, error = ?e, "failed to append capsule jsonl");
+        }
+
+        if let Err(e) = insert_capsule_row(
+            &db,
+            &embedder,
+            job.conn_id,
+            job.exchange_seq,
+            job.ts_ms,
+            &job.meta,
+            &capsule,
+        )
+        .await
+        {
+            warn!(workspace_id = %job.workspace_id, error = ?e, "failed to insert capsule into lancedb");
+        }
+    }
+}
+
+async fn analysis_worker_multiplex(rx: AsyncReceiver<AnalysisMsg>, chunker: WorkspaceChunker, conn_id: u64) {
+    debug!(conn_id, "analysis worker started");
     let mut pending_start: Option<(AnalysisMeta, Bytes)> = None;
 
     loop {
@@ -3308,8 +3576,6 @@ async fn analysis_worker_multiplex(rx: AsyncReceiver<AnalysisMsg>, state: ServeS
                 Err(_) => break,
             }
         };
-
-        exchange_seq += 1;
 
         let user_text = decode_json_lossy(&request_body)
             .and_then(|v| {
@@ -3387,62 +3653,16 @@ async fn analysis_worker_multiplex(rx: AsyncReceiver<AnalysisMsg>, state: ServeS
             input.push_str(&assistant_text);
         }
 
-        let preamble = "You are unlost. Extract a short, high-signal intent capsule from this conversation turn.\n\
-Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
-Rules:\n\
-- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
-- Ignore tool/proxy/streaming metadata and any system boilerplate.\n\
-- Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
-
-        let capsule = match llm_extract::<IntentCapsule>(None, preamble, &input).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(conn_id, exchange_seq, error = ?e, "capsule extraction failed");
-                continue;
-            }
-        };
-
-        let ts_ms = now_ms();
-        let store_meta = ResponseMeta {
-            source: "record".to_string(),
+        let commit_mentioned = looks_like_commit_or_pr(&input);
+        let item = ChunkInput {
+            conn_id,
             upstream_host: meta.upstream_host.clone(),
             request_path: meta.request_path.clone(),
             http_status: meta.http_status,
+            exchange_text: input,
+            commit_mentioned,
         };
-
-        let ws_paths = state.workspace_paths(&meta.workspace_id);
-        if let Err(e) = append_capsule_jsonl(
-            &ws_paths.capsules_jsonl,
-            ts_ms,
-            conn_id,
-            exchange_seq,
-            &store_meta,
-            &capsule,
-        ) {
-            warn!(conn_id, exchange_seq, error = ?e, "failed to append capsule jsonl");
-        }
-
-        match state.db_for(&meta.workspace_id).await {
-            Ok(db) => {
-                if let Err(e) = insert_capsule_row(
-                    &db,
-                    &state.embedder,
-                    conn_id,
-                    exchange_seq,
-                    ts_ms,
-                    &store_meta,
-                    &capsule,
-                )
-                .await
-                {
-                    warn!(conn_id, exchange_seq, error = ?e, "failed to insert capsule into lancedb");
-                }
-            }
-            Err(e) => {
-                warn!(conn_id, exchange_seq, error = ?e, "failed to open workspace db");
-            }
-        }
+        chunker.ingest(meta.workspace_id.clone(), item).await;
     }
 
     debug!(conn_id, "analysis worker finished");
@@ -3601,6 +3821,23 @@ async fn run_serve(bind: SocketAddr, embedder: Embedder) -> anyhow::Result<()> {
 
     let state = ServeState::new(embedder);
 
+    const FLUSH_CHAN_CAP: usize = 256;
+    let (flush_tx, flush_rx) = kanal::bounded::<FlushJob>(FLUSH_CHAN_CAP);
+    let chunker = WorkspaceChunker::new(flush_tx.to_async());
+
+    // Periodically flush idle buffers (workspace-level).
+    {
+        let chunker = chunker.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                chunker.flush_idle().await;
+            }
+        });
+    }
+
+    tokio::spawn(process_flush_jobs_serve(flush_rx.to_async(), state.clone()));
+
     loop {
         let (stream, peer) = listener.accept().await?;
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -3608,16 +3845,12 @@ async fn run_serve(bind: SocketAddr, embedder: Embedder) -> anyhow::Result<()> {
 
         let io = TokioIo::new(stream);
         let client = client.clone();
-        let state = state.clone();
+        let chunker = chunker.clone();
 
         tokio::spawn(async move {
             const ANALYSIS_CHAN_CAP: usize = 256;
             let (analysis_tx, analysis_rx) = kanal::bounded::<AnalysisMsg>(ANALYSIS_CHAN_CAP);
-            tokio::spawn(analysis_worker_multiplex(
-                analysis_rx.to_async(),
-                state.clone(),
-                conn_id,
-            ));
+            tokio::spawn(analysis_worker_multiplex(analysis_rx.to_async(), chunker.clone(), conn_id));
             let drops_logged = Arc::new(AtomicBool::new(false));
 
             let service = hyper::service::service_fn(move |req| {
@@ -3652,7 +3885,7 @@ async fn run_proxy(
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
         .execute()
         .await?;
-    let capsules_jsonl = ws.capsules_jsonl.clone();
+    let _ = ensure_capsules_table(&db).await?;
 
     let https = HttpsConnectorBuilder::new()
         .with_native_roots()
@@ -3669,6 +3902,26 @@ async fn run_proxy(
     info!(%addr, %upstream_host, upstream_port, "unlost recording active");
     println!("unlost recording active on :{}", addr.port());
 
+    const FLUSH_CHAN_CAP: usize = 256;
+    let (flush_tx, flush_rx) = kanal::bounded::<FlushJob>(FLUSH_CHAN_CAP);
+    let chunker = WorkspaceChunker::new(flush_tx.to_async());
+
+    {
+        let chunker = chunker.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                chunker.flush_idle().await;
+            }
+        });
+    }
+    tokio::spawn(process_flush_jobs_proxy(
+        flush_rx.to_async(),
+        ws.clone(),
+        db.clone(),
+        embedder.clone(),
+    ));
+
     let workspace_id = ws.id.clone();
 
     loop {
@@ -3678,24 +3931,15 @@ async fn run_proxy(
 
         let io = TokioIo::new(stream);
         let client = client.clone();
-        let db = db.clone();
         let upstream_host = upstream_host.clone();
-        let embedder = embedder.clone();
-
-        let capsules_jsonl = capsules_jsonl.clone();
+        let chunker = chunker.clone();
         let workspace_id = workspace_id.clone();
         tokio::spawn(async move {
             // One analysis worker per TCP connection. Requests on the same
             // connection (HTTP keep-alive) share this worker.
             const ANALYSIS_CHAN_CAP: usize = 256;
             let (analysis_tx, analysis_rx) = kanal::bounded::<AnalysisMsg>(ANALYSIS_CHAN_CAP);
-            tokio::spawn(analysis_worker(
-                analysis_rx.to_async(),
-                db.clone(),
-                embedder.clone(),
-                capsules_jsonl,
-                conn_id,
-            ));
+            tokio::spawn(analysis_worker(analysis_rx.to_async(), chunker.clone(), conn_id));
             let drops_logged = Arc::new(AtomicBool::new(false));
 
             let service = hyper::service::service_fn(move |req| {
