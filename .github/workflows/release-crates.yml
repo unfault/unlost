@@ -12,15 +12,123 @@ on:
         default: 'true'
 
 jobs:
-  publish:
+  build-binaries:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            use_cross: false
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            use_cross: false
+          - os: macos-13
+            target: x86_64-apple-darwin
+            use_cross: false
+          - os: macos-14
+            target: aarch64-apple-darwin
+            use_cross: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y protoc
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (release)
+        shell: bash
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --locked --target "${{ matrix.target }}"
+          else
+            cargo build --release --locked --target "${{ matrix.target }}"
+          fi
+
+      - name: Collect binary + sha256 (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST="dist"
+          mkdir -p "$DIST"
+          SRC="target/${{ matrix.target }}/release/unlost"
+          OUT_BASENAME="unlost-${{ matrix.target }}"
+          OUT="$DIST/$OUT_BASENAME"
+          cp "$SRC" "$OUT"
+          chmod +x "$OUT" || true
+          (cd "$DIST" && {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$OUT_BASENAME" > "${OUT_BASENAME}.sha256"
+            else
+              shasum -a 256 "$OUT_BASENAME" > "${OUT_BASENAME}.sha256"
+            fi
+          })
+        working-directory: ${{ github.workspace }}
+
+      - name: Collect binary + sha256 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dist = 'dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $src = Join-Path "target\${{ matrix.target }}\release" 'unlost.exe'
+          $out = Join-Path $dist ("unlost-${{ matrix.target }}.exe")
+          Copy-Item -Path $src -Destination $out -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $out).Hash.ToLower()
+          "$hash  $(Split-Path -Leaf $out)" | Out-File -FilePath "${out}.sha256" -Encoding ascii
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unlost-${{ matrix.target }}
+          path: dist/*
+
+  publish-crate:
     runs-on: ubuntu-latest
+    needs: build-binaries
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system deps
+      - name: Install protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
@@ -48,14 +156,31 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked --dry-run
 
-      - name: Publish
+      - name: Publish to crates.io
         if: github.event_name == 'push'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
 
-      - name: Publish
+      - name: Publish to crates.io
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
+
+  github-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: [build-binaries, publish-crate]
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
