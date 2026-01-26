@@ -31,10 +31,10 @@ jobs:
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             use_cross: false
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             use_cross: false
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             use_cross: false
     steps:
