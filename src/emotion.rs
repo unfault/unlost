@@ -345,4 +345,149 @@ mod tests {
         assert_eq!(e2.label, "joy");
         assert!(e2.valence > 0.0);
     }
+
+    #[test]
+    fn test_clamp01() {
+        assert_eq!(clamp01(0.5), 0.5);
+        assert_eq!(clamp01(0.0), 0.0);
+        assert_eq!(clamp01(1.0), 1.0);
+        assert_eq!(clamp01(-0.5), 0.0);
+        assert_eq!(clamp01(1.5), 1.0);
+    }
+
+    #[test]
+    fn test_is_turn_marker() {
+        assert!(is_turn_marker("Turn 1:"));
+        assert!(is_turn_marker("Turn 123:"));
+        assert!(is_turn_marker("  Turn 5:  "));
+        assert!(!is_turn_marker("Turn:"));
+        assert!(!is_turn_marker("Turn a:"));
+        assert!(!is_turn_marker("Turn 1"));
+        assert!(!is_turn_marker("turn 1:"));
+    }
+
+    #[test]
+    fn test_sigmoid() {
+        assert!(sigmoid(0.0) - 0.5 < 0.001);
+        assert!(sigmoid(f32::INFINITY) - 1.0 < 0.001);
+        assert!(sigmoid(f32::NEG_INFINITY) < 0.001);
+        assert!(sigmoid(1.0) > 0.5);
+        assert!(sigmoid(-1.0) < 0.5);
+    }
+
+    #[test]
+    fn test_emotion_meta_serialization() {
+        let meta = EmotionMeta {
+            label: "joy".to_string(),
+            valence: 0.8,
+            intensity: 0.6,
+            confidence: 0.9,
+        };
+
+        let json = serde_json::to_string(&meta).unwrap();
+        let parsed: EmotionMeta = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.label, "joy");
+        assert_eq!(parsed.valence, 0.8);
+        assert_eq!(parsed.intensity, 0.6);
+        assert_eq!(parsed.confidence, 0.9);
+    }
+
+    #[test]
+    fn test_emotion_config_default() {
+        let cfg = EmotionConfig::default();
+        assert_eq!(cfg.repo, "SamLowe/roberta-base-go_emotions-onnx");
+        assert_eq!(cfg.model_path, "onnx/model_quantized.onnx");
+        assert_eq!(cfg.tokenizer_path, "onnx/tokenizer.json");
+        assert_eq!(cfg.config_path, "config.json");
+        assert_eq!(cfg.max_len, 128);
+    }
+
+    #[test]
+    fn test_extract_user_and_assistant_text_edge_cases() {
+        // Empty input
+        let (u, a) = extract_user_and_assistant_text("");
+        assert_eq!(u, "");
+        assert_eq!(a, "");
+
+        // Only user text
+        let s = "Turn 1:\nUser:\nHello world";
+        let (u, a) = extract_user_and_assistant_text(s);
+        assert_eq!(u, "Hello world");
+        assert_eq!(a, "");
+
+        // Only assistant text
+        let s = "Turn 1:\nAssistant:\nHello world";
+        let (u, a) = extract_user_and_assistant_text(s);
+        assert_eq!(u, "");
+        assert_eq!(a, "Hello world");
+
+        // Multiple turns with mixed content
+        let s = r#"Turn 1:
+User:
+Hello
+Assistant:
+Hi there
+Turn 2:
+User:
+How are you?
+Assistant:
+I'm doing great!
+Turn 3:
+User:
+Bye
+"#;
+        let (u, a) = extract_user_and_assistant_text(s);
+        assert_eq!(u, "Hello\nHow are you?\nBye");
+        assert_eq!(a, "Hi there\nI'm doing great!");
+    }
+
+    #[test]
+    fn test_map_go_emotions_comprehensive() {
+        // Test positive emotions
+        let test_cases = vec![
+            ("admiration", "joy", 0.8),
+            ("amusement", "joy", 0.8),
+            ("approval", "joy", 0.8),
+            ("caring", "joy", 0.8),
+            ("desire", "joy", 0.8),
+            ("excitement", "joy", 0.8),
+            ("gratitude", "joy", 0.8),
+            ("love", "joy", 0.8),
+            ("optimism", "joy", 0.8),
+            ("pride", "joy", 0.8),
+            ("relief", "joy", 0.8),
+        ];
+
+        for (emotion, expected_label, expected_valence) in test_cases {
+            let meta = map_go_emotions(emotion, 0.7);
+            assert_eq!(meta.label, expected_label);
+            assert_eq!(meta.valence, expected_valence);
+            assert!(meta.confidence >= 0.0 && meta.confidence <= 1.0);
+        }
+
+        // Test negative emotions
+        let meta = map_go_emotions("anger", 0.8);
+        assert_eq!(meta.label, "anger");
+        assert!(meta.valence < 0.0);
+
+        let meta = map_go_emotions("sadness", 0.6);
+        assert_eq!(meta.label, "sad");
+        assert!(meta.valence < 0.0);
+
+        // Test cognitive emotions
+        let meta = map_go_emotions("confusion", 0.5);
+        assert_eq!(meta.label, "confused");
+        assert_eq!(meta.valence, 0.0);
+
+        // Test neutral
+        let meta = map_go_emotions("neutral", 0.9);
+        assert_eq!(meta.label, "neutral");
+        assert_eq!(meta.valence, 0.0);
+
+        // Test unknown emotion
+        let meta = map_go_emotions("unknown_emotion", 0.3);
+        assert_eq!(meta.label, "neutral");
+        assert_eq!(meta.valence, 0.0);
+    }
 }

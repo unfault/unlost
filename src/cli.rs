@@ -373,3 +373,57 @@ pub(crate) fn parse_bind(s: &str) -> anyhow::Result<SocketAddr> {
     // `ip:port`
     Ok(s.parse().context("invalid bind address")?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_level_as_tracing_str() {
+        assert_eq!(LogLevel::Error.as_tracing_str(), "error");
+        assert_eq!(LogLevel::Warn.as_tracing_str(), "warn");
+        assert_eq!(LogLevel::Info.as_tracing_str(), "info");
+        assert_eq!(LogLevel::Debug.as_tracing_str(), "debug");
+        assert_eq!(LogLevel::Trace.as_tracing_str(), "trace");
+    }
+
+    #[test]
+    fn test_parse_bind() {
+        // Test port-only formats
+        let addr = parse_bind("3000").unwrap();
+        assert_eq!(addr.port(), 3000);
+        assert_eq!(addr.ip(), std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+
+        let addr = parse_bind(":3000").unwrap();
+        assert_eq!(addr.port(), 3000);
+        assert_eq!(addr.ip(), std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+
+        // Test IP:port format
+        let addr = parse_bind("127.0.0.1:3000").unwrap();
+        assert_eq!(addr.port(), 3000);
+        assert_eq!(addr.ip(), std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+
+        let addr = parse_bind("0.0.0.0:8080").unwrap();
+        assert_eq!(addr.port(), 8080);
+        assert_eq!(addr.ip(), std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+
+        // Test IPv6
+        let addr = parse_bind("[::1]:3000").unwrap();
+        assert_eq!(addr.port(), 3000);
+
+        // Test error cases
+        assert!(parse_bind("").is_err());
+        assert!(parse_bind("   ").is_err());
+        assert!(parse_bind("invalid").is_err());
+        assert!(parse_bind("127.0.0.1").is_err());
+        assert!(parse_bind("127.0.0.1:invalid").is_err());
+        assert!(parse_bind("99999").is_err()); // Port out of range
+    }
+
+    #[test]
+    fn test_output_format_equality() {
+        assert_eq!(OutputFormat::Ansi, OutputFormat::Ansi);
+        assert_eq!(OutputFormat::Plain, OutputFormat::Plain);
+        assert_ne!(OutputFormat::Ansi, OutputFormat::Plain);
+    }
+}

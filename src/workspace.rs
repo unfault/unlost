@@ -366,3 +366,228 @@ pub(crate) fn clear_workspace(workspace_root: &std::path::Path, yes: bool) -> an
     println!("cleared workspace: {workspace_id}");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, val: &std::ffi::OsStr) -> Self {
+            let prev = std::env::var_os(key);
+            // Rust 2024: modifying process env is `unsafe` (can race with other threads).
+            unsafe { std::env::set_var(key, val) };
+            Self { key, prev }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            unsafe { std::env::remove_var(key) };
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn test_xdg_config_home() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        // Test with XDG_CONFIG_HOME set
+        let temp_dir = TempDir::new().unwrap();
+        let _g = EnvVarGuard::set("XDG_CONFIG_HOME", temp_dir.path().as_os_str());
+        assert_eq!(xdg_config_home(), temp_dir.path());
+
+        // Test fallback to HOME/.config
+        let home_dir = TempDir::new().unwrap();
+        let _h = EnvVarGuard::set("HOME", home_dir.path().as_os_str());
+        let _r = EnvVarGuard::remove("XDG_CONFIG_HOME");
+        assert_eq!(xdg_config_home(), home_dir.path().join(".config"));
+    }
+
+    #[test]
+    fn test_xdg_data_home() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        // Test with XDG_DATA_HOME set
+        let temp_dir = TempDir::new().unwrap();
+        let _g = EnvVarGuard::set("XDG_DATA_HOME", temp_dir.path().as_os_str());
+        assert_eq!(xdg_data_home(), temp_dir.path());
+
+        // Test fallback to HOME/.local/share
+        let home_dir = TempDir::new().unwrap();
+        let _h = EnvVarGuard::set("HOME", home_dir.path().as_os_str());
+        let _r = EnvVarGuard::remove("XDG_DATA_HOME");
+        assert_eq!(
+            xdg_data_home(),
+            home_dir.path().join(".local").join("share")
+        );
+    }
+
+    #[test]
+    fn test_now_ms() {
+        let t1 = now_ms();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let t2 = now_ms();
+        assert!(t2 >= t1);
+    }
+
+    #[test]
+    fn test_normalize_git_remote() {
+        assert_eq!(
+            normalize_git_remote("git@github.com:user/repo.git"),
+            "github.com/user/repo"
+        );
+        assert_eq!(
+            normalize_git_remote("ssh://git@github.com/user/repo.git"),
+            "github.com/user/repo"
+        );
+        assert_eq!(
+            normalize_git_remote("https://github.com/user/repo.git"),
+            "github.com/user/repo"
+        );
+        assert_eq!(
+            normalize_git_remote("https://user@github.com/user/repo.git"),
+            "github.com/user/repo"
+        );
+        assert_eq!(
+            normalize_git_remote("https://github.com/user/repo"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn test_compute_hash16() {
+        let hash1 = compute_hash16("test");
+        let hash2 = compute_hash16("test");
+        let hash3 = compute_hash16("different");
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+        assert_eq!(hash1.len(), 16);
+    }
+
+    #[test]
+    fn test_extract_project_name_from_meta_files() {
+        let package_json = r#"
+        {
+            "name": "my-project",
+            "version": "1.0.0"
+        }
+        "#;
+        let meta = vec![("package_json".to_string(), package_json.to_string())];
+        assert_eq!(
+            extract_project_name_from_meta_files(&meta),
+            Some("my-project".to_string())
+        );
+
+        let pyproject = r#"
+        [project]
+        name = "my-py-project"
+        version = "0.1.0"
+        "#;
+        let meta = vec![("pyproject".to_string(), pyproject.to_string())];
+        assert_eq!(
+            extract_project_name_from_meta_files(&meta),
+            Some("my-py-project".to_string())
+        );
+
+        let cargo_toml = r#"
+        [package]
+        name = "my-rust-project"
+        version = "0.1.0"
+        "#;
+        let meta = vec![("cargo_toml".to_string(), cargo_toml.to_string())];
+        assert_eq!(
+            extract_project_name_from_meta_files(&meta),
+            Some("my-rust-project".to_string())
+        );
+
+        let go_mod = r#"
+module github.com/user/my-go-project
+        "#;
+        let meta = vec![("go_mod".to_string(), go_mod.to_string())];
+        assert_eq!(
+            extract_project_name_from_meta_files(&meta),
+            Some("github.com/user/my-go-project".to_string())
+        );
+    }
+
+    #[test]
+    fn test_compute_workspace_id() {
+        // Test with a mock directory that doesn't exist
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path();
+
+        let (id, source) = compute_workspace_id(workspace_root).unwrap();
+        assert!(id.starts_with("wks_"));
+        assert_eq!(source, "label");
+
+        // Test that the same path produces the same ID
+        let (id2, source2) = compute_workspace_id(workspace_root).unwrap();
+        assert_eq!(id, id2);
+        assert_eq!(source, source2);
+    }
+
+    #[test]
+    fn test_load_and_save_workspace_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let _g = EnvVarGuard::set("XDG_CONFIG_HOME", temp_dir.path().as_os_str());
+
+        // Load non-existent config
+        let config = load_workspace_config();
+        assert_eq!(config.version, 1);
+        assert!(config.path_index.is_empty());
+        assert!(config.workspaces.is_empty());
+        assert!(config.llm.is_none());
+
+        // Save and load config
+        let mut new_config = config.clone();
+        new_config.version = 2;
+        new_config
+            .path_index
+            .insert("/test/path".to_string(), "test_id".to_string());
+        save_workspace_config(&new_config).unwrap();
+
+        let loaded = load_workspace_config();
+        assert_eq!(loaded.version, 2);
+        assert!(loaded.path_index.contains_key("/test/path"));
+    }
+
+    #[test]
+    fn test_unlost_paths() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        let _g1 = EnvVarGuard::set("XDG_CONFIG_HOME", temp_dir.path().as_os_str());
+        let _g2 = EnvVarGuard::set("XDG_DATA_HOME", temp_dir.path().as_os_str());
+
+        let config_path = unlost_config_path();
+        assert!(config_path.starts_with(temp_dir.path()));
+        assert!(config_path.ends_with("unlost/config.json"));
+
+        let data_root = unlost_data_root();
+        assert!(data_root.starts_with(temp_dir.path()));
+        assert!(data_root.ends_with("unlost"));
+
+        let workspace_dir = unlost_workspace_dir("test_id");
+        assert!(workspace_dir.starts_with(&data_root));
+        assert!(workspace_dir.ends_with("test_id"));
+    }
+}

@@ -58,5 +58,21 @@ mod tests {
             strip_llm_boilerplate("hello\n<system>nope".to_string()),
             "hello\n"
         );
+        assert_eq!(
+            strip_llm_boilerplate("prefix<tool-call>content".to_string()),
+            "prefix"
+        );
+        assert_eq!(
+            strip_llm_boilerplate("content<commentary>comment".to_string()),
+            "content"
+        );
+        assert_eq!(
+            strip_llm_boilerplate("mixed<SYSTEM>system".to_string()),
+            "mixed"
+        );
+        assert_eq!(
+            strip_llm_boilerplate("no boilerplate here".to_string()),
+            "no boilerplate here"
+        );
     }
 }
