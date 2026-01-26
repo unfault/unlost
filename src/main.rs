@@ -2667,6 +2667,8 @@ struct QueryNarrativeOutput {
 struct CapsuleHit {
     id: String,
     ts_ms: i64,
+    conn_id: i64,
+    exchange_seq: i64,
     distance: f32,
     user_emotion: Option<EmotionMeta>,
     assistant_emotion: Option<EmotionMeta>,
@@ -2841,7 +2843,9 @@ async fn query_capsules_lancedb(
         // col_f32/read_emotion are defined once above.
         let id_col = col_str("id");
         let ts_ms_col = idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-
+        let conn_id_col = idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let exchange_seq_col = idx("exchange_seq").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let http_status_col = idx("http_status").and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
         let source = col_str("source");
         let intent = col_str("intent");
         let decision = col_str("decision");
@@ -2880,6 +2884,15 @@ async fn query_capsules_lancedb(
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
             let ts_ms = ts_ms_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let conn_id = conn_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let exchange_seq = exchange_seq_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let http_status = http_status_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or_default();
             let cat = category
@@ -2933,6 +2946,8 @@ async fn query_capsules_lancedb(
             out.push(CapsuleHit {
                 id: id.to_string(),
                 ts_ms,
+                conn_id,
+                exchange_seq,
                 distance: dist,
                 user_emotion: read_emotion(row, user_emotion_label, user_emotion_conf, user_valence, user_intensity),
                 assistant_emotion: read_emotion(
@@ -2954,7 +2969,7 @@ async fn query_capsules_lancedb(
                     source: src.to_string(),
                     upstream_host: up.to_string(),
                     request_path: path.to_string(),
-                    http_status: 0,
+                    http_status: (http_status.max(0) as u16),
                 },
             });
         }
@@ -3031,6 +3046,9 @@ async fn scan_capsules_lancedb(
 
         let id_col = col_str("id");
         let ts_ms_col = idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let conn_id_col = idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let exchange_seq_col = idx("exchange_seq").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let http_status_col = idx("http_status").and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
 
         let source = col_str("source");
         let intent = col_str("intent");
@@ -3077,6 +3095,15 @@ async fn scan_capsules_lancedb(
             let ts_ms = ts_ms_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or_default();
+            let conn_id = conn_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let exchange_seq = exchange_seq_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let http_status = http_status_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
             let i_text = intent
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
@@ -3116,6 +3143,8 @@ async fn scan_capsules_lancedb(
             out.push(CapsuleHit {
                 id: id.to_string(),
                 ts_ms,
+                conn_id,
+                exchange_seq,
                 distance: 0.0,
                 user_emotion: read_emotion(row, user_emotion_label, user_emotion_conf, user_valence, user_intensity),
                 assistant_emotion: read_emotion(
@@ -3137,7 +3166,7 @@ async fn scan_capsules_lancedb(
                     source: src.to_string(),
                     upstream_host: up.to_string(),
                     request_path: path.to_string(),
-                    http_status: 0,
+                    http_status: (http_status.max(0) as u16),
                 },
             });
         }
@@ -3375,14 +3404,30 @@ async fn llm_recall_narrative(
         let cap = &hit.capsule;
         let meta = &hit.meta;
         context.push_str(&format!(
-            "#{} ts_ms={} source={} category={} upstream={} path={}\n",
+            "#{} ts_ms={} id={} conn_id={} exchange_seq={} http_status={} source={} category={} upstream={} path={}\n",
             i + 1,
             hit.ts_ms,
+            hit.id,
+            hit.conn_id,
+            hit.exchange_seq,
+            meta.http_status,
             meta.source,
             cap.category,
             meta.upstream_host,
             meta.request_path
         ));
+        if let Some(e) = hit.user_emotion.as_ref() {
+            context.push_str(&format!(
+                "user_mood: {} conf={:.2} val={:.2} int={:.2}\n",
+                e.label, e.confidence, e.valence, e.intensity
+            ));
+        }
+        if let Some(e) = hit.assistant_emotion.as_ref() {
+            context.push_str(&format!(
+                "asst_mood: {} conf={:.2} val={:.2} int={:.2}\n",
+                e.label, e.confidence, e.valence, e.intensity
+            ));
+        }
         if !cap.intent.trim().is_empty() {
             context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
         }
@@ -5046,6 +5091,10 @@ async fn main() -> anyhow::Result<()> {
                         let meta = hit.meta;
                         println!("---");
                         println!("chunked_at: {}", hit.ts_ms);
+                        println!(
+                            "conn:      {} seq: {} status: {}",
+                            hit.conn_id, hit.exchange_seq, meta.http_status
+                        );
                         if let Some(e) = hit.user_emotion {
                             println!(
                                 "user_mood:  {} (conf={:.2} val={:.2} int={:.2})",
