@@ -2,6 +2,16 @@
 name = "unlost"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sylvain Hellegouarch <sylvain@unfault.dev>"]
+description = "Unlost - Local-first code memory for a workspace."
+repository = "https://github.com/unfault/unlost"
+homepage = "https://unfault.dev"
+documentation = "https://docs.rs/unlost"
+license = "MIT"
+keywords = ["cli"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
 
 [dependencies]
 # Data & Logic
