@@ -1,0 +1,375 @@
+use anyhow::Context;
+use clap::{Parser, Subcommand, ValueEnum};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "unlost",
+    version,
+    about = "Local-first code memory (record, init, query)"
+)]
+pub(crate) struct Cli {
+    /// Logging level for unlost (overrides RUST_LOG when set)
+    #[arg(long, global = true, value_enum, alias = "log-level")]
+    pub(crate) log: Option<LogLevel>,
+
+    #[command(subcommand)]
+    pub(crate) command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub(crate) fn as_tracing_str(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
+    /// Default terminal-friendly output (ANSI colors)
+    Ansi,
+    /// No ANSI colors (useful for piping)
+    Plain,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum Command {
+    /// Global recorder that multiplexes workspaces via base URL
+    Serve {
+        /// Bind address. Accepts either `port` or `ip:port`.
+        /// Examples: `3000`, `127.0.0.1:3000`.
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        bind: String,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Record live LLM conversations (captures and summarizes)
+    #[command(alias = "proxy")]
+    Record {
+        /// Bind address. Accepts either `port` or `ip:port`.
+        /// Examples: `3000`, `0.0.0.0:3000`.
+        #[arg(long, default_value = "3000")]
+        bind: String,
+
+        /// Upstream host (or set UNLOST_UPSTREAM_HOST)
+        #[arg(long, env = "UNLOST_UPSTREAM_HOST")]
+        upstream_host: String,
+
+        /// Upstream port (or set UNLOST_UPSTREAM_PORT)
+        #[arg(long, env = "UNLOST_UPSTREAM_PORT", default_value_t = 443)]
+        upstream_port: u16,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Semantic search across recorded capsules
+    Query {
+        /// Query text
+        query: Vec<String>,
+
+        /// Max results
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+
+        /// Filter results to a symbol
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Disable LLM narrative (prints raw matches)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
+        /// LLM model to use for query narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Print raw match facts after the narrative
+        #[arg(long, default_value_t = false)]
+        facts: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+
+        /// Path to capsules JSONL (fallback mode only). Defaults to the workspace's JSONL.
+        #[arg(long, default_value = "")]
+        file: String,
+    },
+
+    /// Recall the story so far (proactive overview)
+    Recall {
+        /// Optional scope (file path or symbol/function name)
+        target: Vec<String>,
+
+        /// Max capsules to use
+        #[arg(long, default_value_t = 24)]
+        limit: usize,
+
+        /// LLM model to use for recall narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Inspect stored capsules for this workspace
+    Inspect {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Max rows to print
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Optional Lance filter expression (DataFusion SQL)
+        #[arg(long)]
+        filter: Option<String>,
+    },
+
+    /// Seed LanceDB from the current codebase (unfault-core graph)
+    Init {
+        /// Root directory to scan
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+
+        /// Max number of capsules to insert
+        #[arg(long, default_value_t = 120)]
+        max_capsules: usize,
+
+        /// Disable LLM summaries for init
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
+        /// Include recent git history (commit subjects + touched files) when available
+        #[arg(long, default_value_t = true)]
+        git_history: bool,
+
+        /// Max commits to consider for git history (bounded)
+        #[arg(long, default_value_t = 50)]
+        git_commits: usize,
+
+        /// Limit git history to a subdirectory (relative to repo root). Defaults to --path.
+        #[arg(long)]
+        git_path: Option<String>,
+
+        /// LLM model to use for init summaries
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Max LLM-generated capsules
+        #[arg(long, default_value_t = 12)]
+        llm_max_capsules: usize,
+    },
+
+    /// Manage local models (download, etc.)
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
+    },
+
+    /// Manage configuration (LLM provider, etc.)
+    #[command(alias = "configure")]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+
+    /// Delete all generated data for the current workspace
+    Clear {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ConfigCommand {
+    /// Manage LLM configuration for init/query narratives
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
+
+    /// Configure an agent workspace to talk to unlost
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AgentCommand {
+    /// Configure OpenCode via opencode.json in the workspace
+    Opencode {
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// unlost server base URL (loopback)
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        server: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum LlmCommand {
+    /// Configure OpenAI as LLM provider
+    Openai {
+        /// OpenAI API key
+        #[arg(long, env = "OPENAI_API_KEY")]
+        api_key: String,
+
+        /// Default model to use
+        #[arg(long, default_value = "gpt-4o-mini")]
+        model: String,
+
+        /// Optional base URL override (OpenAI-compatible)
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+
+    /// Configure Anthropic as LLM provider
+    Anthropic {
+        /// Anthropic API key
+        #[arg(long, env = "ANTHROPIC_API_KEY")]
+        api_key: String,
+
+        /// Default model to use
+        #[arg(long, default_value = "claude-3-5-sonnet-20241022")]
+        model: String,
+
+        /// Optional base URL override
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+
+    /// Configure local Ollama as LLM provider (OpenAI-compatible endpoint)
+    Ollama {
+        /// Ollama model name (e.g. llama3.2:3b)
+        #[arg(long)]
+        model: String,
+
+        /// OpenAI-compatible base URL (default: http://127.0.0.1:11434/v1)
+        #[arg(long, default_value = "http://127.0.0.1:11434/v1")]
+        base_url: String,
+    },
+
+    /// Configure a custom OpenAI-compatible endpoint
+    Custom {
+        /// Base URL (e.g. https://my-endpoint/v1)
+        #[arg(long)]
+        base_url: String,
+
+        /// API key (if required)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Default model to use
+        #[arg(long)]
+        model: String,
+    },
+
+    /// Show current LLM configuration
+    Show,
+
+    /// Remove LLM configuration
+    Remove,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ModelCommand {
+    /// Download embedding model files into the local cache
+    Download {
+        /// Embedding model (fastembed)
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        cache_dir: Option<String>,
+
+        /// Delete cache dir before downloading
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+}
+
+pub(crate) fn parse_bind(s: &str) -> anyhow::Result<SocketAddr> {
+    let s = s.trim();
+    if s.is_empty() {
+        anyhow::bail!("bind cannot be empty");
+    }
+
+    // `:3000`
+    if let Some(port_str) = s.strip_prefix(':') {
+        let port: u16 = port_str.parse().context("invalid port")?;
+        return Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port));
+    }
+
+    // `3000`
+    if s.chars().all(|c| c.is_ascii_digit()) {
+        let port: u16 = s.parse().context("invalid port")?;
+        return Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port));
+    }
+
+    // `ip:port`
+    Ok(s.parse().context("invalid bind address")?)
+}

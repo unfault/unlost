@@ -1,0 +1,368 @@
+use crate::config::{WorkspaceConfig, WorkspaceInfo};
+use anyhow::Context;
+use sha2::{Digest, Sha256};
+use std::io::IsTerminal;
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone)]
+pub(crate) struct WorkspacePaths {
+    pub(crate) id: String,
+    pub(crate) db_dir: std::path::PathBuf,
+    pub(crate) capsules_jsonl: std::path::PathBuf,
+}
+
+fn xdg_config_home() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return std::path::PathBuf::from(dir);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home).join(".config");
+    }
+    std::path::PathBuf::from(".")
+}
+
+fn xdg_data_home() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
+        return std::path::PathBuf::from(dir);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home).join(".local").join("share");
+    }
+    std::path::PathBuf::from(".")
+}
+
+pub(crate) fn unlost_config_path() -> std::path::PathBuf {
+    xdg_config_home().join("unlost").join("config.json")
+}
+
+pub(crate) fn unlost_data_root() -> std::path::PathBuf {
+    xdg_data_home().join("unlost")
+}
+
+pub(crate) fn unlost_workspace_dir(workspace_id: &str) -> std::path::PathBuf {
+    unlost_data_root().join("workspaces").join(workspace_id)
+}
+
+pub(crate) fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+pub(crate) fn canonicalize_dir(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    std::fs::canonicalize(path).context("failed to canonicalize path")
+}
+
+pub(crate) fn git_toplevel(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    std::fs::canonicalize(s).ok()
+}
+
+fn normalize_git_remote(remote: &str) -> String {
+    let mut remote = remote.trim().to_string();
+
+    if remote.starts_with("git@") {
+        remote = remote[4..].to_string();
+        remote = remote.replacen(":", "/", 1);
+    } else if remote.starts_with("ssh://") {
+        remote = remote[6..].to_string();
+        if remote.starts_with("git@") {
+            remote = remote[4..].to_string();
+        }
+    } else if let Some(pos) = remote.find("://") {
+        remote = remote[(pos + 3)..].to_string();
+        if let Some(at_pos) = remote.find('@') {
+            if at_pos < remote.find('/').unwrap_or(remote.len()) {
+                remote = remote[(at_pos + 1)..].to_string();
+            }
+        }
+    }
+
+    if remote.ends_with(".git") {
+        remote = remote[..remote.len() - 4].to_string();
+    }
+
+    remote = remote.trim_end_matches('/').to_string();
+    remote.to_lowercase()
+}
+
+fn compute_hash16(source: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(&result[..8])
+}
+
+fn get_git_remote(workspace_root: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !remote.is_empty() {
+            return Some(remote);
+        }
+    }
+    None
+}
+
+fn read_meta_files(workspace_root: &std::path::Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let candidates = [
+        ("pyproject", "pyproject.toml"),
+        ("package_json", "package.json"),
+        ("cargo_toml", "Cargo.toml"),
+        ("go_mod", "go.mod"),
+    ];
+    for (kind, name) in candidates {
+        let p = workspace_root.join(name);
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            out.push((kind.to_string(), s));
+        }
+    }
+    out
+}
+
+fn extract_project_name_from_meta_files(meta_files: &[(String, String)]) -> Option<String> {
+    for (kind, contents) in meta_files {
+        match kind.as_str() {
+            "package_json" => {
+                let json: serde_json::Value = serde_json::from_str(contents).ok()?;
+                if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
+                    return Some(name.to_string());
+                }
+            }
+            "pyproject" => {
+                let re =
+                    regex::Regex::new(r#"\[project\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#)
+                        .ok()?;
+                if let Some(caps) = re.captures(contents) {
+                    return Some(caps.get(1)?.as_str().to_string());
+                }
+                let re = regex::Regex::new(
+                    r#"\[tool\.poetry\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#,
+                )
+                .ok()?;
+                if let Some(caps) = re.captures(contents) {
+                    return Some(caps.get(1)?.as_str().to_string());
+                }
+            }
+            "cargo_toml" => {
+                let re =
+                    regex::Regex::new(r#"\[package\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#)
+                        .ok()?;
+                if let Some(caps) = re.captures(contents) {
+                    return Some(caps.get(1)?.as_str().to_string());
+                }
+            }
+            "go_mod" => {
+                let re = regex::Regex::new(r#"^module\s+(\S+)"#).ok()?;
+                for line in contents.lines() {
+                    if let Some(caps) = re.captures(line) {
+                        return Some(caps.get(1)?.as_str().to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub(crate) fn compute_workspace_id(workspace_root: &std::path::Path) -> Option<(String, String)> {
+    if let Some(remote) = get_git_remote(workspace_root) {
+        let norm = normalize_git_remote(&remote);
+        if !norm.is_empty() {
+            return Some((
+                format!("wks_{}", compute_hash16(&format!("git:{norm}"))),
+                "git".to_string(),
+            ));
+        }
+    }
+
+    let meta = read_meta_files(workspace_root);
+    if let Some(name) = extract_project_name_from_meta_files(&meta) {
+        return Some((
+            format!("wks_{}", compute_hash16(&format!("manifest:{name}"))),
+            "manifest".to_string(),
+        ));
+    }
+
+    let label = workspace_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("workspace");
+    Some((
+        format!("wks_{}", compute_hash16(&format!("label:cli:{label}"))),
+        "label".to_string(),
+    ))
+}
+
+pub(crate) fn load_workspace_config() -> WorkspaceConfig {
+    let p = unlost_config_path();
+    if let Ok(s) = std::fs::read_to_string(&p) {
+        if let Ok(cfg) = serde_json::from_str::<WorkspaceConfig>(&s) {
+            return cfg;
+        }
+    }
+    WorkspaceConfig {
+        version: 1,
+        path_index: Default::default(),
+        workspaces: Default::default(),
+        llm: None,
+    }
+}
+
+pub(crate) fn save_workspace_config(cfg: &WorkspaceConfig) -> anyhow::Result<()> {
+    let p = unlost_config_path();
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let s = serde_json::to_string_pretty(cfg)?;
+    std::fs::write(&p, s)?;
+    Ok(())
+}
+
+pub(crate) fn get_or_create_workspace_paths(
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<WorkspacePaths> {
+    let root = git_toplevel(workspace_root).unwrap_or_else(|| {
+        canonicalize_dir(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf())
+    });
+    let root = canonicalize_dir(&root)?;
+    let root_str = root.to_string_lossy().to_string();
+    let mut cfg = load_workspace_config();
+
+    if let Some(existing_id) = cfg.path_index.get(&root_str).cloned() {
+        if let Some(info) = cfg.workspaces.get_mut(&existing_id) {
+            info.updated_ts_ms = now_ms();
+            let _ = save_workspace_config(&cfg);
+
+            let ws_dir = unlost_workspace_dir(&existing_id);
+            return Ok(WorkspacePaths {
+                id: existing_id,
+                db_dir: ws_dir.join("lancedb"),
+                capsules_jsonl: ws_dir.join("capsules.jsonl"),
+            });
+        }
+    }
+
+    let (id, source) = compute_workspace_id(&root)
+        .ok_or_else(|| anyhow::anyhow!("unable to compute workspace id"))?;
+
+    let ws_dir = unlost_workspace_dir(&id);
+    let db_dir = ws_dir.join("lancedb");
+    let capsules_jsonl = ws_dir.join("capsules.jsonl");
+
+    let t = now_ms();
+    cfg.path_index.insert(root_str.clone(), id.clone());
+    cfg.workspaces.insert(
+        id.clone(),
+        WorkspaceInfo {
+            id: id.clone(),
+            root: root_str,
+            source,
+            db_dir: db_dir.to_string_lossy().to_string(),
+            capsules_jsonl: capsules_jsonl.to_string_lossy().to_string(),
+            created_ts_ms: t,
+            updated_ts_ms: t,
+        },
+    );
+    let _ = save_workspace_config(&cfg);
+
+    Ok(WorkspacePaths {
+        id,
+        db_dir,
+        capsules_jsonl,
+    })
+}
+
+pub(crate) fn clear_workspace(workspace_root: &std::path::Path, yes: bool) -> anyhow::Result<()> {
+    let root = git_toplevel(workspace_root).unwrap_or_else(|| {
+        canonicalize_dir(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf())
+    });
+    let root = canonicalize_dir(&root)?;
+    let root_str = root.to_string_lossy().to_string();
+
+    let mut cfg = load_workspace_config();
+
+    let workspace_id = cfg
+        .path_index
+        .get(&root_str)
+        .cloned()
+        .or_else(|| compute_workspace_id(&root).map(|(id, _src)| id));
+
+    let Some(workspace_id) = workspace_id else {
+        println!("No workspace mapping found for: {root_str}");
+        return Ok(());
+    };
+
+    let ws_dir = unlost_workspace_dir(&workspace_id);
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!("refusing to clear without --yes in non-interactive mode");
+        }
+
+        let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let (warn_on, warn_off) = if use_color {
+            ("\x1b[33;1m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        let (dim_on, dim_off) = if use_color {
+            ("\x1b[2m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+
+        println!("{warn_on}This will permanently delete unlost data{warn_off}");
+        println!("workspace: {workspace_id}");
+        println!("{dim_on}path:{dim_off} {root_str}");
+        println!("{dim_on}data:{dim_off} {}", ws_dir.display());
+        print!("{warn_on}Continue?{warn_off} [y/N]: ");
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        let ans = line.trim().to_ascii_lowercase();
+        if ans != "y" && ans != "yes" {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+
+    if ws_dir.exists() {
+        std::fs::remove_dir_all(&ws_dir)
+            .with_context(|| format!("failed to delete {}", ws_dir.display()))?;
+        println!("deleted: {}", ws_dir.display());
+    } else {
+        println!(
+            "no data dir for workspace {workspace_id} (expected {})",
+            ws_dir.display()
+        );
+    }
+
+    // Remove config mappings pointing to this id.
+    cfg.workspaces.remove(&workspace_id);
+    cfg.path_index.retain(|_k, v| v != &workspace_id);
+    save_workspace_config(&cfg)?;
+
+    println!("cleared workspace: {workspace_id}");
+    Ok(())
+}
