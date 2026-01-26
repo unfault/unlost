@@ -1,6 +1,15 @@
-# unlost
+<h2 align="center">
+  <br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png">
+    <img alt="Unfault" src="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png" width="128">
+  </picture>
+</h2>
 
-Local-first code memory for a workspace.
+<h4 align="center">Unlost - Local-first code memory for a workspace</h4>
+
+
+---
 
 I built this the way I like to build tools: steady, quiet, and useful for the long haul. It lives on your machine, keeps the signal, and tries hard not to keep the noise. Open source is the give-back.
 
