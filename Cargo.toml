@@ -37,7 +37,6 @@ ort = { version = "2.0.0-rc.11", default-features = false, features = [
   "tracing",
   "download-binaries",
   "tls-rustls",
-  "copy-dylibs",
 ] }
 tokenizers = { version = "0.20.4", default-features = false, features = ["onig"] }
 uuid = { version = "1.18.1", features = ["v4"] }
