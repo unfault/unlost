@@ -14,7 +14,6 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-15-intel
           - macos-latest
     steps:
       - name: Checkout
@@ -63,9 +62,6 @@ jobs:
             use_cross: false
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            use_cross: false
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
             use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
