@@ -2,11 +2,11 @@
   <br>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png">
-    <img alt="Unfault" src="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png" width="128">
+    <img alt="Unfault" src="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png" >
   </picture>
 </h2>
 
-<h4 align="center">Unlost - Local-first code memory for a workspace</h4>
+<h4 align="center">Unlost - Local-first code memory</h4>
 
 
 ---
