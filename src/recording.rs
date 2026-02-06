@@ -1,5 +1,5 @@
 use crate::analysis::{AnalysisMsg, AnalysisMeta};
-use crate::emotion::{extract_user_and_assistant_text, map_go_emotions, EmotionModel};
+use crate::emotion::{apply_context_heuristics, extract_user_and_assistant_text, map_go_emotions, EmotionModel};
 use crate::storage::ensure_capsules_table;
 use crate::embed::Embedder;
 use bytes::Bytes;
@@ -289,6 +289,16 @@ impl ServeState {
         cache.insert(workspace_id.to_string(), db.clone());
         Ok(db)
     }
+
+    /// Fetch recent capsules for friction detection. Returns empty vec on error.
+    pub(crate) async fn get_recent_capsules(
+        &self,
+        workspace_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
+        let ws = self.workspace_paths(workspace_id);
+        crate::storage::scan_capsules_lancedb(&ws, limit, None).await
+    }
 }
 
 pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
@@ -314,7 +324,8 @@ Rules:\n\
                 return None;
             }
             let (raw, score) = model.classify_one(&user_text).ok()?;
-            Some(map_go_emotions(&raw, score))
+            let meta = map_go_emotions(&raw, score);
+            Some(apply_context_heuristics(&user_text, meta))
         })
         .await
         .ok()
@@ -327,6 +338,7 @@ Rules:\n\
                 return None;
             }
             let (raw, score) = model.classify_one(&assistant_text).ok()?;
+            // No heuristics for assistant - we trust the model there
             Some(map_go_emotions(&raw, score))
         })
         .await
@@ -413,7 +425,8 @@ Rules:\n\
                 return None;
             }
             let (raw, score) = model.classify_one(&user_text).ok()?;
-            Some(map_go_emotions(&raw, score))
+            let meta = map_go_emotions(&raw, score);
+            Some(apply_context_heuristics(&user_text, meta))
         })
         .await
         .ok()
@@ -426,6 +439,7 @@ Rules:\n\
                 return None;
             }
             let (raw, score) = model.classify_one(&assistant_text).ok()?;
+            // No heuristics for assistant - we trust the model there
             Some(map_go_emotions(&raw, score))
         })
         .await

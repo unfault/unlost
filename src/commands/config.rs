@@ -23,6 +23,22 @@ fn set_nested_string(root: &mut serde_json::Value, path: &[&str], value: String)
     }
 }
 
+fn ensure_top_level_string_array_contains(root: &mut serde_json::Value, key: &str, value: &str) {
+    let obj = ensure_object(root);
+    let entry = obj
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+
+    if !entry.is_array() {
+        *entry = serde_json::Value::Array(Vec::new());
+    }
+    let arr = entry.as_array_mut().unwrap();
+    let already = arr.iter().any(|v| v.as_str() == Some(value));
+    if !already {
+        arr.push(serde_json::Value::String(value.to_string()));
+    }
+}
+
 fn handle_llm_command(cmd: LlmCommand) -> anyhow::Result<()> {
     match cmd {
         LlmCommand::Openai {
@@ -112,6 +128,36 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
                 &["provider", "opencode", "options", "baseURL"],
                 base_url,
             );
+
+            let rendered = serde_json::to_string_pretty(&json)?;
+            std::fs::write(&cfg_path, rendered)?;
+            println!("configured: {}", cfg_path.display());
+        }
+
+        AgentCommand::OpencodePlugin { path, plugin } => {
+            let root =
+                crate::workspace::git_toplevel(std::path::Path::new(&path)).unwrap_or_else(|| {
+                    crate::workspace::canonicalize_dir(std::path::Path::new(&path))
+                        .unwrap_or_else(|_| std::path::PathBuf::from(&path))
+                });
+            let root = crate::workspace::canonicalize_dir(&root)?;
+
+            let cfg_path = root.join("opencode.json");
+            let mut json = match std::fs::read_to_string(&cfg_path) {
+                Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            set_nested_string(
+                &mut json,
+                &["$schema"],
+                "https://opencode.ai/config.json".to_string(),
+            );
+            ensure_top_level_string_array_contains(&mut json, "plugin", &plugin);
 
             let rendered = serde_json::to_string_pretty(&json)?;
             std::fs::write(&cfg_path, rendered)?;

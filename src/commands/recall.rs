@@ -54,7 +54,7 @@ pub(crate) async fn run(
             }
         }
 
-        if let Ok(mut sem) = crate::storage::query_capsules_lancedb(scope, 18, None, embedder.clone(), &ws).await {
+        if let Ok(mut sem) = crate::storage::query_capsules_lancedb(scope, 18, None, None, embedder.clone(), &ws).await {
             sem.sort_by(|a, b| {
                 a.distance
                     .partial_cmp(&b.distance)

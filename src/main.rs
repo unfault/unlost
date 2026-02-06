@@ -7,6 +7,7 @@ mod config;
 mod constants;
 mod embed;
 mod emotion;
+mod governor;
 mod http_proxy;
 mod llm;
 mod narrative;
@@ -79,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
             query,
             limit,
             symbol,
+            emotion,
             no_llm,
             llm_model,
             facts,
@@ -91,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
                 query,
                 limit,
                 symbol,
+                emotion,
                 no_llm,
                 llm_model,
                 facts,
@@ -156,6 +159,15 @@ async fn main() -> anyhow::Result<()> {
         }
         crate::cli::Command::Clear { path, yes } => {
             crate::commands::clear::run(path, yes)?;
+        }
+        crate::cli::Command::Emotion { text } => {
+            crate::commands::emotion::run(text).await?;
+        }
+        crate::cli::Command::Companion {
+            embed_model,
+            embed_cache_dir,
+        } => {
+            crate::commands::companion::run(embed_model, embed_cache_dir).await?;
         }
     }
 

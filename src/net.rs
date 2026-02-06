@@ -270,6 +270,96 @@ pub(crate) fn extract_anthropic_assistant_text_from_json(v: &serde_json::Value) 
     None
 }
 
+// ---------------------------------------------------------------------------
+// Friction detection helpers
+// ---------------------------------------------------------------------------
+
+/// Extract file paths and identifiers from request body for friction checking.
+pub(crate) fn extract_symbols_from_body(body: &[u8], path: &str) -> Vec<String> {
+    let json = match decode_json_lossy(body) {
+        Some(j) => j,
+        None => return vec![],
+    };
+
+    let text = if path.contains("/v1/messages") {
+        extract_anthropic_user_text(&json)
+    } else {
+        extract_openai_message_text(&json)
+    };
+
+    text.map(|t| extract_symbols_from_text(&t)).unwrap_or_default()
+}
+
+/// Extract file paths and identifiers from text.
+pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
+    let mut out = vec![];
+
+    // File paths: src/foo.rs, ./lib/bar.py, auth.ts
+    // Match patterns like word/word.ext or ./word.ext
+    for word in text.split_whitespace() {
+        let word = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ',');
+        // Check if it looks like a file path
+        if word.contains('.') && (word.contains('/') || word.ends_with(".rs") || word.ends_with(".ts") || word.ends_with(".py") || word.ends_with(".js") || word.ends_with(".go")) {
+            // Basic sanity: not too long, has reasonable characters
+            if word.len() < 200 && word.chars().all(|c| c.is_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-') {
+                out.push(word.to_string());
+            }
+        }
+    }
+
+    // Backtick identifiers: `validateAuth`, `MyClass`
+    let mut in_backtick = false;
+    let mut current = String::new();
+    for c in text.chars() {
+        if c == '`' {
+            if in_backtick && current.len() >= 3 {
+                // Only include if it looks like an identifier (starts with letter, alphanumeric)
+                if current.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
+                    && current.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    out.push(current.clone());
+                }
+            }
+            current.clear();
+            in_backtick = !in_backtick;
+        } else if in_backtick {
+            current.push(c);
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Inject warning by prepending to last user message in request body.
+pub(crate) fn inject_warning(body: &Bytes, warning: &str, _path: &str) -> anyhow::Result<Bytes> {
+    let mut json: serde_json::Value = serde_json::from_slice(body)?;
+
+    let messages = json
+        .get_mut("messages")
+        .and_then(|m| m.as_array_mut())
+        .ok_or_else(|| anyhow::anyhow!("no messages array in request"))?;
+
+    // Find last user message and prepend warning
+    for msg in messages.iter_mut().rev() {
+        if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+            if let Some(content) = msg.get_mut("content") {
+                if let Some(s) = content.as_str() {
+                    *content = serde_json::json!(format!("{}{}", warning, s));
+                    break;
+                } else if let Some(arr) = content.as_array_mut() {
+                    // Anthropic/OpenAI array format: prepend as text block
+                    arr.insert(0, serde_json::json!({"type": "text", "text": warning}));
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(Bytes::from(serde_json::to_vec(&json)?))
+}
+
 pub(crate) fn sse_extract_deltas(sse_buf: &mut Vec<u8>, assistant: &mut String) {
     // Parse SSE frames split by blank line. We only keep text deltas.
     // NOTE: We do not keep any transcript/evidence in storage; assistant text is transient.

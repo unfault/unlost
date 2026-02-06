@@ -2,6 +2,16 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub(crate) enum EmotionType {
+    Joy,
+    Anger,
+    Frustration,
+    Sad,
+    Confused,
+    Neutral,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "unlost",
@@ -101,6 +111,10 @@ pub(crate) enum Command {
         /// Filter results to a symbol
         #[arg(long)]
         symbol: Option<String>,
+
+        /// Filter by user emotion (joy, anger, frustration, sad, confused, neutral)
+        #[arg(long, value_enum)]
+        emotion: Option<EmotionType>,
 
         /// Disable LLM narrative (prints raw matches)
         #[arg(long, default_value_t = false)]
@@ -238,6 +252,25 @@ pub(crate) enum Command {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+
+    /// Test emotion detection on a string (developer tool)
+    #[command(hide = true)]
+    Emotion {
+        /// Text to classify
+        text: String,
+    },
+
+    /// Run as a stdio companion for OpenCode plugins (JSON-RPC over stdin/stdout)
+    #[command(hide = true)]
+    Companion {
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -266,6 +299,17 @@ pub(crate) enum AgentCommand {
         /// unlost server base URL (loopback)
         #[arg(long, default_value = "http://127.0.0.1:3000")]
         server: String,
+    },
+
+    /// Add the unlost OpenCode plugin to opencode.json (npm plugin)
+    OpencodePlugin {
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// npm package name to add
+        #[arg(long, default_value = "@unfault/opencode-unlost")]
+        plugin: String,
     },
 }
 

@@ -1,0 +1,1 @@
+/home/sylvain/dev/unfault/unlost/agents/opencode/plugin/index.ts

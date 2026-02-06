@@ -6,7 +6,7 @@ use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer as HfTokenizer, Trunc
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct EmotionMeta {
-    /// One of: joy | neutral | confused | frustration | anger | sad
+    /// One of: joy | neutral | confused | doubt | frustration | anger | sad | disapproval
     pub(crate) label: String,
     /// -1..1 (negative..positive)
     pub(crate) valence: f32,
@@ -194,9 +194,15 @@ pub(crate) fn map_go_emotions(label: &str, score: f32) -> EmotionMeta {
         "anger" => ("anger", -0.9, 0.75),
         "annoyance" => ("frustration", -0.7, 0.55),
         "disappointment" | "remorse" | "sadness" | "grief" => ("sad", -0.8, 0.45),
-        "fear" | "nervousness" => ("frustration", -0.6, 0.55),
+        "fear" => ("frustration", -0.6, 0.55),
         "disgust" => ("frustration", -0.7, 0.6),
         "embarrassment" => ("confused", -0.3, 0.4),
+
+        // Doubt - user is uncertain/skeptical about the direction
+        "nervousness" => ("doubt", -0.3, 0.45),
+
+        // Disapproval - user disagrees with or dislikes the approach (decided)
+        "disapproval" => ("disapproval", -0.5, 0.5),
 
         // Cognitive/uncertainty
         "confusion" | "curiosity" | "realization" | "surprise" => ("confused", 0.0, 0.35),
@@ -215,6 +221,58 @@ pub(crate) fn map_go_emotions(label: &str, score: f32) -> EmotionMeta {
         valence,
         intensity,
         confidence,
+    }
+}
+
+/// Heuristic patterns that indicate doubt/skepticism in agent conversations.
+/// These override neutral/confused when the model misses the context.
+const DOUBT_PATTERNS: &[&str] = &[
+    "why was",
+    "why is",
+    "why did",
+    "why do",
+    "clarify why",
+    "explain why",
+    "are you sure",
+    "not sure",
+    "not convinced",
+    "is this right",
+    "is that right",
+    "is this correct",
+    "is that correct",
+    "doesn't seem right",
+    "doesn't look right",
+    "seems wrong",
+    "looks wrong",
+    "really necessary",
+    "was necessary",
+    "is necessary",
+    "do we need",
+    "do you need",
+    "should we",
+    "shouldn't we",
+];
+
+/// Apply text-based heuristics to catch doubt patterns the model misses.
+/// Only overrides neutral/confused, preserves stronger signals.
+pub(crate) fn apply_context_heuristics(text: &str, meta: EmotionMeta) -> EmotionMeta {
+    // Only override weak signals
+    if meta.label != "neutral" && meta.label != "confused" {
+        return meta;
+    }
+
+    let lower = text.to_lowercase();
+    let has_doubt_pattern = DOUBT_PATTERNS.iter().any(|p| lower.contains(p));
+
+    if has_doubt_pattern {
+        EmotionMeta {
+            label: "doubt".to_string(),
+            valence: -0.3,
+            intensity: 0.5,
+            confidence: meta.confidence,
+        }
+    } else {
+        meta
     }
 }
 
@@ -489,5 +547,28 @@ Bye
         let meta = map_go_emotions("unknown_emotion", 0.3);
         assert_eq!(meta.label, "neutral");
         assert_eq!(meta.valence, 0.0);
+    }
+
+    #[test]
+    fn test_map_go_emotions_doubt_and_disapproval() {
+        // Test doubt (from nervousness)
+        let meta = map_go_emotions("nervousness", 0.7);
+        assert_eq!(meta.label, "doubt");
+        assert!(meta.valence < 0.0); // slightly negative
+        assert!(meta.valence > -0.5); // but not strongly negative
+
+        // Test disapproval
+        let meta = map_go_emotions("disapproval", 0.8);
+        assert_eq!(meta.label, "disapproval");
+        assert!(meta.valence < 0.0);
+
+        // Verify the progression: doubt is less negative than disapproval
+        let doubt = map_go_emotions("nervousness", 0.7);
+        let disapproval = map_go_emotions("disapproval", 0.7);
+        let frustration = map_go_emotions("annoyance", 0.7);
+        
+        // doubt (-0.3) > disapproval (-0.5) > frustration (-0.7)
+        assert!(doubt.valence > disapproval.valence);
+        assert!(disapproval.valence > frustration.valence);
     }
 }

@@ -1,5 +1,7 @@
 pub(crate) mod clear;
+pub(crate) mod companion;
 pub(crate) mod config;
+pub(crate) mod emotion;
 pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod model;

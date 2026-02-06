@@ -79,6 +79,7 @@ fn parse_multiplexed_uri(uri: &Uri) -> anyhow::Result<(String, UpstreamProvider,
 
 async fn serve_request(
     client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
+    state: crate::recording::ServeState,
     conn_id: u64,
     analysis_tx: kanal::Sender<crate::analysis::AnalysisMsg>,
     analysis_drops_logged: Arc<AtomicBool>,
@@ -140,6 +141,41 @@ async fn serve_request(
                 .body(crate::net::text_body(b"payload too large"))
                 .unwrap();
             return Ok(resp);
+        }
+    };
+
+    // --- Friction detection: check for retry loops ---
+    let req_body_bytes = {
+        // Extract symbols from current request
+        let current_symbols = crate::net::extract_symbols_from_body(&req_body_bytes, &stripped_pq);
+
+        // Only check friction if we have symbols to compare
+        if current_symbols.is_empty() {
+            req_body_bytes
+        } else {
+            // Build minimal IntentCapsule for friction check
+            let current_intent = crate::IntentCapsule {
+                category: String::new(),
+                intent: String::new(),
+                decision: String::new(),
+                rationale: String::new(),
+                next_steps: vec![],
+                symbols: current_symbols,
+            };
+
+            // Query recent history and check for friction
+            match state.get_recent_capsules(&workspace_id, 5).await {
+                Ok(history) => {
+                    if let Some(warning) = crate::governor::evaluate_friction(&current_intent, &history) {
+                        info!(conn_id, %workspace_id, "friction detected, injecting warning");
+                        crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
+                            .unwrap_or(req_body_bytes)
+                    } else {
+                        req_body_bytes
+                    }
+                }
+                Err(_) => req_body_bytes,
+            }
         }
     };
 
@@ -229,7 +265,7 @@ async fn serve_request(
 
 async fn proxy_request(
     client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
-    workspace_id: String,
+    ws: crate::WorkspacePaths,
     upstream_host: String,
     upstream_port: u16,
     conn_id: u64,
@@ -273,6 +309,41 @@ async fn proxy_request(
         }
     };
 
+    // --- Friction detection: check for retry loops ---
+    let req_body_bytes = {
+        // Extract symbols from current request
+        let current_symbols = crate::net::extract_symbols_from_body(&req_body_bytes, &request_path);
+
+        // Only check friction if we have symbols to compare
+        if current_symbols.is_empty() {
+            req_body_bytes
+        } else {
+            // Build minimal IntentCapsule for friction check
+            let current_intent = crate::IntentCapsule {
+                category: String::new(),
+                intent: String::new(),
+                decision: String::new(),
+                rationale: String::new(),
+                next_steps: vec![],
+                symbols: current_symbols,
+            };
+
+            // Query recent history and check for friction
+            match crate::storage::scan_capsules_lancedb(&ws, 5, None).await {
+                Ok(history) => {
+                    if let Some(warning) = crate::governor::evaluate_friction(&current_intent, &history) {
+                        info!(conn_id, workspace_id = %ws.id, "friction detected, injecting warning");
+                        crate::net::inject_warning(&req_body_bytes, &warning, &request_path)
+                            .unwrap_or(req_body_bytes)
+                    } else {
+                        req_body_bytes
+                    }
+                }
+                Err(_) => req_body_bytes,
+            }
+        }
+    };
+
     let mut out_req = Request::builder()
         .method(method)
         .uri(upstream_uri)
@@ -302,7 +373,7 @@ async fn proxy_request(
         .map(|s| s.to_string());
 
     let meta = crate::analysis::AnalysisMeta {
-        workspace_id,
+        workspace_id: ws.id.clone(),
         upstream_host: upstream_host.clone(),
         request_path: request_path.clone(),
         http_status: res_parts.status.as_u16(),
@@ -445,6 +516,7 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
         let io = TokioIo::new(stream);
         let client = client.clone();
         let chunker = chunker.clone();
+        let state = state.clone();
 
         tokio::spawn(async move {
             const ANALYSIS_CHAN_CAP: usize = 256;
@@ -460,6 +532,7 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
             let service = hyper::service::service_fn(move |req| {
                 serve_request(
                     client.clone(),
+                    state.clone(),
                     conn_id,
                     analysis_tx.clone(),
                     drops_logged.clone(),
@@ -530,8 +603,6 @@ pub(crate) async fn run_proxy(
         emotion.clone(),
     ));
 
-    let workspace_id = ws.id.clone();
-
     loop {
         let (stream, peer) = listener.accept().await?;
         let conn_id = crate::analysis::CONN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -541,7 +612,7 @@ pub(crate) async fn run_proxy(
         let client = client.clone();
         let upstream_host = upstream_host.clone();
         let chunker = chunker.clone();
-        let workspace_id = workspace_id.clone();
+        let ws = ws.clone();
         tokio::spawn(async move {
             const ANALYSIS_CHAN_CAP: usize = 256;
             let (analysis_tx, analysis_rx) =
@@ -556,7 +627,7 @@ pub(crate) async fn run_proxy(
             let service = hyper::service::service_fn(move |req| {
                 proxy_request(
                     client.clone(),
-                    workspace_id.clone(),
+                    ws.clone(),
                     upstream_host.clone(),
                     upstream_port,
                     conn_id,

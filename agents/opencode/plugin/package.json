@@ -1,0 +1,19 @@
+{
+  "name": "@unfault/opencode-unlost",
+  "version": "0.0.0",
+  "description": "OpenCode plugin for unlost/unloop (local loop-breaker + capture hooks)",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "plugin",
+    "unlost",
+    "unloop",
+    "agent"
+  ]
+}

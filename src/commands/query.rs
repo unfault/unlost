@@ -84,6 +84,7 @@ pub(crate) async fn run(
     query: Vec<String>,
     limit: usize,
     symbol: Option<String>,
+    emotion: Option<crate::cli::EmotionType>,
     no_llm: bool,
     llm_model: Option<String>,
     facts: bool,
@@ -93,6 +94,14 @@ pub(crate) async fn run(
     file: String,
 ) -> anyhow::Result<()> {
     let query = query.join(" ");
+    let emotion_label = emotion.map(|e| match e {
+        crate::cli::EmotionType::Joy => "joy",
+        crate::cli::EmotionType::Anger => "anger",
+        crate::cli::EmotionType::Frustration => "frustration",
+        crate::cli::EmotionType::Sad => "sad",
+        crate::cli::EmotionType::Confused => "confused",
+        crate::cli::EmotionType::Neutral => "neutral",
+    });
     let ws = crate::workspace::get_or_create_workspace_paths(&std::env::current_dir()?)?;
     let embedder = crate::embed::load_embedder(
         &embed_model,
@@ -120,6 +129,7 @@ pub(crate) async fn run(
         &query,
         limit,
         symbol.as_deref(),
+        emotion_label.as_deref(),
         embedder.clone(),
         &ws,
     )

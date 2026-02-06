@@ -156,6 +156,7 @@ pub(crate) async fn query_capsules_lancedb(
     query_text: &str,
     limit: usize,
     symbol: Option<&str>,
+    emotion: Option<&str>,
     embedder: crate::embed::Embedder,
     ws: &crate::WorkspacePaths,
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
@@ -179,10 +180,25 @@ pub(crate) async fn query_capsules_lancedb(
         .column("embedding")
         .limit(limit);
 
+    let mut filters: Vec<String> = Vec::new();
+
     if let Some(sym) = symbol {
         let sym = crate::util::escape_sql_string(sym);
         // lance-datafusion suggests `array_contains` for list columns.
-        q = q.only_if(format!("array_contains(symbols, '{sym}')"));
+        filters.push(format!("array_contains(symbols, '{sym}')"));
+    }
+
+    if let Some(emotion) = emotion {
+        let emotion = crate::util::escape_sql_string(emotion);
+        // Filter on user_emotion - match either user or assistant emotion
+        filters.push(format!(
+            "user_emotion = '{emotion}' OR assistant_emotion = '{emotion}'"
+        ));
+    }
+
+    if !filters.is_empty() {
+        let combined = filters.join(" AND ");
+        q = q.only_if(combined);
     }
 
     let batches = q.execute().await?.try_collect::<Vec<_>>().await?;
