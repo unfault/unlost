@@ -6598,6 +6598,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "bytes",
+ "chrono",
  "clap",
  "fastembed",
  "flate2",

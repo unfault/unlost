@@ -81,6 +81,9 @@ async fn main() -> anyhow::Result<()> {
             limit,
             symbol,
             emotion,
+            provider,
+            since,
+            until,
             no_llm,
             llm_model,
             facts,
@@ -94,6 +97,9 @@ async fn main() -> anyhow::Result<()> {
                 limit,
                 symbol,
                 emotion,
+                provider,
+                since,
+                until,
                 no_llm,
                 llm_model,
                 facts,
@@ -107,6 +113,10 @@ async fn main() -> anyhow::Result<()> {
         crate::cli::Command::Recall {
             target,
             limit,
+            emotion,
+            provider,
+            since,
+            until,
             llm_model,
             output,
             embed_model,
@@ -115,6 +125,10 @@ async fn main() -> anyhow::Result<()> {
             crate::commands::recall::run(
                 target,
                 limit,
+                emotion,
+                provider,
+                since,
+                until,
                 llm_model,
                 output,
                 embed_model,
@@ -122,8 +136,8 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        crate::cli::Command::Inspect { path, limit, filter } => {
-            crate::commands::inspect::run(path, limit, filter).await?;
+        crate::cli::Command::Inspect { path, limit, emotion, provider, since, until, filter } => {
+            crate::commands::inspect::run(path, limit, emotion, provider, since, until, filter).await?;
         }
         crate::cli::Command::Init {
             path,

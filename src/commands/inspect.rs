@@ -1,10 +1,41 @@
 pub(crate) async fn run(
     path: String,
     limit: usize,
+    emotion: Option<crate::cli::EmotionType>,
+    provider: Option<crate::cli::ProviderType>,
+    since: Option<String>,
+    until: Option<String>,
     filter: Option<String>,
 ) -> anyhow::Result<()> {
     let ws = crate::workspace::get_or_create_workspace_paths(std::path::Path::new(&path))?;
-    match crate::storage::scan_capsules_lancedb(&ws, limit, filter.as_deref()).await {
+
+    let emotion_label = emotion.map(|e| match e {
+        crate::cli::EmotionType::Joy => "joy",
+        crate::cli::EmotionType::Anger => "anger",
+        crate::cli::EmotionType::Frustration => "frustration",
+        crate::cli::EmotionType::Sad => "sad",
+        crate::cli::EmotionType::Confused => "confused",
+        crate::cli::EmotionType::Neutral => "neutral",
+    });
+    let provider_label = provider.map(|p| match p {
+        crate::cli::ProviderType::Openai => "openai",
+        crate::cli::ProviderType::Anthropic => "anthropic",
+        crate::cli::ProviderType::Opencode => "opencode",
+    });
+    let since_ms = match since {
+        Some(ref s) => crate::util::parse_time_filter(s)?,
+        None => None,
+    };
+    let until_ms = match until {
+        Some(ref u) => crate::util::parse_time_filter(u)?,
+        None => None,
+    };
+
+    match crate::storage::scan_capsules_lancedb(
+        &ws, limit, filter.as_deref(), emotion_label.as_deref(), provider_label.as_deref(), since_ms, until_ms,
+    )
+    .await
+    {
         Ok(rows) if !rows.is_empty() => {
             println!("workspace: {}", ws.id);
             for hit in rows {

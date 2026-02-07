@@ -20,7 +20,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) const CAPSULES_TABLE: &str = "capsules_v2";
+pub(crate) const CAPSULES_TABLE: &str = "capsules_v3";
 
 fn capsules_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -32,6 +32,7 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("http_status", DataType::Int32, false),
         Field::new("conn_id", DataType::Int64, false),
         Field::new("exchange_seq", DataType::Int64, false),
+        Field::new("agent_session_id", DataType::Utf8, true),
         Field::new("user_emotion", DataType::Utf8, true),
         Field::new("user_emotion_conf", DataType::Float32, true),
         Field::new("user_valence", DataType::Float32, true),
@@ -77,6 +78,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let http_status = Arc::new(Int32Array::from_iter_values(std::iter::empty::<i32>()));
             let conn_id = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
             let exchange_seq = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
+            let agent_session_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
 
             let user_emotion = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
             let user_emotion_conf = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
@@ -114,6 +116,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     http_status,
                     conn_id,
                     exchange_seq,
+                    agent_session_id,
                     user_emotion,
                     user_emotion_conf,
                     user_valence,
@@ -157,6 +160,9 @@ pub(crate) async fn query_capsules_lancedb(
     limit: usize,
     symbol: Option<&str>,
     emotion: Option<&str>,
+    provider: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
     embedder: crate::embed::Embedder,
     ws: &crate::WorkspacePaths,
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
@@ -184,16 +190,32 @@ pub(crate) async fn query_capsules_lancedb(
 
     if let Some(sym) = symbol {
         let sym = crate::util::escape_sql_string(sym);
-        // lance-datafusion suggests `array_contains` for list columns.
         filters.push(format!("array_contains(symbols, '{sym}')"));
     }
 
     if let Some(emotion) = emotion {
         let emotion = crate::util::escape_sql_string(emotion);
-        // Filter on user_emotion - match either user or assistant emotion
         filters.push(format!(
             "user_emotion = '{emotion}' OR assistant_emotion = '{emotion}'"
         ));
+    }
+
+    if let Some(provider) = provider {
+        let provider_host = match &*provider {
+            "openai" => "api.openai.com",
+            "anthropic" => "api.anthropic.com",
+            "opencode" => "opencode.ai",
+            _ => &*provider,
+        };
+        filters.push(format!("upstream_host = '{provider_host}'"));
+    }
+
+    if let Some(since_ms) = since {
+        filters.push(format!("ts_ms >= {since_ms}"));
+    }
+
+    if let Some(until_ms) = until {
+        filters.push(format!("ts_ms <= {until_ms}"));
     }
 
     if !filters.is_empty() {
@@ -262,6 +284,7 @@ pub(crate) async fn query_capsules_lancedb(
         let category = col_str("category");
         let upstream_host = col_str("upstream_host");
         let request_path = col_str("request_path");
+        let agent_session_id_col = col_str("agent_session_id");
 
         let user_emotion_label = col_str("user_emotion");
         let user_emotion_conf = col_f32("user_emotion_conf");
@@ -313,6 +336,8 @@ pub(crate) async fn query_capsules_lancedb(
             let path = request_path
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
+            let agent_session = agent_session_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
             let i_text = intent
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
@@ -382,6 +407,7 @@ pub(crate) async fn query_capsules_lancedb(
                     upstream_host: up.to_string(),
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
+                    agent_session_id: agent_session,
                 },
             });
         }
@@ -393,7 +419,11 @@ pub(crate) async fn query_capsules_lancedb(
 pub(crate) async fn scan_capsules_lancedb(
     ws: &crate::WorkspacePaths,
     limit: usize,
-    filter: Option<&str>,
+    symbol: Option<&str>,
+    emotion: Option<&str>,
+    provider: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
         .execute()
@@ -404,8 +434,42 @@ pub(crate) async fn scan_capsules_lancedb(
     };
 
     let mut q = table.query().limit(limit);
-    if let Some(f) = filter {
-        q = q.only_if(f.to_string());
+
+    let mut filters: Vec<String> = Vec::new();
+
+    if let Some(sym) = symbol {
+        let sym = crate::util::escape_sql_string(sym);
+        filters.push(format!("array_contains(symbols, '{sym}')"));
+    }
+
+    if let Some(emotion) = emotion {
+        let emotion = crate::util::escape_sql_string(emotion);
+        filters.push(format!(
+            "user_emotion = '{emotion}' OR assistant_emotion = '{emotion}'"
+        ));
+    }
+
+    if let Some(provider) = provider {
+        let provider_host = match &*provider {
+            "openai" => "api.openai.com",
+            "anthropic" => "api.anthropic.com",
+            "opencode" => "opencode.ai",
+            _ => &*provider,
+        };
+        filters.push(format!("upstream_host = '{provider_host}'"));
+    }
+
+    if let Some(since_ms) = since {
+        filters.push(format!("ts_ms >= {since_ms}"));
+    }
+
+    if let Some(until_ms) = until {
+        filters.push(format!("ts_ms <= {until_ms}"));
+    }
+
+    if !filters.is_empty() {
+        let combined = filters.join(" AND ");
+        q = q.only_if(combined);
     }
 
     let batches = q.execute().await?.try_collect::<Vec<_>>().await?;
@@ -470,6 +534,7 @@ pub(crate) async fn scan_capsules_lancedb(
         let category = col_str("category");
         let upstream_host = col_str("upstream_host");
         let request_path = col_str("request_path");
+        let agent_session_id_col = col_str("agent_session_id");
 
         let user_emotion_label = col_str("user_emotion");
         let user_emotion_conf = col_f32("user_emotion_conf");
@@ -514,6 +579,8 @@ pub(crate) async fn scan_capsules_lancedb(
             let http_status = http_status_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or_default();
+            let agent_session = agent_session_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
             let i_text = intent
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
@@ -583,6 +650,7 @@ pub(crate) async fn scan_capsules_lancedb(
                     upstream_host: up.to_string(),
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
+                    agent_session_id: agent_session,
                 },
             });
         }
@@ -647,6 +715,7 @@ pub(crate) async fn insert_capsule_row(
     let http_status_arr = Arc::new(Int32Array::from(vec![meta.http_status as i32]));
     let conn_id_arr = Arc::new(Int64Array::from(vec![conn_id as i64]));
     let exchange_seq_arr = Arc::new(Int64Array::from(vec![exchange_seq as i64]));
+    let agent_session_id_arr = Arc::new(StringArray::from(vec![meta.agent_session_id.as_deref()]));
 
     let user_emotion_arr = Arc::new(StringArray::from(vec![user_emotion.map(|e| e.label.as_str())]));
     let user_emotion_conf_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.confidence)]));
@@ -695,6 +764,7 @@ pub(crate) async fn insert_capsule_row(
             http_status_arr,
             conn_id_arr,
             exchange_seq_arr,
+            agent_session_id_arr,
             user_emotion_arr,
             user_emotion_conf_arr,
             user_valence_arr,

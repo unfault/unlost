@@ -329,7 +329,7 @@ async fn proxy_request(
             };
 
             // Query recent history and check for friction
-            match crate::storage::scan_capsules_lancedb(&ws, 5, None).await {
+            match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
                 Ok(history) => {
                     if let Some(warning) = crate::governor::evaluate_friction(&current_intent, &history) {
                         info!(conn_id, workspace_id = %ws.id, "friction detected, injecting warning");

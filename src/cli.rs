@@ -12,6 +12,13 @@ pub(crate) enum EmotionType {
     Neutral,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub(crate) enum ProviderType {
+    Openai,
+    Anthropic,
+    Opencode,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "unlost",
@@ -116,6 +123,18 @@ pub(crate) enum Command {
         #[arg(long, value_enum)]
         emotion: Option<EmotionType>,
 
+        /// Filter by upstream provider (openai, anthropic, opencode)
+        #[arg(long, value_enum)]
+        provider: Option<ProviderType>,
+
+        /// Filter to capsules after this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter to capsules before this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        until: Option<String>,
+
         /// Disable LLM narrative (prints raw matches)
         #[arg(long, default_value_t = false)]
         no_llm: bool,
@@ -154,6 +173,22 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = 24)]
         limit: usize,
 
+        /// Filter by user emotion (joy, anger, frustration, sad, confused, neutral)
+        #[arg(long, value_enum)]
+        emotion: Option<EmotionType>,
+
+        /// Filter by upstream provider (openai, anthropic, opencode)
+        #[arg(long, value_enum)]
+        provider: Option<ProviderType>,
+
+        /// Filter to capsules after this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter to capsules before this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        until: Option<String>,
+
         /// LLM model to use for recall narrative
         #[arg(long)]
         llm_model: Option<String>,
@@ -180,6 +215,22 @@ pub(crate) enum Command {
         /// Max rows to print
         #[arg(long, default_value_t = 20)]
         limit: usize,
+
+        /// Filter by user emotion (joy, anger, frustration, sad, confused, neutral)
+        #[arg(long, value_enum)]
+        emotion: Option<EmotionType>,
+
+        /// Filter by upstream provider (openai, anthropic, opencode)
+        #[arg(long, value_enum)]
+        provider: Option<ProviderType>,
+
+        /// Filter to capsules after this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter to capsules before this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        until: Option<String>,
 
         /// Optional Lance filter expression (DataFusion SQL)
         #[arg(long)]

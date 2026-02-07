@@ -138,12 +138,13 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     if (!userText && !assistantText) return
 
-    log("info", `recording exchange: user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}...`)
+    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}...`)
 
     sendRequest<RecordResponse>("record", {
       user_text: userText,
       assistant_text: assistantText,
       directory: workingDirectory,
+      agent_session_id: sessionId,
     }).catch(() => {})
 
     // Clear exchange tracking for next round

@@ -85,6 +85,9 @@ pub(crate) async fn run(
     limit: usize,
     symbol: Option<String>,
     emotion: Option<crate::cli::EmotionType>,
+    provider: Option<crate::cli::ProviderType>,
+    since: Option<String>,
+    until: Option<String>,
     no_llm: bool,
     llm_model: Option<String>,
     facts: bool,
@@ -102,6 +105,19 @@ pub(crate) async fn run(
         crate::cli::EmotionType::Confused => "confused",
         crate::cli::EmotionType::Neutral => "neutral",
     });
+    let provider_label = provider.map(|p| match p {
+        crate::cli::ProviderType::Openai => "openai",
+        crate::cli::ProviderType::Anthropic => "anthropic",
+        crate::cli::ProviderType::Opencode => "opencode",
+    });
+    let since_ms = match since {
+        Some(ref s) => crate::util::parse_time_filter(s)?,
+        None => None,
+    };
+    let until_ms = match until {
+        Some(ref u) => crate::util::parse_time_filter(u)?,
+        None => None,
+    };
     let ws = crate::workspace::get_or_create_workspace_paths(&std::env::current_dir()?)?;
     let embedder = crate::embed::load_embedder(
         &embed_model,
@@ -130,6 +146,9 @@ pub(crate) async fn run(
         limit,
         symbol.as_deref(),
         emotion_label.as_deref(),
+        provider_label.as_deref(),
+        since_ms,
+        until_ms,
         embedder.clone(),
         &ws,
     )
@@ -180,6 +199,12 @@ pub(crate) async fn run(
                     println!("source:    {}", meta.source);
                     println!("category:  {}", cap.category);
                     println!("upstream:  {}", meta.upstream_host);
+                    if let Some(e) = &hit.user_emotion {
+                        println!("user_mood: {} (conf={:.2} val={:.2} int={:.2})", e.label, e.confidence, e.valence, e.intensity);
+                    }
+                    if let Some(e) = &hit.assistant_emotion {
+                        println!("asst_mood: {} (conf={:.2} val={:.2} int={:.2})", e.label, e.confidence, e.valence, e.intensity);
+                    }
                     println!("path:      {}", meta.request_path);
                     if !cap.intent.trim().is_empty() {
                         println!("intent:    {}", cap.intent);

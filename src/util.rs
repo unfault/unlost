@@ -11,9 +11,51 @@ pub(crate) fn scope_filter_expr(scope: &str) -> Option<String> {
     Some(format!("array_contains(symbols, '{s}')"))
 }
 
+pub(crate) fn parse_time_filter(s: &str) -> anyhow::Result<Option<i64>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+
+    let now = chrono::Utc::now();
+    let ms = match s {
+        _ if s.ends_with('s') => {
+            let secs: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - secs * 1000
+        }
+        _ if s.ends_with('m') => {
+            let mins: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - mins * 60 * 1000
+        }
+        _ if s.ends_with('h') => {
+            let hours: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - hours * 60 * 60 * 1000
+        }
+        _ if s.ends_with('d') => {
+            let days: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - days * 24 * 60 * 60 * 1000
+        }
+        _ if s.ends_with('w') => {
+            let weeks: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - weeks * 7 * 24 * 60 * 60 * 1000
+        }
+        _ if s.ends_with('M') => {
+            let months: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - months * 30 * 24 * 60 * 60 * 1000
+        }
+        _ if s.ends_with('y') => {
+            let years: i64 = s[..s.len() - 1].parse()?;
+            now.timestamp_millis() - years * 365 * 24 * 60 * 60 * 1000
+        }
+        _ => {
+            let dt = chrono::DateTime::parse_from_rfc3339(s)?;
+            dt.timestamp_millis()
+        }
+    };
+    Ok(Some(ms))
+}
+
 pub(crate) fn strip_llm_boilerplate(mut s: String) -> String {
-    // Defensive: if the LLM includes any leaked system/tool boilerplate, strip it.
-    // Do a case-insensitive search for common tag prefixes.
     let lower = s.to_ascii_lowercase();
     if let Some(i) = lower
         .find("<system-reminder")
@@ -49,6 +91,24 @@ mod tests {
             scope_filter_expr("a'b"),
             Some("array_contains(symbols, 'a''b')".to_string())
         );
+    }
+
+    #[test]
+    fn test_parse_time_filter_relative() {
+        let now = chrono::Utc::now().timestamp_millis();
+        assert!(parse_time_filter("1s").unwrap().unwrap() < now);
+        assert!(parse_time_filter("5m").unwrap().unwrap() < now);
+        assert!(parse_time_filter("2h").unwrap().unwrap() < now);
+        assert!(parse_time_filter("1d").unwrap().unwrap() < now);
+        assert!(parse_time_filter("1w").unwrap().unwrap() < now);
+        assert!(parse_time_filter("1M").unwrap().unwrap() < now);
+        assert!(parse_time_filter("1y").unwrap().unwrap() < now);
+    }
+
+    #[test]
+    fn test_parse_time_filter_empty() {
+        assert_eq!(parse_time_filter("").unwrap(), None);
+        assert_eq!(parse_time_filter("   ").unwrap(), None);
     }
 
     #[test]

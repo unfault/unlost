@@ -18,7 +18,7 @@ use crate::embed::Embedder;
 use crate::emotion::{apply_context_heuristics, map_go_emotions, EmotionConfig, EmotionModel};
 use crate::governor::evaluate_friction;
 use crate::recording::{looks_like_commit_or_pr, ChunkInput, FlushJob, WorkspaceChunker};
-use crate::storage::{ensure_capsules_table, insert_capsule_row, scan_capsules_lancedb};
+use crate::storage::{ensure_capsules_table, insert_capsule_row};
 use crate::workspace::get_or_create_workspace_paths;
 use crate::IntentCapsule;
 use lancedb::connection::Connection;
@@ -57,6 +57,9 @@ struct RecordParams {
     /// Workspace directory (absolute path)
     #[serde(default)]
     directory: String,
+    /// Agent session ID (e.g., OpenCode session) for grouping conversations
+    #[serde(default)]
+    agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,7 +177,7 @@ async fn handle_check(state: &mut CompanionState, params: CheckParams) -> Respon
     };
 
     // Load recent capsules
-    let history = match scan_capsules_lancedb(&ws, 5, None).await {
+    let history = match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
         Ok(h) => h,
         Err(e) => {
             tracing::debug!("scan_capsules_lancedb failed: {e}");
@@ -280,6 +283,7 @@ async fn handle_record(
         http_status: 200,
         exchange_text,
         commit_mentioned,
+        agent_session_id: params.agent_session_id.clone(),
     };
 
     chunker.ingest(ws.id.clone(), item).await;
@@ -500,6 +504,7 @@ impl Default for RecordParams {
             user_text: String::new(),
             assistant_text: String::new(),
             directory: String::new(),
+            agent_session_id: None,
         }
     }
 }

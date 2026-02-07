@@ -94,6 +94,7 @@ mod tests {
                 upstream_host: "test".to_string(),
                 request_path: "test".to_string(),
                 http_status: 200,
+                agent_session_id: None,
             },
         }
     }

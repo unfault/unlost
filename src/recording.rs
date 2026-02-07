@@ -88,6 +88,8 @@ pub(crate) struct ChunkInput {
     pub(crate) http_status: u16,
     pub(crate) exchange_text: String,
     pub(crate) commit_mentioned: bool,
+    /// Agent session ID (e.g., OpenCode session) for grouping conversations
+    pub(crate) agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +109,7 @@ struct WorkspaceBuffer {
     last_upstream_host: String,
     last_request_path: String,
     last_http_status: u16,
+    last_agent_session_id: Option<String>,
     total_chars: usize,
     turns: Vec<String>,
     saw_commit: bool,
@@ -121,6 +124,7 @@ impl WorkspaceBuffer {
             last_upstream_host: String::new(),
             last_request_path: String::new(),
             last_http_status: 0,
+            last_agent_session_id: None,
             total_chars: 0,
             turns: Vec::new(),
             saw_commit: false,
@@ -167,6 +171,7 @@ impl WorkspaceChunker {
             buf.last_upstream_host = item.upstream_host;
             buf.last_request_path = item.request_path;
             buf.last_http_status = item.http_status;
+            buf.last_agent_session_id = item.agent_session_id;
             buf.saw_commit |= item.commit_mentioned;
 
             buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
@@ -233,6 +238,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         upstream_host: buf.last_upstream_host.clone(),
         request_path: buf.last_request_path.clone(),
         http_status: buf.last_http_status,
+        agent_session_id: buf.last_agent_session_id.clone(),
     };
 
     FlushJob {
@@ -297,7 +303,7 @@ impl ServeState {
         limit: usize,
     ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
         let ws = self.workspace_paths(workspace_id);
-        crate::storage::scan_capsules_lancedb(&ws, limit, None).await
+        crate::storage::scan_capsules_lancedb(&ws, limit, None, None, None, None, None).await
     }
 }
 
@@ -597,6 +603,7 @@ pub(crate) async fn analysis_worker_multiplex(
             http_status: meta.http_status,
             exchange_text: input,
             commit_mentioned,
+            agent_session_id: None, // HTTP proxy doesn't have agent session context
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -716,6 +723,7 @@ pub(crate) async fn analysis_worker(
             http_status: meta.http_status,
             exchange_text: input,
             commit_mentioned,
+            agent_session_id: None, // HTTP proxy doesn't have agent session context
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }

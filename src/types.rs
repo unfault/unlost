@@ -7,6 +7,8 @@ pub(crate) struct ResponseMeta {
     pub(crate) upstream_host: String,
     pub(crate) request_path: String,
     pub(crate) http_status: u16,
+    /// Agent session ID (e.g., OpenCode session) for grouping conversations
+    pub(crate) agent_session_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
@@ -120,12 +122,14 @@ mod tests {
             upstream_host: "test.example.com".to_string(),
             request_path: "/api/test".to_string(),
             http_status: 200,
+            agent_session_id: None,
         };
 
         assert_eq!(meta.source, "test_source");
         assert_eq!(meta.upstream_host, "test.example.com");
         assert_eq!(meta.request_path, "/api/test");
         assert_eq!(meta.http_status, 200);
+        assert!(meta.agent_session_id.is_none());
     }
 
     #[test]
@@ -144,6 +148,7 @@ mod tests {
             upstream_host: "test.com".to_string(),
             request_path: "/test".to_string(),
             http_status: 200,
+            agent_session_id: Some("test_session".to_string()),
         };
 
         let hit = CapsuleHit {
