@@ -319,9 +319,18 @@ pub(crate) enum Command {
         text: String,
     },
 
-    /// Run as a stdio companion for OpenCode plugins (JSON-RPC over stdin/stdout)
+    /// Agent integration shims (OpenCode, Claude Code, etc.)
     #[command(hide = true)]
-    Companion {
+    Shim {
+        #[command(subcommand)]
+        command: ShimCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ShimCommand {
+    /// Run the OpenCode stdio shim (JSON-RPC over stdin/stdout)
+    Opencode {
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,

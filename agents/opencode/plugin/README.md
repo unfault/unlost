@@ -33,11 +33,11 @@ Restart OpenCode after changes.
 ## Notes
 
 This initial version is intentionally dependency-free and runs locally.
-Future versions can optionally forward events to a local unlost companion for richer analysis.
+The plugin spawns a local unlost shim for conversation recording and friction detection.
 
-## Companion Integration
+## Shim Integration
 
-When using the companion (`unlost companion`), the plugin communicates via stdio JSON-RPC:
+The plugin spawns `unlost shim opencode` and communicates via stdio JSON-RPC:
 
 ```
 check  → {"method": "check", "params": {"text": "...", "directory": "..."}}

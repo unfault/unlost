@@ -98,7 +98,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
   function spawnCompanion() {
     const bin = findUnlostBinary()
     try {
-      companion = spawn(bin, ["companion"], {
+      companion = spawn(bin, ["shim", "opencode"], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env },
       })
@@ -199,14 +199,16 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     if (!userText && !assistantText) return
 
-    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}...`)
+    // Debug: log usage being sent
+    const usageToSend = assistantMsg?.usage || null
+    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}... usage=${safeJson(usageToSend)}`)
 
     sendRequest<RecordResponse>("record", {
       user_text: userText,
       assistant_text: assistantText,
       directory: workingDirectory,
       agent_session_id: sessionId,
-      usage: assistantMsg?.usage || null,
+      usage: usageToSend,
     }).catch(() => {})
 
     if (exchange.assistantMessageId) {
@@ -324,6 +326,11 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
                 }
               : undefined
 
+          // Debug: log usage data when available
+          if (info.role === "assistant" && (info.cost !== undefined || info.tokens !== undefined)) {
+            log("info", `message.updated usage: cost=${info.cost} tokens=${safeJson(info.tokens)}`)
+          }
+
           messageData.set(info.id, {
             role: info.role,
             sessionId: info.sessionID,
@@ -383,11 +390,19 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
         // step-finish may carry reliable final usage info.
         if (part?.type === "step-finish" && part?.messageID && part?.sessionID) {
+          // Debug: log step-finish usage data
+          log("info", `step-finish usage: cost=${part.cost} tokens=${safeJson(part.tokens)}`)
+
           const existing = messageData.get(part.messageID)
+          
+          // Merge step-finish usage with existing usage (preserve provider_id/model_id from message.updated)
           const usage: Usage = {
-            // provider/model are best-effort; we usually get them from message.updated.
-            cost: typeof part.cost === "number" ? part.cost : undefined,
-            tokens: part.tokens,
+            // Keep provider/model from existing usage if available (from message.updated)
+            provider_id: existing?.usage?.provider_id,
+            model_id: existing?.usage?.model_id,
+            // Use cost and tokens from step-finish (more reliable final values)
+            cost: typeof part.cost === "number" ? part.cost : existing?.usage?.cost,
+            tokens: part.tokens ?? existing?.usage?.tokens,
           }
 
           if (existing) {

@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser};
 mod analysis;
 mod cli;
 mod commands;
+mod companion;
 mod config;
 mod constants;
 mod embed;
@@ -192,12 +193,14 @@ async fn main() -> anyhow::Result<()> {
         crate::cli::Command::Emotion { text } => {
             crate::commands::emotion::run(text).await?;
         }
-        crate::cli::Command::Companion {
-            embed_model,
-            embed_cache_dir,
-        } => {
-            crate::commands::companion::run(embed_model, embed_cache_dir).await?;
-        }
+        crate::cli::Command::Shim { command } => match command {
+            crate::cli::ShimCommand::Opencode {
+                embed_model,
+                embed_cache_dir,
+            } => {
+                crate::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir).await?;
+            }
+        },
     }
 
     Ok(())
