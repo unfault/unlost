@@ -153,7 +153,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
     timeoutMs = 10000
   ): Promise<T> {
     if (!companion || !ready) {
-      return { note: null, ok: false } as T
+      return { note: null, ok: false } as unknown as T
     }
 
     const id = ++requestId
@@ -162,7 +162,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         pendingRequests.delete(id)
-        resolve({ note: null, ok: false, error: "timeout" } as T)
+        resolve({ note: null, ok: false, error: "timeout" } as unknown as T)
       }, timeoutMs)
 
       pendingRequests.set(id, (resp) => {
@@ -176,7 +176,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
         const err = e as Error
         clearTimeout(timeout)
         pendingRequests.delete(id)
-        resolve({ note: null, ok: false, error: err.message } as T)
+        resolve({ note: null, ok: false, error: err.message } as unknown as T)
       }
     })
   }

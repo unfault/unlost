@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+*.js
+*.d.ts
+*.map
+
+# npm
+package-lock.json

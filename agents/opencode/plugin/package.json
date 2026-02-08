@@ -1,19 +1,30 @@
 {
   "name": "@unfault/opencode-unlost",
-  "version": "0.0.0",
+  "version": "0.0.5",
   "description": "OpenCode plugin for unlost/unloop (local loop-breaker + capture hooks)",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
+  "types": "index.d.ts",
   "files": [
     "index.js",
+    "index.d.ts",
     "README.md"
   ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
   "keywords": [
     "opencode",
     "plugin",
     "unlost",
     "unloop",
     "agent"
-  ]
+  ],
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.1.53",
+    "@types/node": "^25.2.2",
+    "typescript": "^5.9.3"
+  }
 }
