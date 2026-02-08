@@ -436,6 +436,7 @@ pub(crate) async fn run(
             request_path: "init".to_string(),
             http_status: 0,
             agent_session_id: None,
+            usage: None,
         },
     ));
 
@@ -481,6 +482,7 @@ pub(crate) async fn run(
                 request_path: file_path,
                 http_status: 0,
                 agent_session_id: None,
+                usage: None,
             },
         ));
     }
@@ -509,6 +511,7 @@ pub(crate) async fn run(
                         request_path: "init".to_string(),
                         http_status: 0,
                         agent_session_id: None,
+                        usage: None,
                     },
                 ));
                 if capsules.len() >= max_capsules {

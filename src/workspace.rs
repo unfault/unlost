@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::test_support::ENV_LOCK;
 
     struct EnvVarGuard {
         key: &'static str,

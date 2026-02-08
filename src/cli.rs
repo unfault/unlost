@@ -151,6 +151,10 @@ pub(crate) enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
         output: OutputFormat,
 
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -196,6 +200,10 @@ pub(crate) enum Command {
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
         output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]

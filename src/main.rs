@@ -18,6 +18,9 @@ mod types;
 mod util;
 mod workspace;
 
+#[cfg(test)]
+mod test_support;
+
 pub(crate) use crate::llm::llm_extract;
 pub(crate) use crate::types::{CapsuleHit, InitCapsulesOutput, QueryNarrativeOutput, ResponseMeta};
 pub use crate::types::IntentCapsule;
@@ -88,10 +91,16 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             facts,
             output,
+            plain,
             embed_model,
             embed_cache_dir,
             file,
         } => {
+            let output = if plain {
+                crate::cli::OutputFormat::Plain
+            } else {
+                output
+            };
             crate::commands::query::run(
                 query,
                 limit,
@@ -119,9 +128,15 @@ async fn main() -> anyhow::Result<()> {
             until,
             llm_model,
             output,
+            plain,
             embed_model,
             embed_cache_dir,
         } => {
+            let output = if plain {
+                crate::cli::OutputFormat::Plain
+            } else {
+                output
+            };
             crate::commands::recall::run(
                 target,
                 limit,

@@ -60,3 +60,9 @@ rustls = { version = "0.23.36", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 tempfile = "3.14"
+
+[profile.release]
+# Keep the release binary small while staying self-contained.
+strip = true
+lto = "thin"
+codegen-units = 1

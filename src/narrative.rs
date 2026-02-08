@@ -2,6 +2,8 @@ use anyhow::Result;
 use indicatif::ProgressDrawTarget;
 use std::io::IsTerminal;
 
+use chrono::{SecondsFormat, TimeZone};
+
 use crate::cli::OutputFormat;
 
 pub(crate) async fn llm_query_narrative(
@@ -10,6 +12,13 @@ pub(crate) async fn llm_query_narrative(
     symbol: Option<&str>,
     matches: &[crate::CapsuleHit],
 ) -> Result<String> {
+    let fmt_ts_utc = |ts_ms: i64| -> Option<String> {
+        chrono::Utc
+            .timestamp_millis_opt(ts_ms)
+            .single()
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+    };
+
     let mut context = String::new();
     context.push_str("Query:\n");
     context.push_str(query_text);
@@ -19,18 +28,53 @@ pub(crate) async fn llm_query_narrative(
         context.push_str(sym);
         context.push('\n');
     }
+
+    // Session IDs can be long; we bucket them into short tags so the LLM can avoid
+    // accidentally printing raw identifiers.
+    let mut session_tags: std::collections::HashMap<&str, String> =
+        std::collections::HashMap::new();
+    let mut sessions: Vec<&str> = matches
+        .iter()
+        .filter_map(|h| h.meta.agent_session_id.as_deref())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    sessions.sort_unstable();
+    for (i, s) in sessions.iter().enumerate() {
+        session_tags.insert(*s, format!("s{}", i + 1));
+    }
+    if sessions.len() > 1 {
+        context.push_str(&format!("Distinct agent sessions in matches: {}\n", sessions.len()));
+    }
     context.push_str("Matches (lower distance = closer):\n");
     for (i, hit) in matches.iter().enumerate() {
         let cap = &hit.capsule;
         let meta = &hit.meta;
+        let ts = fmt_ts_utc(hit.ts_ms)
+            .map(|s| format!(" time_utc={s}"))
+            .unwrap_or_default();
+        let session_tag = meta
+            .agent_session_id
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| session_tags.get(s))
+            .cloned();
+        let session_tag = session_tag
+            .map(|t| format!(" session={t}"))
+            .unwrap_or_default();
         context.push_str(&format!(
-            "#{} distance={} source={} category={} upstream={} path={}\n",
+            "#{} distance={} source={} category={} upstream={} path={}{}{}\n",
             i + 1,
             hit.distance,
             meta.source,
             cap.category,
             meta.upstream_host,
-            meta.request_path
+            meta.request_path,
+            session_tag,
+            ts
         ));
         if !cap.intent.trim().is_empty() {
             context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
@@ -40,6 +84,18 @@ pub(crate) async fn llm_query_narrative(
         }
         if !cap.rationale.trim().is_empty() {
             context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+        }
+        if let Some(e) = hit.user_emotion.as_ref() {
+            context.push_str(&format!(
+                "user_mood: {} conf={:.2} val={:.2} int={:.2}\n",
+                e.label, e.confidence, e.valence, e.intensity
+            ));
+        }
+        if let Some(e) = hit.assistant_emotion.as_ref() {
+            context.push_str(&format!(
+                "asst_mood: {} conf={:.2} val={:.2} int={:.2}\n",
+                e.label, e.confidence, e.valence, e.intensity
+            ));
         }
         if !cap.symbols.is_empty() {
             let syms = cap
@@ -63,12 +119,22 @@ Grounding rules:
 - Base your answer ONLY on the provided matches. Don't invent files, symbols, routes, frameworks, or auth mechanisms.
 - When you make a claim, anchor it to concrete evidence by mentioning 1-3 specific backticked tokens pulled from the matches (paths, symbols, or routes).
 
+Session rules:
+- Matches may come from different agent sessions. If you see multiple distinct sessions, call that out briefly (e.g. "across multiple sessions") and avoid merging conflicting threads.
+- Do NOT print session identifiers (even if shown as `session=s1` etc) unless the user explicitly asks.
+- If timestamps are present, you may reference recency or ordering (keep it brief).
+
 Clarity rules:
-- The FIRST sentence must be an explicit verdict: "Yes", "No", or "I don't know yet".
-- If you say "I don't know yet", immediately say what is missing in one sentence.
+- Start with a direct answer (no forced "Yes/No" prelude).
+- If the question is too broad to answer from evidence, say that plainly and state what narrower question would be answerable.
+
+Emotion rules:
+- Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the matches.
+- If there are no mood lines, do NOT infer or guess emotion; leave it out entirely.
+- If mood lines are present but weak/mixed, omit emotion.
 
 Style rules:
-- First person, conversational, concise: 4-6 sentences.
+- First person, conversational, concise, kind, constructive: 4-6 sentences.
 - No headings, no bullets, no "report" language.
 - Never output internal/system/tool boilerplate (e.g. anything like `<system-reminder>...</system-reminder>`).
 - Wrap code identifiers in backticks (e.g. `proxy_request`), file paths in backticks (e.g. `src/main.rs`, `main.py`), and routes in backticks (e.g. `GET /inventory`).
@@ -142,6 +208,118 @@ pub(crate) fn colorize_backticks(input: &str) -> String {
     out
 }
 
+fn protect_spaces_inside_backticks(s: &str) -> String {
+    // Prevent wrapping from splitting code spans like `GET /foo`.
+    // We replace spaces inside backticks with a sentinel, then restore after wrapping.
+    const SENTINEL: char = '\x1f';
+    let mut out = String::with_capacity(s.len());
+    let mut in_tick = false;
+    for ch in s.chars() {
+        if ch == '`' {
+            in_tick = !in_tick;
+            out.push(ch);
+            continue;
+        }
+        if in_tick && ch == ' ' {
+            out.push(SENTINEL);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn restore_spaces_inside_backticks(s: &str) -> String {
+    s.replace('\x1f', " ")
+}
+
+fn split_list_prefix(s: &str) -> Option<(&str, &str)> {
+    // Returns (marker, rest) for markdown-ish list lines.
+    // Assumes `s` is left-trimmed.
+    if let Some(rest) = s.strip_prefix("- ") {
+        return Some(("- ", rest));
+    }
+    if let Some(rest) = s.strip_prefix("* ") {
+        return Some(("* ", rest));
+    }
+    if let Some(rest) = s.strip_prefix("+ ") {
+        return Some(("+ ", rest));
+    }
+    if let Some(rest) = s.strip_prefix("> ") {
+        return Some(("> ", rest));
+    }
+
+    // Numbered list: 1. foo  /  1) foo
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 {
+        return None;
+    }
+    if i + 1 < bytes.len() && (bytes[i] == b'.' || bytes[i] == b')') && bytes[i + 1] == b' ' {
+        let (marker, rest) = s.split_at(i + 2);
+        return Some((marker, rest));
+    }
+    None
+}
+
+fn wrap_line_preserving_backticks(line: &str, width: usize) -> Vec<String> {
+    if width < 10 {
+        return vec![line.trim_end().to_string()];
+    }
+    let line = line.trim_end();
+    if line.trim().is_empty() {
+        return vec![String::new()];
+    }
+    if line.len() <= width {
+        return vec![line.to_string()];
+    }
+
+    let indent_len = line
+        .chars()
+        .take_while(|c| c.is_ascii_whitespace())
+        .count();
+    let indent = " ".repeat(indent_len);
+
+    let trimmed = line.trim_start();
+    let protected = protect_spaces_inside_backticks(trimmed);
+    let (marker, rest) = split_list_prefix(&protected).unwrap_or(("", protected.as_str()));
+    let first_prefix = format!("{indent}{marker}");
+    let hanging_prefix = " ".repeat(indent_len + marker.len());
+
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    cur.push_str(&first_prefix);
+    let mut cur_len = first_prefix.len();
+    let mut base_len = cur_len;
+
+    for word in rest.split_whitespace() {
+        let wlen = word.len();
+        let needs_space = cur_len > base_len;
+        let add_len = wlen + if needs_space { 1 } else { 0 };
+
+        if cur_len + add_len > width && cur_len > base_len {
+            out.push(restore_spaces_inside_backticks(cur.trim_end()));
+            cur.clear();
+            cur.push_str(&hanging_prefix);
+            cur_len = hanging_prefix.len();
+            base_len = cur_len;
+        }
+
+        if cur_len > base_len {
+            cur.push(' ');
+            cur_len += 1;
+        }
+        cur.push_str(word);
+        cur_len += wlen;
+    }
+
+    out.push(restore_spaces_inside_backticks(cur.trim_end()));
+    out
+}
+
 pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
     let output = if std::env::var_os("NO_COLOR").is_some() {
         OutputFormat::Plain
@@ -156,12 +334,10 @@ pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
         OutputFormat::Ansi => {
             // Dim “tips” lines so they read as guidance, not facts.
             // We intentionally skip backtick-coloring inside dimmed lines, so dim stays consistent.
-            let mut out = String::with_capacity(s.len() + 32);
-            for (i, line) in s.lines().enumerate() {
-                if i > 0 {
-                    out.push('\n');
-                }
-
+            let wrap_width = 80usize;
+            let mut out = String::with_capacity(s.len() + 64);
+            let mut first = true;
+            for line in s.lines() {
                 let l = line.trim_end();
                 let lower = l.to_ascii_lowercase();
                 let is_tip = lower.starts_with("evidence note:")
@@ -169,12 +345,20 @@ pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
                     || lower.starts_with("follow up query:")
                     || lower.starts_with("next step:");
 
-                if is_tip {
-                    out.push_str("\x1b[2m");
-                    out.push_str(l);
-                    out.push_str("\x1b[0m");
-                } else {
-                    out.push_str(&colorize_backticks(l));
+                let wrapped = wrap_line_preserving_backticks(l, wrap_width);
+                for wl in wrapped {
+                    if !first {
+                        out.push('\n');
+                    }
+                    first = false;
+
+                    if is_tip {
+                        out.push_str("\x1b[2m");
+                        out.push_str(&wl);
+                        out.push_str("\x1b[0m");
+                    } else {
+                        out.push_str(&colorize_backticks(&wl));
+                    }
                 }
             }
             out
@@ -267,6 +451,8 @@ Rules:
 - Do NOT quote or excerpt the conversation.
 - If scoped (a file path or symbol), focus on that scope but explicitly call out cross-scope impacts: any important symbols or files outside the scope that appear connected.
 - Keep it high-signal: intent, decisions, rationale, and what's next.
+- Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the capsules. If present, use this to paint the emotional context.
+- If there are no mood lines, do NOT infer or guess emotion; leave it out entirely.
 
 Output format:
 - 2-3 sentences: overall state of the work.
@@ -296,4 +482,214 @@ pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTa
         return Some(ProgressDrawTarget::stderr());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::test_support::ENV_LOCK;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, val: &std::ffi::OsStr) -> Self {
+            let prev = std::env::var_os(key);
+            unsafe { std::env::set_var(key, val) };
+            Self { key, prev }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            unsafe { std::env::remove_var(key) };
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn test_colorize_backticks_plain_text() {
+        let input = "hello world";
+        let output = colorize_backticks(input);
+        assert_eq!(output, "hello world");
+    }
+
+    #[test]
+    fn test_colorize_backticks_code_identifier() {
+        let input = "Use `proxy_request` to handle this";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[36m")); // cyan for identifiers
+        assert!(output.contains("proxy_request"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_file_path() {
+        let input = "Check `src/main.rs` for details";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for paths
+        assert!(output.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_http_route() {
+        let input = "The route is `GET /inventory`";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[33m")); // yellow for routes
+        assert!(output.contains("GET /inventory"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_multiple_backticks() {
+        let input = "`foo` and `bar` are different";
+        let output = colorize_backticks(input);
+        assert!(output.contains("foo"));
+        assert!(output.contains("bar"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_unbalanced() {
+        let input = "unbalanced `backtick";
+        let output = colorize_backticks(input);
+        assert_eq!(output, "unbalanced `backtick");
+    }
+
+    #[test]
+    fn test_colorize_backticks_empty() {
+        let input = "``";
+        let output = colorize_backticks(input);
+        // Empty backticks get colored (cyan) with escape sequences
+        assert!(output.contains("\x1b[36m"));
+        assert!(output.contains('`'));
+    }
+
+    #[test]
+    fn test_render_narrative_plain() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input = "Yes, the code uses `auth_service` for authentication.\n\nNext step: Review permissions.";
+        let output = render_narrative(OutputFormat::Plain, input);
+        assert!(!output.contains("\x1b[")); // No ANSI codes
+        assert!(output.contains("auth_service"));
+    }
+
+    #[test]
+    fn test_render_narrative_ansi_tip_lines() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input = "Yes, this is correct.\nFollow-up query: Check the logs.\nDone.";
+        let output = render_narrative(OutputFormat::Ansi, input);
+        // Follow-up query line should be dimmed
+        assert!(output.contains("\x1b[2m")); // dim
+        assert!(output.contains("Follow-up query:"));
+    }
+
+    #[test]
+    fn test_render_narrative_ansi_evidence_note() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input = "Yes.\nEvidence note: Found in config.\nNext.";
+        let output = render_narrative(OutputFormat::Ansi, input);
+        assert!(output.contains("\x1b[2m")); // dim
+        assert!(output.contains("Evidence note:"));
+    }
+
+    #[test]
+    fn test_render_narrative_no_color_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::set("NO_COLOR", std::ffi::OsStr::new("1"));
+        let input = "Test content";
+        let output = render_narrative(OutputFormat::Ansi, input);
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_render_narrative_trims_content() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input = "  \n  Yes, this works.\n  \n  ";
+        let output = render_narrative(OutputFormat::Plain, input);
+        assert!(!output.starts_with("\n"));
+        assert!(!output.ends_with("\n"));
+    }
+
+    #[test]
+    fn test_render_narrative_next_step_tip() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input = "Yes.\nNext step: Run the tests.\nDone.";
+        let output = render_narrative(OutputFormat::Ansi, input);
+        assert!(output.contains("\x1b[2m")); // dim
+        assert!(output.contains("Next step:"));
+    }
+
+    #[test]
+    fn test_render_narrative_follow_up_query_variants() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _g = EnvVarGuard::remove("NO_COLOR");
+        let input1 = "Answer.\nfollow up query: Check docs.";
+        let input2 = "Answer.\nfollow-up query: Check docs.";
+        let output1 = render_narrative(OutputFormat::Ansi, input1);
+        let output2 = render_narrative(OutputFormat::Ansi, input2);
+        assert!(output1.contains("\x1b[2m"));
+        assert!(output2.contains("\x1b[2m"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_js_extension() {
+        let input = "Check `app.js` for logic";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for .js files
+        assert!(output.contains("app.js"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_python_file() {
+        let input = "The file is `main.py`";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for .py files
+        assert!(output.contains("main.py"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_go_file() {
+        let input = "See `main.go` for the entry point";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for .go files
+        assert!(output.contains("main.go"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_json_file() {
+        let input = "Config is in `config.json`";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for .json files
+        assert!(output.contains("config.json"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_yaml_file() {
+        let input = "Settings in `settings.yaml`";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[32m")); // green for .yaml files
+        assert!(output.contains("settings.yaml"));
+    }
+
+    #[test]
+    fn test_colorize_backticks_post_route() {
+        let input = "Use `POST /users` endpoint";
+        let output = colorize_backticks(input);
+        assert!(output.contains("\x1b[33m")); // yellow for routes
+        assert!(output.contains("POST /users"));
+    }
 }

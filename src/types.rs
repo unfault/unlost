@@ -2,6 +2,31 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
+pub(crate) struct UsageMeta {
+    pub(crate) provider_id: Option<String>,
+    pub(crate) model_id: Option<String>,
+    pub(crate) cost: Option<f64>,
+    pub(crate) tokens_input: Option<i64>,
+    pub(crate) tokens_output: Option<i64>,
+    pub(crate) tokens_reasoning: Option<i64>,
+    pub(crate) tokens_cache_read: Option<i64>,
+    pub(crate) tokens_cache_write: Option<i64>,
+}
+
+impl UsageMeta {
+    pub(crate) fn tokens_total(&self) -> Option<i64> {
+        let sum = self.tokens_input.unwrap_or(0)
+            + self.tokens_output.unwrap_or(0)
+            + self.tokens_reasoning.unwrap_or(0);
+        if sum > 0 {
+            Some(sum)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ResponseMeta {
     pub(crate) source: String,
     pub(crate) upstream_host: String,
@@ -9,6 +34,8 @@ pub(crate) struct ResponseMeta {
     pub(crate) http_status: u16,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     pub(crate) agent_session_id: Option<String>,
+    /// Best-effort usage metrics (tokens/cost). Not always present.
+    pub(crate) usage: Option<UsageMeta>,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
@@ -123,6 +150,7 @@ mod tests {
             request_path: "/api/test".to_string(),
             http_status: 200,
             agent_session_id: None,
+            usage: None,
         };
 
         assert_eq!(meta.source, "test_source");
@@ -149,6 +177,7 @@ mod tests {
             request_path: "/test".to_string(),
             http_status: 200,
             agent_session_id: Some("test_session".to_string()),
+            usage: None,
         };
 
         let hit = CapsuleHit {

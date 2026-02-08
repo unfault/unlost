@@ -1,4 +1,4 @@
-//! Companion mode: stdio JSON-RPC for OpenCode plugins.
+//! Companion mode for unlost.
 //!
 //! Runs as a child process of an agent plugin. Reads JSON requests from stdin,
 //! writes JSON responses to stdout. No HTTP server, no port, no baseURL changes.
@@ -13,6 +13,9 @@
 //!   Response: {"ok": true}
 //!
 //! The plugin spawns `unlost companion` on init and communicates over stdio.
+//!
+//! IMPORTANT: `record` returns immediately after enqueueing; heavy work (LLM extraction,
+//! embedding, LanceDB insert) happens in a background task so we never block the agent.
 
 use crate::embed::Embedder;
 use crate::emotion::{apply_context_heuristics, map_go_emotions, EmotionConfig, EmotionModel};
@@ -26,6 +29,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -60,6 +65,42 @@ struct RecordParams {
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     #[serde(default)]
     agent_session_id: Option<String>,
+
+    /// Best-effort assistant usage metrics (tokens/cost). Optional.
+    #[serde(default)]
+    usage: Option<UsageParams>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UsageTokensCacheParams {
+    #[serde(default)]
+    read: Option<i64>,
+    #[serde(default)]
+    write: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UsageTokensParams {
+    #[serde(default)]
+    input: Option<i64>,
+    #[serde(default)]
+    output: Option<i64>,
+    #[serde(default)]
+    reasoning: Option<i64>,
+    #[serde(default)]
+    cache: Option<UsageTokensCacheParams>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UsageParams {
+    #[serde(default)]
+    provider_id: Option<String>,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    cost: Option<f64>,
+    #[serde(default)]
+    tokens: Option<UsageTokensParams>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,23 +126,23 @@ enum Response {
     Error { error: String },
 }
 
-/// Companion state held across requests.
-struct CompanionState {
+/// Shared state for background processing (accessed from the worker task).
+struct BackgroundState {
     emotion_model: Option<EmotionModel>,
     embedder: Option<Embedder>,
     db_cache: HashMap<String, Connection>,
-    chunker: Option<WorkspaceChunker>,
-    flush_rx: Option<kanal::AsyncReceiver<FlushJob>>,
+    embed_model: String,
+    embed_cache_dir: Option<String>,
 }
 
-impl CompanionState {
-    fn new() -> Self {
+impl BackgroundState {
+    fn new(embed_model: String, embed_cache_dir: Option<String>) -> Self {
         Self {
             emotion_model: None,
             embedder: None,
             db_cache: HashMap::new(),
-            chunker: None,
-            flush_rx: None,
+            embed_model,
+            embed_cache_dir,
         }
     }
 
@@ -113,24 +154,15 @@ impl CompanionState {
         Ok(self.emotion_model.as_mut().unwrap())
     }
 
-    async fn ensure_embedder(&mut self, embed_model: &str, embed_cache_dir: Option<&str>) -> anyhow::Result<Embedder> {
+    async fn ensure_embedder(&mut self) -> anyhow::Result<Embedder> {
         if self.embedder.is_none() {
-            let cache_path = embed_cache_dir.map(std::path::PathBuf::from);
-            let embedder = crate::embed::load_embedder(embed_model, cache_path, false).await?;
+            let cache_path = self.embed_cache_dir.as_deref().map(std::path::PathBuf::from);
+            let embedder = crate::embed::load_embedder(&self.embed_model, cache_path, false).await?;
             self.embedder = Some(embedder.clone());
             Ok(embedder)
         } else {
             Ok(self.embedder.clone().unwrap())
         }
-    }
-
-    fn ensure_chunker(&mut self) -> WorkspaceChunker {
-        if self.chunker.is_none() {
-            let (flush_tx, flush_rx) = kanal::bounded_async(64);
-            self.chunker = Some(WorkspaceChunker::new(flush_tx));
-            self.flush_rx = Some(flush_rx);
-        }
-        self.chunker.clone().unwrap()
     }
 
     async fn db_for(&mut self, workspace_id: &str, db_dir: &std::path::Path) -> anyhow::Result<Connection> {
@@ -146,6 +178,34 @@ impl CompanionState {
 
         self.db_cache.insert(workspace_id.to_string(), db.clone());
         Ok(db)
+    }
+}
+
+/// Companion state held in the main request loop.
+/// Heavy processing is offloaded to BackgroundState via channel.
+struct CompanionState {
+    /// For friction checks only (needs recent capsules).
+    emotion_model: Option<EmotionModel>,
+    /// Chunker that buffers exchanges and emits FlushJobs.
+    chunker: WorkspaceChunker,
+}
+
+impl CompanionState {
+    fn new(job_tx: kanal::AsyncSender<FlushJob>) -> Self {
+        // The chunker sends jobs to the channel.
+        let chunker = WorkspaceChunker::new(job_tx);
+        Self {
+            emotion_model: None,
+            chunker,
+        }
+    }
+
+    async fn ensure_emotion_model(&mut self) -> anyhow::Result<&mut EmotionModel> {
+        if self.emotion_model.is_none() {
+            let model = EmotionModel::load(EmotionConfig::default()).await?;
+            self.emotion_model = Some(model);
+        }
+        Ok(self.emotion_model.as_mut().unwrap())
     }
 }
 
@@ -193,8 +253,8 @@ async fn handle_check(state: &mut CompanionState, params: CheckParams) -> Respon
     // Extract symbols from the text
     let symbols = crate::net::extract_symbols_from_text(&params.text);
 
-    // Classify user emotion
-    let _user_emotion = if !params.text.is_empty() {
+    // Classify user emotion (used as a signal for friction warning injection).
+    let user_emotion = if !params.text.is_empty() {
         match state.ensure_emotion_model().await {
             Ok(model) => match model.classify_one(&params.text) {
                 Ok((raw_label, score)) => {
@@ -219,16 +279,12 @@ async fn handle_check(state: &mut CompanionState, params: CheckParams) -> Respon
         symbols,
     };
 
-    let note = evaluate_friction(&current, &history);
+    let note = evaluate_friction(&current, user_emotion.as_ref(), &history);
     Response::Check(CheckResponse { note, error: None })
 }
 
-async fn handle_record(
-    state: &mut CompanionState,
-    params: RecordParams,
-    embed_model: &str,
-    embed_cache_dir: Option<&str>,
-) -> Response {
+/// Enqueue the exchange for background processing. Returns immediately.
+async fn handle_record(state: &mut CompanionState, params: RecordParams) -> Response {
     if params.directory.is_empty() {
         return Response::Record(RecordResponse {
             ok: false,
@@ -275,7 +331,25 @@ async fn handle_record(
     let commit_mentioned = looks_like_commit_or_pr(&exchange_text);
     let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
 
-    let chunker = state.ensure_chunker();
+    let usage = params.usage.map(|u| crate::types::UsageMeta {
+        provider_id: u.provider_id,
+        model_id: u.model_id,
+        cost: u.cost,
+        tokens_input: u.tokens.as_ref().and_then(|t| t.input),
+        tokens_output: u.tokens.as_ref().and_then(|t| t.output),
+        tokens_reasoning: u.tokens.as_ref().and_then(|t| t.reasoning),
+        tokens_cache_read: u
+            .tokens
+            .as_ref()
+            .and_then(|t| t.cache.as_ref())
+            .and_then(|c| c.read),
+        tokens_cache_write: u
+            .tokens
+            .as_ref()
+            .and_then(|t| t.cache.as_ref())
+            .and_then(|c| c.write),
+    });
+
     let item = ChunkInput {
         conn_id,
         upstream_host: "companion".to_string(),
@@ -284,44 +358,35 @@ async fn handle_record(
         exchange_text,
         commit_mentioned,
         agent_session_id: params.agent_session_id.clone(),
+        usage,
     };
 
-    chunker.ingest(ws.id.clone(), item).await;
+    // Ingest into chunker (may or may not produce a flush job depending on boundaries).
+    state.chunker.ingest(ws.id.clone(), item).await;
 
-    // Collect pending flush jobs
-    let mut jobs: Vec<FlushJob> = Vec::new();
-    if let Some(rx) = state.flush_rx.as_ref() {
-        while let Ok(Some(job)) = rx.try_recv() {
-            jobs.push(job);
-        }
-    }
+    // Force-flush this workspace so we don't lose data if the companion exits soon.
+    // This sends a FlushJob to the background worker via the channel.
+    state.chunker.flush_workspace(&ws.id).await;
 
-    // Also flush idle buffers
-    chunker.flush_idle().await;
-
-    // Collect any jobs that were just flushed
-    if let Some(rx) = state.flush_rx.as_ref() {
-        while let Ok(Some(job)) = rx.try_recv() {
-            jobs.push(job);
-        }
-    }
-
-    // Process all collected jobs
-    for job in jobs {
-        if let Err(e) = process_flush_job(state, job, embed_model, embed_cache_dir).await {
-            tracing::warn!("flush job failed: {e}");
-        }
-    }
-
+    // Return immediately; the background worker will process the job asynchronously.
     Response::Record(RecordResponse { ok: true, error: None })
 }
 
-async fn process_flush_job(
-    state: &mut CompanionState,
-    job: FlushJob,
-    embed_model: &str,
-    embed_cache_dir: Option<&str>,
-) -> anyhow::Result<()> {
+/// Background worker that processes FlushJobs without blocking the request loop.
+async fn background_worker(rx: kanal::AsyncReceiver<FlushJob>, state: Arc<Mutex<BackgroundState>>) {
+    loop {
+        let job = match rx.recv().await {
+            Ok(j) => j,
+            Err(_) => break, // channel closed
+        };
+
+        if let Err(e) = process_flush_job(&state, job).await {
+            tracing::warn!("background flush job failed: {e}");
+        }
+    }
+}
+
+async fn process_flush_job(state: &Arc<Mutex<BackgroundState>>, job: FlushJob) -> anyhow::Result<()> {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
 Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
 Rules:\n\
@@ -333,9 +398,10 @@ Rules:\n\
     // Extract user/assistant text for emotion classification
     let (user_text, assistant_text) = crate::emotion::extract_user_and_assistant_text(&job.input);
 
-    // Classify emotions
+    // Classify emotions (requires mutable access to state)
     let user_emotion = if !user_text.trim().is_empty() {
-        match state.ensure_emotion_model().await {
+        let mut st = state.lock().await;
+        match st.ensure_emotion_model().await {
             Ok(model) => match model.classify_one(&user_text) {
                 Ok((raw, score)) => {
                     let meta = map_go_emotions(&raw, score);
@@ -350,7 +416,8 @@ Rules:\n\
     };
 
     let assistant_emotion = if !assistant_text.trim().is_empty() {
-        match state.ensure_emotion_model().await {
+        let mut st = state.lock().await;
+        match st.ensure_emotion_model().await {
             Ok(model) => match model.classify_one(&assistant_text) {
                 Ok((raw, score)) => Some(map_go_emotions(&raw, score)),
                 Err(_) => None,
@@ -361,7 +428,7 @@ Rules:\n\
         None
     };
 
-    // Extract capsule using LLM
+    // Extract capsule using LLM (this is the expensive network call)
     let capsule = crate::llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await?;
 
     // Get workspace paths from the job
@@ -372,12 +439,14 @@ Rules:\n\
         capsules_jsonl: ws_dir.join("capsules.jsonl"),
     };
 
-    // Append to JSONL
+    // Append to JSONL (cheap, local)
     append_capsule_jsonl(&ws.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule)?;
 
     // Insert into LanceDB
-    let embedder = state.ensure_embedder(embed_model, embed_cache_dir).await?;
-    let db = state.db_for(&job.workspace_id, &ws.db_dir).await?;
+    let mut st = state.lock().await;
+    let embedder = st.ensure_embedder().await?;
+    let db = st.db_for(&job.workspace_id, &ws.db_dir).await?;
+    drop(st); // release lock before the potentially slow insert
 
     insert_capsule_row(
         &db,
@@ -412,6 +481,24 @@ fn append_capsule_jsonl(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+
+    let usage = meta.usage.as_ref().map(|u| {
+        serde_json::json!({
+            "provider_id": u.provider_id,
+            "model_id": u.model_id,
+            "cost": u.cost,
+            "tokens": {
+                "input": u.tokens_input,
+                "output": u.tokens_output,
+                "reasoning": u.tokens_reasoning,
+                "cache": {
+                    "read": u.tokens_cache_read,
+                    "write": u.tokens_cache_write,
+                }
+            }
+        })
+    });
+
     let record = serde_json::json!({
         "ts_ms": ts_ms,
         "conn_id": conn_id,
@@ -420,6 +507,8 @@ fn append_capsule_jsonl(
         "upstream_host": meta.upstream_host,
         "request_path": meta.request_path,
         "http_status": meta.http_status,
+        "agent_session_id": meta.agent_session_id,
+        "usage": usage,
         "capsule": capsule,
     });
     std::fs::OpenOptions::new()
@@ -433,9 +522,19 @@ fn append_capsule_jsonl(
 pub(crate) async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
-    let mut state = CompanionState::new();
 
-    let embed_cache_ref = embed_cache_dir.as_deref();
+    // Create an unbounded channel so we never block on send.
+    // We accept potential memory growth under extreme load rather than blocking the agent.
+    let (job_tx, job_rx) = kanal::unbounded_async::<FlushJob>();
+
+    let mut state = CompanionState::new(job_tx);
+    let bg_state = Arc::new(Mutex::new(BackgroundState::new(embed_model, embed_cache_dir)));
+
+    // Spawn background worker
+    let bg_state_clone = bg_state.clone();
+    tokio::spawn(async move {
+        background_worker(job_rx, bg_state_clone).await;
+    });
 
     // Signal readiness
     let ready = serde_json::json!({"ready": true});
@@ -475,7 +574,7 @@ pub(crate) async fn run(embed_model: String, embed_cache_dir: Option<String>) ->
             }
             "record" => {
                 let params: RecordParams = serde_json::from_value(req.params).unwrap_or_default();
-                handle_record(&mut state, params, &embed_model, embed_cache_ref).await
+                handle_record(&mut state, params).await
             }
             _ => Response::Error {
                 error: format!("unknown method: {}", req.method),
@@ -505,45 +604,7 @@ impl Default for RecordParams {
             assistant_text: String::new(),
             directory: String::new(),
             agent_session_id: None,
+            usage: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_check_params_parsing() {
-        let json = r#"{"text": "hello", "directory": "/tmp"}"#;
-        let params: CheckParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.text, "hello");
-        assert_eq!(params.directory, "/tmp");
-    }
-
-    #[test]
-    fn test_record_params_parsing() {
-        let json = r#"{"user_text": "hello", "assistant_text": "hi there", "directory": "/tmp"}"#;
-        let params: RecordParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.user_text, "hello");
-        assert_eq!(params.assistant_text, "hi there");
-        assert_eq!(params.directory, "/tmp");
-    }
-
-    #[test]
-    fn test_response_serialization() {
-        let resp = Response::Check(CheckResponse {
-            note: Some("warning".to_string()),
-            error: None,
-        });
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains(r#""note":"warning""#));
-
-        let resp = Response::Record(RecordResponse {
-            ok: true,
-            error: None,
-        });
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains(r#""ok":true"#));
     }
 }

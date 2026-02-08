@@ -143,6 +143,11 @@ pub(crate) async fn run(
     if let Some(pb) = spinner.as_ref() {
         pb.finish_and_clear();
     }
-    println!("{}\n", crate::narrative::render_narrative(output, &narrative));
+    let mut out = crate::narrative::render_narrative(output, &narrative);
+    let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+    if wrap {
+        out = crate::util::wrap_plain_text(&out, 80);
+    }
+    println!("{}\n", out);
     Ok(())
 }

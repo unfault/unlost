@@ -34,3 +34,25 @@ Restart OpenCode after changes.
 
 This initial version is intentionally dependency-free and runs locally.
 Future versions can optionally forward events to a local unlost companion for richer analysis.
+
+## Companion Integration
+
+When using the companion (`unlost companion`), the plugin communicates via stdio JSON-RPC:
+
+```
+check  → {"method": "check", "params": {"text": "...", "directory": "..."}}
+       ← {"note": "warning to inject"} or {"note": null}
+
+record → {"method": "record", "params": {"user_text": "...", "assistant_text": "...", "directory": "..."}}
+       ← {"ok": true}
+
+record (optional usage) → {"method": "record", "params": {"user_text": "...", "assistant_text": "...", "directory": "...", "usage": {"provider_id": "...", "model_id": "...", "cost": 0.0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
+                     ← {"ok": true}
+```
+
+**Performance guarantee**: The `record` call returns immediately (~0ms). All heavy processing
+(LLM extraction, embedding, LanceDB insert) happens asynchronously in a background task.
+This ensures the agent is never blocked waiting for unlost.
+
+**Trade-off**: Queries have eventual consistency—a capsule may not appear in search results
+for a few seconds after the `record` call returns.

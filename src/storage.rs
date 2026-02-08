@@ -3,6 +3,7 @@ use arrow_array::{
     Array,
     FixedSizeListArray,
     Float32Array,
+    Float64Array,
     Int32Array,
     Int64Array,
     ListArray,
@@ -33,6 +34,16 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("conn_id", DataType::Int64, false),
         Field::new("exchange_seq", DataType::Int64, false),
         Field::new("agent_session_id", DataType::Utf8, true),
+
+        // Best-effort usage fields (mostly from agent plugins)
+        Field::new("agent_provider_id", DataType::Utf8, true),
+        Field::new("agent_model_id", DataType::Utf8, true),
+        Field::new("agent_cost", DataType::Float64, true),
+        Field::new("tokens_input", DataType::Int64, true),
+        Field::new("tokens_output", DataType::Int64, true),
+        Field::new("tokens_reasoning", DataType::Int64, true),
+        Field::new("tokens_cache_read", DataType::Int64, true),
+        Field::new("tokens_cache_write", DataType::Int64, true),
         Field::new("user_emotion", DataType::Utf8, true),
         Field::new("user_emotion_conf", DataType::Float32, true),
         Field::new("user_valence", DataType::Float32, true),
@@ -65,7 +76,50 @@ fn capsules_schema() -> Arc<Schema> {
 
 pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lancedb::Table> {
     match db.open_table(CAPSULES_TABLE).execute().await {
-        Ok(t) => Ok(t),
+        Ok(t) => {
+            // Best-effort schema evolution: older installs may not have usage columns.
+            if let Ok(schema) = t.schema().await {
+                let existing: std::collections::HashSet<&str> = schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().as_str())
+                    .collect();
+                let mut exprs: Vec<(String, String)> = Vec::new();
+
+                let add_str = |name: &str, exprs: &mut Vec<(String, String)>| {
+                    if !existing.contains(name) {
+                        exprs.push((name.to_string(), "CAST(NULL AS VARCHAR)".to_string()));
+                    }
+                };
+                let add_i64 = |name: &str, exprs: &mut Vec<(String, String)>| {
+                    if !existing.contains(name) {
+                        exprs.push((name.to_string(), "CAST(NULL AS BIGINT)".to_string()));
+                    }
+                };
+                let add_f64 = |name: &str, exprs: &mut Vec<(String, String)>| {
+                    if !existing.contains(name) {
+                        exprs.push((name.to_string(), "CAST(NULL AS DOUBLE)".to_string()));
+                    }
+                };
+
+                add_str("agent_provider_id", &mut exprs);
+                add_str("agent_model_id", &mut exprs);
+                add_f64("agent_cost", &mut exprs);
+                add_i64("tokens_input", &mut exprs);
+                add_i64("tokens_output", &mut exprs);
+                add_i64("tokens_reasoning", &mut exprs);
+                add_i64("tokens_cache_read", &mut exprs);
+                add_i64("tokens_cache_write", &mut exprs);
+
+                if !exprs.is_empty() {
+                    let _ = t
+                        .add_columns(lancedb::table::NewColumnTransform::SqlExpressions(exprs), None)
+                        .await;
+                }
+            }
+
+            Ok(t)
+        }
         Err(_) => {
             tracing::info!(table = CAPSULES_TABLE, "creating lancedb table");
             let schema = capsules_schema();
@@ -79,6 +133,15 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let conn_id = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
             let exchange_seq = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
             let agent_session_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+
+            let agent_provider_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let agent_model_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let agent_cost = Arc::new(Float64Array::from_iter(std::iter::empty::<Option<f64>>()));
+            let tokens_input = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_output = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_reasoning = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_cache_read = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_cache_write = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
 
             let user_emotion = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
             let user_emotion_conf = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
@@ -117,6 +180,16 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     conn_id,
                     exchange_seq,
                     agent_session_id,
+
+                    agent_provider_id,
+                    agent_model_id,
+                    agent_cost,
+                    tokens_input,
+                    tokens_output,
+                    tokens_reasoning,
+                    tokens_cache_read,
+                    tokens_cache_write,
+
                     user_emotion,
                     user_emotion_conf,
                     user_valence,
@@ -172,10 +245,7 @@ pub(crate) async fn query_capsules_lancedb(
 
     let table = match db.open_table(CAPSULES_TABLE).execute().await {
         Ok(t) => t,
-        Err(_) => {
-            println!("No LanceDB table found for workspace {}.", ws.id);
-            return Ok(vec![]);
-        }
+        Err(_) => anyhow::bail!("capsules table not found (workspace_id={})", ws.id),
     };
 
     let q_embedding = crate::embed::embed_text(&embedder, query_text).await?;
@@ -286,6 +356,21 @@ pub(crate) async fn query_capsules_lancedb(
         let request_path = col_str("request_path");
         let agent_session_id_col = col_str("agent_session_id");
 
+        let agent_provider_id_col = col_str("agent_provider_id");
+        let agent_model_id_col = col_str("agent_model_id");
+        let agent_cost_col = idx("agent_cost")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
+        let tokens_input_col = idx("tokens_input")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_output_col = idx("tokens_output")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_reasoning_col = idx("tokens_reasoning")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_read_col = idx("tokens_cache_read")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_write_col = idx("tokens_cache_write")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+
         let user_emotion_label = col_str("user_emotion");
         let user_emotion_conf = col_f32("user_emotion_conf");
         let user_valence = col_f32("user_valence");
@@ -338,6 +423,44 @@ pub(crate) async fn query_capsules_lancedb(
                 .unwrap_or("");
             let agent_session = agent_session_id_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+
+            let agent_provider_id = agent_provider_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_model_id = agent_model_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_cost = agent_cost_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_input = tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_output = tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_reasoning =
+                tokens_reasoning_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_read =
+                tokens_cache_read_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_write =
+                tokens_cache_write_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+
+            let usage = if agent_provider_id.is_some()
+                || agent_model_id.is_some()
+                || agent_cost.is_some()
+                || tokens_input.is_some()
+                || tokens_output.is_some()
+                || tokens_reasoning.is_some()
+                || tokens_cache_read.is_some()
+                || tokens_cache_write.is_some()
+            {
+                Some(crate::types::UsageMeta {
+                    provider_id: agent_provider_id,
+                    model_id: agent_model_id,
+                    cost: agent_cost,
+                    tokens_input,
+                    tokens_output,
+                    tokens_reasoning,
+                    tokens_cache_read,
+                    tokens_cache_write,
+                })
+            } else {
+                None
+            };
+
             let i_text = intent
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
@@ -408,6 +531,7 @@ pub(crate) async fn query_capsules_lancedb(
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
                     agent_session_id: agent_session,
+                    usage,
                 },
             });
         }
@@ -536,6 +660,21 @@ pub(crate) async fn scan_capsules_lancedb(
         let request_path = col_str("request_path");
         let agent_session_id_col = col_str("agent_session_id");
 
+        let agent_provider_id_col = col_str("agent_provider_id");
+        let agent_model_id_col = col_str("agent_model_id");
+        let agent_cost_col = idx("agent_cost")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
+        let tokens_input_col = idx("tokens_input")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_output_col = idx("tokens_output")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_reasoning_col = idx("tokens_reasoning")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_read_col = idx("tokens_cache_read")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_write_col = idx("tokens_cache_write")
+            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+
         let user_emotion_label = col_str("user_emotion");
         let user_emotion_conf = col_f32("user_emotion_conf");
         let user_valence = col_f32("user_valence");
@@ -581,6 +720,43 @@ pub(crate) async fn scan_capsules_lancedb(
                 .unwrap_or_default();
             let agent_session = agent_session_id_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+
+            let agent_provider_id = agent_provider_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_model_id = agent_model_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_cost = agent_cost_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_input = tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_output = tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_reasoning =
+                tokens_reasoning_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_read =
+                tokens_cache_read_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_write =
+                tokens_cache_write_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+
+            let usage = if agent_provider_id.is_some()
+                || agent_model_id.is_some()
+                || agent_cost.is_some()
+                || tokens_input.is_some()
+                || tokens_output.is_some()
+                || tokens_reasoning.is_some()
+                || tokens_cache_read.is_some()
+                || tokens_cache_write.is_some()
+            {
+                Some(crate::types::UsageMeta {
+                    provider_id: agent_provider_id,
+                    model_id: agent_model_id,
+                    cost: agent_cost,
+                    tokens_input,
+                    tokens_output,
+                    tokens_reasoning,
+                    tokens_cache_read,
+                    tokens_cache_write,
+                })
+            } else {
+                None
+            };
             let i_text = intent
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                 .unwrap_or("");
@@ -651,6 +827,7 @@ pub(crate) async fn scan_capsules_lancedb(
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
                     agent_session_id: agent_session,
+                    usage,
                 },
             });
         }
@@ -717,6 +894,29 @@ pub(crate) async fn insert_capsule_row(
     let exchange_seq_arr = Arc::new(Int64Array::from(vec![exchange_seq as i64]));
     let agent_session_id_arr = Arc::new(StringArray::from(vec![meta.agent_session_id.as_deref()]));
 
+    let agent_provider_id_arr = Arc::new(StringArray::from(vec![
+        meta.usage.as_ref().and_then(|u| u.provider_id.as_deref()),
+    ]));
+    let agent_model_id_arr = Arc::new(StringArray::from(vec![
+        meta.usage.as_ref().and_then(|u| u.model_id.as_deref()),
+    ]));
+    let agent_cost_arr = Arc::new(Float64Array::from(vec![meta.usage.as_ref().and_then(|u| u.cost)]));
+    let tokens_input_arr = Arc::new(Int64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.tokens_input),
+    ]));
+    let tokens_output_arr = Arc::new(Int64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.tokens_output),
+    ]));
+    let tokens_reasoning_arr = Arc::new(Int64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.tokens_reasoning),
+    ]));
+    let tokens_cache_read_arr = Arc::new(Int64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.tokens_cache_read),
+    ]));
+    let tokens_cache_write_arr = Arc::new(Int64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.tokens_cache_write),
+    ]));
+
     let user_emotion_arr = Arc::new(StringArray::from(vec![user_emotion.map(|e| e.label.as_str())]));
     let user_emotion_conf_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.confidence)]));
     let user_valence_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.valence)]));
@@ -765,6 +965,16 @@ pub(crate) async fn insert_capsule_row(
             conn_id_arr,
             exchange_seq_arr,
             agent_session_id_arr,
+
+            agent_provider_id_arr,
+            agent_model_id_arr,
+            agent_cost_arr,
+            tokens_input_arr,
+            tokens_output_arr,
+            tokens_reasoning_arr,
+            tokens_cache_read_arr,
+            tokens_cache_write_arr,
+
             user_emotion_arr,
             user_emotion_conf_arr,
             user_valence_arr,

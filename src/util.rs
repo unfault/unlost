@@ -68,6 +68,105 @@ pub(crate) fn strip_llm_boilerplate(mut s: String) -> String {
     s
 }
 
+pub(crate) fn wrap_plain_text(input: &str, width: usize) -> String {
+    // Plain text wrapping intended for terminal/piping. It preserves list markers
+    // with a hanging indent so wrapped bullets stay readable.
+    if width < 10 {
+        return input.to_string();
+    }
+
+    fn split_list_prefix(s: &str) -> Option<(&str, &str)> {
+        // Returns (marker, rest) for markdown-ish list lines.
+        // Assumes `s` is left-trimmed.
+        if let Some(rest) = s.strip_prefix("- ") {
+            return Some(("- ", rest));
+        }
+        if let Some(rest) = s.strip_prefix("* ") {
+            return Some(("* ", rest));
+        }
+        if let Some(rest) = s.strip_prefix("+ ") {
+            return Some(("+ ", rest));
+        }
+        if let Some(rest) = s.strip_prefix("> ") {
+            return Some(("> ", rest));
+        }
+
+        // Numbered list: 1. foo  /  1) foo
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == 0 {
+            return None;
+        }
+        if i + 1 < bytes.len() && (bytes[i] == b'.' || bytes[i] == b')') && bytes[i + 1] == b' ' {
+            let (marker, rest) = s.split_at(i + 2);
+            return Some((marker, rest));
+        }
+        None
+    }
+
+    let mut out = String::with_capacity(input.len() + input.len() / 10);
+    let mut prev_blank = false;
+    for (li, line) in input.lines().enumerate() {
+        if li > 0 {
+            out.push('\n');
+        }
+
+        if line.trim().is_empty() {
+            // Keep at most one consecutive blank line.
+            if prev_blank {
+                continue;
+            }
+            prev_blank = true;
+            continue;
+        }
+        prev_blank = false;
+
+        if line.len() <= width {
+            out.push_str(line.trim_end());
+            continue;
+        }
+
+        let indent_len = line.chars().take_while(|c| c.is_ascii_whitespace()).count();
+        let indent = " ".repeat(indent_len);
+        let trimmed = line.trim_start();
+        let (marker, rest) = split_list_prefix(trimmed).unwrap_or(("", trimmed));
+        let hanging_indent = " ".repeat(indent_len + marker.len());
+
+        let mut cur = String::new();
+        cur.push_str(&indent);
+        cur.push_str(marker);
+        let mut cur_len = indent_len + marker.len();
+        let base_len = cur_len;
+
+        for word in rest.split_whitespace() {
+            let wlen = word.len();
+            let needs_space = cur_len > base_len;
+            let add_len = wlen + if needs_space { 1 } else { 0 };
+
+            if cur_len + add_len > width && cur_len > base_len {
+                out.push_str(cur.trim_end());
+                out.push('\n');
+                cur.clear();
+                cur.push_str(&hanging_indent);
+                cur_len = hanging_indent.len();
+            }
+
+            if cur_len > base_len {
+                cur.push(' ');
+                cur_len += 1;
+            }
+            cur.push_str(word);
+            cur_len += wlen;
+        }
+
+        out.push_str(cur.trim_end());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

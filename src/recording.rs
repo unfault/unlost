@@ -23,6 +23,24 @@ fn append_capsule_jsonl(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+
+    let usage = meta.usage.as_ref().map(|u| {
+        serde_json::json!({
+            "provider_id": u.provider_id,
+            "model_id": u.model_id,
+            "cost": u.cost,
+            "tokens": {
+                "input": u.tokens_input,
+                "output": u.tokens_output,
+                "reasoning": u.tokens_reasoning,
+                "cache": {
+                    "read": u.tokens_cache_read,
+                    "write": u.tokens_cache_write,
+                }
+            }
+        })
+    });
+
     let record = serde_json::json!({
         "ts_ms": ts_ms,
         "conn_id": conn_id,
@@ -31,6 +49,8 @@ fn append_capsule_jsonl(
         "upstream_host": meta.upstream_host,
         "request_path": meta.request_path,
         "http_status": meta.http_status,
+        "agent_session_id": meta.agent_session_id,
+        "usage": usage,
         "capsule": capsule,
     });
     std::fs::OpenOptions::new()
@@ -90,6 +110,8 @@ pub(crate) struct ChunkInput {
     pub(crate) commit_mentioned: bool,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     pub(crate) agent_session_id: Option<String>,
+    /// Best-effort usage metrics (tokens/cost). Not always present.
+    pub(crate) usage: Option<crate::types::UsageMeta>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +132,7 @@ struct WorkspaceBuffer {
     last_request_path: String,
     last_http_status: u16,
     last_agent_session_id: Option<String>,
+    last_usage: Option<crate::types::UsageMeta>,
     total_chars: usize,
     turns: Vec<String>,
     saw_commit: bool,
@@ -125,6 +148,7 @@ impl WorkspaceBuffer {
             last_request_path: String::new(),
             last_http_status: 0,
             last_agent_session_id: None,
+            last_usage: None,
             total_chars: 0,
             turns: Vec::new(),
             saw_commit: false,
@@ -172,6 +196,7 @@ impl WorkspaceChunker {
             buf.last_request_path = item.request_path;
             buf.last_http_status = item.http_status;
             buf.last_agent_session_id = item.agent_session_id;
+            buf.last_usage = item.usage;
             buf.saw_commit |= item.commit_mentioned;
 
             buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
@@ -216,6 +241,26 @@ impl WorkspaceChunker {
             let _ = self.flush_tx.send(j).await;
         }
     }
+
+    /// Force-flush the buffer for a single workspace, regardless of idle time.
+    pub(crate) async fn flush_workspace(&self, workspace_id: &str) {
+        let now = Instant::now();
+        let mut job: Option<FlushJob> = None;
+
+        {
+            let mut map = self.buffers.lock().await;
+            if let Some(buf) = map.get_mut(workspace_id) {
+                if !buf.turns.is_empty() {
+                    job = Some(build_flush_job(workspace_id.to_string(), buf));
+                    *buf = WorkspaceBuffer::new(now);
+                }
+            }
+        }
+
+        if let Some(j) = job {
+            let _ = self.flush_tx.send(j).await;
+        }
+    }
 }
 
 fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob {
@@ -239,6 +284,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         request_path: buf.last_request_path.clone(),
         http_status: buf.last_http_status,
         agent_session_id: buf.last_agent_session_id.clone(),
+        usage: buf.last_usage.clone(),
     };
 
     FlushJob {
@@ -604,6 +650,7 @@ pub(crate) async fn analysis_worker_multiplex(
             exchange_text: input,
             commit_mentioned,
             agent_session_id: None, // HTTP proxy doesn't have agent session context
+            usage: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -724,6 +771,7 @@ pub(crate) async fn analysis_worker(
             exchange_text: input,
             commit_mentioned,
             agent_session_id: None, // HTTP proxy doesn't have agent session context
+            usage: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }

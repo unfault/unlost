@@ -153,20 +153,52 @@ async fn serve_request(
         if current_symbols.is_empty() {
             req_body_bytes
         } else {
+            // Extract current user text (best-effort) for immediate friction reaction.
+            // This also serves as the "North Star" goal reminder when we hydrate.
+            let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
+                if stripped_pq.contains("/v1/messages") {
+                    crate::net::extract_anthropic_user_text(&json)
+                } else {
+                    crate::net::extract_openai_message_text(&json)
+                }
+            });
+
             // Build minimal IntentCapsule for friction check
             let current_intent = crate::IntentCapsule {
                 category: String::new(),
-                intent: String::new(),
+                intent: current_user_text.clone().unwrap_or_default(),
                 decision: String::new(),
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
             };
 
+            let current_user_emotion = if let Some(text) = current_user_text {
+                let emotion_handle = state.emotion.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut model = emotion_handle.lock().ok()?;
+                    if text.trim().is_empty() {
+                        return None;
+                    }
+                    let (raw, score) = model.classify_one(&text).ok()?;
+                    let meta = crate::emotion::map_go_emotions(&raw, score);
+                    Some(crate::emotion::apply_context_heuristics(&text, meta))
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+
             // Query recent history and check for friction
             match state.get_recent_capsules(&workspace_id, 5).await {
                 Ok(history) => {
-                    if let Some(warning) = crate::governor::evaluate_friction(&current_intent, &history) {
+                    if let Some(warning) = crate::governor::evaluate_friction(
+                        &current_intent,
+                        current_user_emotion.as_ref(),
+                        &history,
+                    ) {
                         info!(conn_id, %workspace_id, "friction detected, injecting warning");
                         crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
                             .unwrap_or(req_body_bytes)
@@ -266,6 +298,7 @@ async fn serve_request(
 async fn proxy_request(
     client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
     ws: crate::WorkspacePaths,
+    emotion: Arc<std::sync::Mutex<crate::emotion::EmotionModel>>,
     upstream_host: String,
     upstream_port: u16,
     conn_id: u64,
@@ -318,20 +351,50 @@ async fn proxy_request(
         if current_symbols.is_empty() {
             req_body_bytes
         } else {
+            let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
+                if request_path.contains("/v1/messages") {
+                    crate::net::extract_anthropic_user_text(&json)
+                } else {
+                    crate::net::extract_openai_message_text(&json)
+                }
+            });
+
             // Build minimal IntentCapsule for friction check
             let current_intent = crate::IntentCapsule {
                 category: String::new(),
-                intent: String::new(),
+                intent: current_user_text.clone().unwrap_or_default(),
                 decision: String::new(),
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
             };
 
+            let current_user_emotion = if let Some(text) = current_user_text {
+                let emotion_handle = emotion.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut model = emotion_handle.lock().ok()?;
+                    if text.trim().is_empty() {
+                        return None;
+                    }
+                    let (raw, score) = model.classify_one(&text).ok()?;
+                    let meta = crate::emotion::map_go_emotions(&raw, score);
+                    Some(crate::emotion::apply_context_heuristics(&text, meta))
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+
             // Query recent history and check for friction
             match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
                 Ok(history) => {
-                    if let Some(warning) = crate::governor::evaluate_friction(&current_intent, &history) {
+                    if let Some(warning) = crate::governor::evaluate_friction(
+                        &current_intent,
+                        current_user_emotion.as_ref(),
+                        &history,
+                    ) {
                         info!(conn_id, workspace_id = %ws.id, "friction detected, injecting warning");
                         crate::net::inject_warning(&req_body_bytes, &warning, &request_path)
                             .unwrap_or(req_body_bytes)
@@ -613,6 +676,7 @@ pub(crate) async fn run_proxy(
         let upstream_host = upstream_host.clone();
         let chunker = chunker.clone();
         let ws = ws.clone();
+        let emotion = emotion.clone();
         tokio::spawn(async move {
             const ANALYSIS_CHAN_CAP: usize = 256;
             let (analysis_tx, analysis_rx) =
@@ -628,6 +692,7 @@ pub(crate) async fn run_proxy(
                 proxy_request(
                     client.clone(),
                     ws.clone(),
+                    emotion.clone(),
                     upstream_host.clone(),
                     upstream_port,
                     conn_id,
