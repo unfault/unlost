@@ -6,146 +6,114 @@
   </picture>
 </h2>
 
-<h4 align="center">Unlost - Local-first code memory</h4>
-
+<h4 align="center">Unlost - Agent orientation that prevents the babysitting tax</h4>
 
 ---
 
-I built this the way I like to build tools: steady, quiet, and useful for the long haul. It lives on your machine, keeps the signal, and tries hard not to keep the noise. Open source is the give-back.
+## Mission
 
-`unlost` records LLM/API exchanges via a local HTTP reverse proxy, extracts small structured "capsules" (intent/decision/rationale/next steps/symbols), and stores them in a local LanceDB with local embeddings.
+Keep your agents oriented.
 
-It does not store full transcripts; only capsule fields and a bit of request metadata.
+You know the drill:
+
+- You ask an agent to rename a function. It renames it, then renames it again. Then again. You finally intervene: "stop renaming, just add a wrapper."
+- An agent spent forty minutes "implementing" a feature. Turns out it only modified the README.
+- You come back after the weekend. The agent made decisions you don't understand. Nobody remembers why.
+- An agent says it finished. It didn't. It created a file that was never committed.
+
+That's the babysitting tax. It adds up fast.
+
+Unlost intercepts before you pay. It detects these failure modes and guides agents back on track:
+
+| Failure Mode | What It Looks Like | What Unlost Does |
+|--------------|-------------------|------------------|
+| **Drift** | Agent thinks the system works one way. The code says otherwise. | Surfaces the contradiction before the agent compounds the error. |
+| **Rediscovery** | You explain the same thing you explained last week. | Reminds the agent of what was already decided. |
+| **Decision Conflict** | Agent starts implementing something that contradicts a project decision. | Flags the conflict and reminds the agent of the constraint. |
+| **Retry Spiral** | Agent tries the same failed approach. Again. And again. | Catches the loop before another hour burns. |
+| **False Progress** | Agent claims done. Verification would fail. | Detects the claim and flags it for review. |
+| **Unbounded Horizon** | Agent wanders into unrelated side-quests. | Nudges back toward the original goal. |
+
+## Use unlost with your favourite agent
+
+### Claude Code
+
+All your Claude Code projects, forever, with zero per-repo config:
+
+```bash
+unlost config agent claudecode --global
+```
+
+That's it. Unlost hooks into every Claude Code session, checks for friction before each prompt, injects guidance when something feels off, and quietly records what actually happened (intent, decision, rationale, next steps) into local capsules you can query anytime.
+
+### OpenCode
+
+All your OpenCode projects (global config):
+
+```bash
+unlost config agent opencode-plugin --global
+```
+
+Or one project at a time:
+
+```bash
+unlost config agent opencode-plugin --path .
+```
+
+Same deal. Unlost spots drift, catches false progress, and builds a local trail of decisions — without storing full transcripts.
+
+## How it works
+
+```
+1. Your agent is about to send a prompt → unlost checks for friction
+2. If something feels off → injects guidance before the agent goes off-track
+3. After each exchange → extract a capsule (what we tried, why, next steps)
+4. Capsules stay local → query anytime: "why did we do X?"
+```
+
+No transcripts. No external storage. Just small, queryable capsules that remember what your agents decided and why.
+
+## Configure your LLM (optional, for better capsules)
+
+Unlost uses a small LLM to extract structured capsules from agent exchanges. By default, it uses whatever LLM your agent is already configured with. You can override this for better results:
+
+```bash
+# Use Claude for extraction
+unlost config llm anthropic --model claude-sonnet-4-5-20250929
+
+# Or OpenAI
+unlost config llm openai --model gpt-4o-mini
+```
+
+**What the LLM is fed:**
+- The raw user → assistant exchange (just the text, not tool outputs)
+- Recent capsule history from the workspace (to detect contradictions)
+
+**What it produces:**
+- A structured capsule with: category, intent, decision, rationale, next_steps, symbols, failure_mode
+
+**Where it runs:**
+- The LLM call goes through your configured provider (Anthropic, OpenAI, etc.)
+- Capsule storage is entirely local — embeddings, the capsules themselves, and query history never leave your machine
+
+## Recall & Query
+
+Your agents built a memory trail. Here's how to query it:
+
+```bash
+# What did we decide here?
+unlost recall src/http_proxy.rs
+
+# Why did we rename the capsules table?
+unlost query "why did we rename the capsules table?"
+
+# Find everything about the proxy routing
+unlost query --symbol proxy_request
+```
 
 ## Install
 
-```bash
-cargo install --path .
-```
-
-## Quickstart
-
-Run the multiplexed proxy:
-
-```bash
-unlost serve --bind 127.0.0.1:3000
-```
-
-Configure an agent/client to use the proxy base URL (example: opencode):
-
-```bash
-unlost configure agent opencode --path . --server http://127.0.0.1:3000
-```
-
-Then use your agent normally; `unlost` will store capsules as requests flow through.
-
-## When To Use unlost
-
-If you’ve ever stared at a codebase after a few days away and thought “I know we made a decision here, but where did we land?”, this is for that moment.
-
-Good fits:
-
-- Long-running refactors where intent changes week to week
-- Multi-agent or multi-person work where decisions drift between threads
-- Onboarding yourself onto a new repo (or coming back after time off)
-- Keeping a lightweight trail of why a PR ended up the way it did
-
-Less useful:
-
-- If you want full chat transcripts (unlost intentionally doesn’t store them)
-- If you need strict compliance logging (this is a developer tool, local-first)
-
-## Architecture (A Calm Walk Through It)
-
-At a high level, the system is a recorder plus a small memory store:
-
-1. Recorder / proxy
-   - `unlost serve` runs a single HTTP server and multiplexes workspaces by path:
-     - `/w/<workspace_id>/<provider>/...`
-   - It forwards requests to the upstream provider (`openai`, `anthropic`, `opencode`) and watches the request/response stream.
-
-2. Chunking
-   - Exchanges are buffered per workspace and flushed into slices.
-   - Flush triggers include: short idle gaps, size bounds, turn count, and “milestone” mentions (commit/PR).
-
-3. Capsule extraction (no transcript storage)
-   - Each flushed slice is summarized into a single capsule:
-     - `category`, `intent`, `decision`, `rationale`, `next_steps[]`, `symbols[]`
-   - The full raw transcript is not stored.
-
-4. Local embeddings + LanceDB
-   - Capsule text is embedded locally (fastembed) and stored in a LanceDB table.
-   - `query` uses nearest-neighbor search over embeddings.
-   - `inspect` and `recall` read capsules back out.
-
-5. Mood metadata (optional, local)
-   - A local ONNX classifier tags a coarse mood for user/assistant turns.
-   - This is stored as metadata alongside capsules and can be used to enrich recall.
-
-## Recall and Query
-
-```bash
-unlost recall
-unlost recall src/main.rs
-
-unlost query "what did we change about chunking?"
-unlost query --symbol scan_capsules_lancedb "where is this used?"
-```
-
-## Examples
-
-Configure an LLM for narratives (query/recall), while keeping capsule extraction local-first:
-
-```bash
-unlost config llm anthropic --model claude-3-5-sonnet-20241022
-```
-
-Start the recorder (single server, many workspaces):
-
-```bash
-unlost serve --bind 127.0.0.1:3000
-```
-
-Ask for a “story so far” after a day away:
-
-```bash
-unlost recall
-unlost recall src/http_proxy.rs
-```
-
-Search for a decision you half-remember:
-
-```bash
-unlost query "why did we rename the capsules table?"
-```
-
-Focus a query on one symbol you care about:
-
-```bash
-unlost query --symbol proxy_request "how does the upstream routing work?"
-```
-
-See raw stored capsules (including mood, when present):
-
-```bash
-unlost inspect --limit 10
-```
-
-## Inspect Stored Capsules
-
-```bash
-unlost inspect --limit 10
-```
-
-## Data Storage
-
-- Workspace data lives under XDG data dirs (default: `~/.local/share/unlost/workspaces/<id>/`).
-- Embedding and emotion model artifacts are cached under `~/.local/share/unlost/models/`.
-
-Useful env vars:
-
-- `UNLOST_EMBED_CACHE_DIR` (fastembed cache override)
-- `UNLOST_EMOTION_CACHE_DIR` (emotion model cache override)
+Download the binary from [releases](https://github.com/unfault/unlost/releases).
 
 ## Dev
 
@@ -153,3 +121,21 @@ Useful env vars:
 cargo test
 cargo build
 ```
+
+## Privacy First
+
+Everything unlost stores stays on your machine:
+
+- **Capsules** — Stored locally in `~/.local/share/unlost/workspaces/`
+- **Embeddings** — Generated locally with fastembed
+- **Query history** — Never leaves your disk
+
+The only network call unlost makes is to the LLM provider you configure for extraction. That LLM sees only the exchange text (no tool outputs), and it produces a capsule that never goes back upstream.
+
+## License
+
+MIT. See [LICENSE](LICENSE) for details.
+
+## Docs
+
+- `agents/README.md` - Agent integrations
