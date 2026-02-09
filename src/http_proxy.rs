@@ -144,25 +144,73 @@ async fn serve_request(
         }
     };
 
+    // --- Interventions: decision conflict + friction ---
+    let req_body_bytes = {
+        // Extract current user text (best-effort).
+        let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
+            if stripped_pq.contains("/v1/messages") {
+                crate::net::extract_anthropic_user_text(&json)
+            } else {
+                crate::net::extract_openai_message_text(&json)
+            }
+        });
+
+        // Decision/constraint intervention ("I told you NOT to")
+        if let Some(text) = current_user_text.as_deref() {
+            if !text.trim().is_empty() {
+                let ws = state.workspace_paths(&workspace_id);
+                if let Ok(hits) = crate::storage::query_capsules_lancedb(
+                    text,
+                    8,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    state.embedder.clone(),
+                    &ws,
+                )
+                .await
+                {
+                    if let Some(note) = crate::governor::evaluate_decision_conflict(text, &hits) {
+                        info!(conn_id, %workspace_id, "decision conflict detected, injecting intervention");
+                        crate::net::inject_warning(&req_body_bytes, &note, &stripped_pq)
+                            .unwrap_or(req_body_bytes)
+                    } else {
+                        // fall through to friction checks
+                        req_body_bytes
+                    }
+                } else {
+                    req_body_bytes
+                }
+            } else {
+                req_body_bytes
+            }
+        } else {
+            req_body_bytes
+        }
+    };
+
     // --- Friction detection: check for retry loops ---
     let req_body_bytes = {
         // Extract symbols from current request
         let current_symbols = crate::net::extract_symbols_from_body(&req_body_bytes, &stripped_pq);
 
+        // Extract current user text (best-effort) for immediate friction reaction.
+        // This also serves as the "North Star" goal reminder when we hydrate.
+        let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
+            if stripped_pq.contains("/v1/messages") {
+                crate::net::extract_anthropic_user_text(&json)
+            } else {
+                crate::net::extract_openai_message_text(&json)
+            }
+        });
+
         // Only check friction if we have symbols to compare
         if current_symbols.is_empty() {
             req_body_bytes
         } else {
-            // Extract current user text (best-effort) for immediate friction reaction.
-            // This also serves as the "North Star" goal reminder when we hydrate.
-            let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
-                if stripped_pq.contains("/v1/messages") {
-                    crate::net::extract_anthropic_user_text(&json)
-                } else {
-                    crate::net::extract_openai_message_text(&json)
-                }
-            });
-
+            
             // Build minimal IntentCapsule for friction check
             let current_intent = crate::IntentCapsule {
                 category: String::new(),
@@ -171,6 +219,8 @@ async fn serve_request(
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
+                failure_mode: crate::types::FailureMode::None,
+                failure_signals: None,
             };
 
             let current_user_emotion = if let Some(text) = current_user_text {
@@ -200,6 +250,12 @@ async fn serve_request(
                         &history,
                     ) {
                         info!(conn_id, %workspace_id, "friction detected, injecting warning");
+                        let _ = crate::metrics::record_friction_warning_injected(
+                            &workspace_id,
+                            conn_id,
+                            current_intent.symbols.len(),
+                            current_user_emotion.as_ref(),
+                        );
                         crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
                             .unwrap_or(req_body_bytes)
                     } else {
@@ -367,6 +423,8 @@ async fn proxy_request(
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
+                failure_mode: crate::types::FailureMode::None,
+                failure_signals: None,
             };
 
             let current_user_emotion = if let Some(text) = current_user_text {
@@ -396,6 +454,12 @@ async fn proxy_request(
                         &history,
                     ) {
                         info!(conn_id, workspace_id = %ws.id, "friction detected, injecting warning");
+                        let _ = crate::metrics::record_friction_warning_injected(
+                            &ws.id,
+                            conn_id,
+                            current_intent.symbols.len(),
+                            current_user_emotion.as_ref(),
+                        );
                         crate::net::inject_warning(&req_body_bytes, &warning, &request_path)
                             .unwrap_or(req_body_bytes)
                     } else {
@@ -529,17 +593,12 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
 
     println!("{title_on}unlost serve{title_off} {ok_on}listening{ok_off} on {base}");
     println!("{dim_on}Multiplexing via URL: /w/<workspace_id>/<provider>/...{dim_off}");
-    println!("{dim_on}Providers: openai | anthropic | opencode{dim_off}");
+    println!("{dim_on}Providers: openai | anthropic{dim_off}");
     println!();
     println!("Examples:");
     println!("  {dim_on}Anthropic:{dim_off} {base}/w/<workspace_id>/anthropic/v1/messages");
     println!("  {dim_on}OpenAI:{dim_off}    {base}/w/<workspace_id>/openai/v1/chat/completions");
-    println!("  {dim_on}OpenCode:{dim_off}  {base}/w/<workspace_id>/opencode/zen/v1/responses");
     println!();
-    println!("Next:");
-    println!(
-        "  {dim_on}Write agent config:{dim_off} unlost configure agent opencode --path . --server {base}"
-    );
 
     if use_color {
         let openai_env = std::env::var("OPENAI_BASE_URL")

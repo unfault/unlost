@@ -38,6 +38,33 @@ pub(crate) struct ResponseMeta {
     pub(crate) usage: Option<UsageMeta>,
 }
 
+/// Failure modes that unlost can detect in agent conversations.
+/// See internal/DEVELOPMENT.md for detailed definitions.
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureMode {
+    /// No failure mode detected
+    None,
+    /// Agent believes the system works one way, but code says otherwise
+    Drift,
+    /// Same lessons/decisions being re-explained across sessions
+    Rediscovery,
+    /// Agent attempts an approach that conflicts with an established project decision
+    DecisionConflict,
+    /// Agent trying the same failed approach repeatedly
+    RetrySpiral,
+    /// Agent claims done but verification would fail
+    FalseProgress,
+    /// Agent wandering into unrelated side-quests
+    UnboundedHorizon,
+}
+
+impl Default for FailureMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
 pub struct IntentCapsule {
     pub category: String,
@@ -46,6 +73,20 @@ pub struct IntentCapsule {
     pub rationale: String,
     pub next_steps: Vec<String>,
     pub symbols: Vec<String>,
+    /// Detected failure mode: none, drift, rediscovery, decision_conflict, retry_spiral, false_progress, or unbounded_horizon
+    #[serde(default)]
+    #[schemars(schema_with = "failure_mode_schema")]
+    pub failure_mode: FailureMode,
+    /// Brief explanation of why this failure mode was detected (null if failure_mode is none)
+    #[serde(default)]
+    pub failure_signals: Option<String>,
+}
+
+fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["none", "drift", "rediscovery", "decision_conflict", "retry_spiral", "false_progress", "unbounded_horizon"]
+    })
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug)]
@@ -87,6 +128,8 @@ mod tests {
             rationale: "test_rationale".to_string(),
             next_steps: vec!["step1".to_string(), "step2".to_string()],
             symbols: vec!["symbol1".to_string(), "symbol2".to_string()],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -104,6 +147,86 @@ mod tests {
             parsed.symbols,
             vec!["symbol1".to_string(), "symbol2".to_string()]
         );
+        assert_eq!(parsed.failure_mode, FailureMode::None);
+        assert!(parsed.failure_signals.is_none());
+    }
+
+    #[test]
+    fn test_intent_capsule_with_failure_mode() {
+        let capsule = IntentCapsule {
+            category: "debugging".to_string(),
+            intent: "fix auth bug".to_string(),
+            decision: "retry same approach".to_string(),
+            rationale: "".to_string(),
+            next_steps: vec![],
+            symbols: vec!["auth.rs".to_string()],
+            failure_mode: FailureMode::RetrySpiral,
+            failure_signals: Some(
+                "User expressed frustration, same symbols touched 3 times".to_string(),
+            ),
+        };
+
+        let json = serde_json::to_string(&capsule).unwrap();
+        let parsed: IntentCapsule = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.failure_mode, FailureMode::RetrySpiral);
+        assert_eq!(
+            parsed.failure_signals,
+            Some("User expressed frustration, same symbols touched 3 times".to_string())
+        );
+    }
+
+    #[test]
+    fn test_failure_mode_serialization() {
+        // Test all variants serialize correctly
+        assert_eq!(
+            serde_json::to_string(&FailureMode::None).unwrap(),
+            "\"none\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::Drift).unwrap(),
+            "\"drift\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::Rediscovery).unwrap(),
+            "\"rediscovery\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::DecisionConflict).unwrap(),
+            "\"decision_conflict\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::RetrySpiral).unwrap(),
+            "\"retry_spiral\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::FalseProgress).unwrap(),
+            "\"false_progress\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FailureMode::UnboundedHorizon).unwrap(),
+            "\"unbounded_horizon\""
+        );
+    }
+
+    #[test]
+    fn test_failure_mode_deserialization() {
+        assert_eq!(
+            serde_json::from_str::<FailureMode>("\"none\"").unwrap(),
+            FailureMode::None
+        );
+        assert_eq!(
+            serde_json::from_str::<FailureMode>("\"drift\"").unwrap(),
+            FailureMode::Drift
+        );
+        assert_eq!(
+            serde_json::from_str::<FailureMode>("\"decision_conflict\"").unwrap(),
+            FailureMode::DecisionConflict
+        );
+        assert_eq!(
+            serde_json::from_str::<FailureMode>("\"retry_spiral\"").unwrap(),
+            FailureMode::RetrySpiral
+        );
     }
 
     #[test]
@@ -115,6 +238,8 @@ mod tests {
             rationale: "rationale1".to_string(),
             next_steps: vec!["action1".to_string()],
             symbols: vec!["symbol1".to_string()],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
         }];
 
         let output = InitCapsulesOutput {
@@ -169,6 +294,8 @@ mod tests {
             rationale: "test".to_string(),
             next_steps: vec![],
             symbols: vec![],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
         };
 
         let meta = ResponseMeta {
@@ -210,6 +337,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec![],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -221,5 +350,22 @@ mod tests {
         assert!(parsed.rationale.is_empty());
         assert!(parsed.next_steps.is_empty());
         assert!(parsed.symbols.is_empty());
+        assert_eq!(parsed.failure_mode, FailureMode::None);
+    }
+
+    #[test]
+    fn test_intent_capsule_deserialize_without_failure_mode() {
+        // Old capsules without failure_mode fields should still deserialize
+        let json = r#"{
+            "category": "test",
+            "intent": "test intent",
+            "decision": "test decision",
+            "rationale": "test rationale",
+            "next_steps": [],
+            "symbols": []
+        }"#;
+        let parsed: IntentCapsule = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.failure_mode, FailureMode::None);
+        assert!(parsed.failure_signals.is_none());
     }
 }

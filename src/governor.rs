@@ -192,6 +192,23 @@ pub(crate) fn evaluate_friction_with_weights(
         } else {
             String::new()
         };
+
+        // Log friction detection with metadata
+        let user_emotion_label = current_user_emotion
+            .map(|e| e.label.as_str())
+            .unwrap_or("none");
+        tracing::info!(
+            friction = "detected",
+            symbols = %symbols_str,
+            symbol_repeats = symbol_repeats,
+            effort_tokens = effort_tokens,
+            user_emotion = user_emotion_label,
+            current_friction = current_friction,
+            recent_friction = recent_friction,
+            has_hydration = packet.is_some(),
+            "friction warning will be injected"
+        );
+
         return Some(render_hydration_warning(
             &symbols_str,
             amplifier,
@@ -199,7 +216,381 @@ pub(crate) fn evaluate_friction_with_weights(
         ));
     }
 
+    // If symbol-based friction didn't trigger, check for conversational friction
+    // (symbol-less frustration detection)
+    evaluate_conversational_friction(history, w.recent_window)
+}
+
+/// Soft warning for 2 frustrated messages in window
+const SOFT_FRICTION_WARNING: &str =
+    "The user seems frustrated. Consider pausing to acknowledge their concern before continuing.";
+
+/// Firm warning for 3+ frustrated messages in window  
+const FIRM_FRICTION_WARNING: &str =
+    "The user has expressed repeated frustration. Stop and ask what's wrong or how you can help differently.";
+
+/// Evaluate conversational friction based on user emotion patterns alone.
+///
+/// This catches cases where the user is frustrated with the conversation
+/// but no specific code symbols are involved.
+///
+/// Returns:
+/// - None if fewer than 2 negative emotions in window
+/// - Soft warning if exactly 2 negative emotions
+/// - Firm warning if 3+ negative emotions
+pub(crate) fn evaluate_conversational_friction(
+    history: &[CapsuleHit],
+    window: usize,
+) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+
+    // Sort by recency
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+
+    // Filter to capsules that have user emotion (proxy for "has user message")
+    // and count negative emotions in the window
+    let frustrated_count = recent
+        .iter()
+        .take(window)
+        .filter(|h| h.user_emotion.is_some())
+        .filter(|h| {
+            h.user_emotion
+                .as_ref()
+                .map(|e| crate::emotion::is_negative_emotion(&e.label))
+                .unwrap_or(false)
+        })
+        .count();
+
+    if frustrated_count >= 3 {
+        tracing::info!(
+            friction = "conversational",
+            frustrated_count = frustrated_count,
+            window = window,
+            severity = "firm",
+            "conversational friction warning will be injected"
+        );
+        return Some(FIRM_FRICTION_WARNING.to_string());
+    }
+
+    if frustrated_count >= 2 {
+        tracing::info!(
+            friction = "conversational",
+            frustrated_count = frustrated_count,
+            window = window,
+            severity = "soft",
+            "conversational friction warning will be injected"
+        );
+        return Some(SOFT_FRICTION_WARNING.to_string());
+    }
+
     None
+}
+
+/// Warning messages for LLM-detected failure modes
+const DRIFT_WARNING: &str = 
+    "Previous context may be stale or incorrect. The last exchange showed signs of drift (wrong mental model). Verify your assumptions about the codebase before proceeding.";
+
+const FALSE_PROGRESS_WARNING: &str = 
+    "The user disputed completion in a recent exchange. Verify that your changes actually work before claiming the task is done.";
+
+const REDISCOVERY_WARNING: &str = 
+    "This topic was already discussed recently. Check the prior decision before re-exploring the same ground.";
+
+const DECISION_CONFLICT_WARNING: &str =
+    "Intervention: This approach conflicts with a prior project decision. Re-route to the compliant pattern.";
+
+/// Evaluate recent capsules for LLM-detected failure modes.
+///
+/// Returns a warning if a relevant failure mode was detected in recent history.
+/// Only looks at the most recent capsule to avoid stale warnings.
+pub(crate) fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+
+    // Sort by recency and look at the most recent capsule
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+
+    // Check the most recent capsule for failure modes
+    // (Only look at the latest to avoid repeatedly warning about old issues)
+    let latest = recent.first()?;
+
+    let failure_mode = &latest.capsule.failure_mode;
+    let failure_signals = latest.capsule.failure_signals.as_deref().unwrap_or("");
+    let symbols = &latest.capsule.symbols;
+
+    match failure_mode {
+        crate::types::FailureMode::Drift => {
+            let symbols_str = if symbols.is_empty() {
+                String::new()
+            } else {
+                format!(" Relevant symbols: {}", symbols.join(", "))
+            };
+
+            tracing::info!(
+                failure_mode = "drift",
+                failure_signals = failure_signals,
+                symbols = ?symbols,
+                "injecting drift warning"
+            );
+
+            Some(format!("{}{}", DRIFT_WARNING, symbols_str))
+        }
+        crate::types::FailureMode::DecisionConflict => {
+            // Prefer a concrete prior decision reminder if it exists in the capsule.
+            let prior_decision = if !latest.capsule.decision.is_empty() {
+                format!(" Prior decision: \"{}\"", latest.capsule.decision)
+            } else {
+                String::new()
+            };
+
+            tracing::info!(
+                failure_mode = "decision_conflict",
+                failure_signals = failure_signals,
+                prior_decision = %latest.capsule.decision,
+                "injecting decision conflict warning"
+            );
+
+            Some(format!("{}{}", DECISION_CONFLICT_WARNING, prior_decision))
+        }
+        crate::types::FailureMode::FalseProgress => {
+            tracing::info!(
+                failure_mode = "false_progress",
+                failure_signals = failure_signals,
+                "injecting false progress warning"
+            );
+
+            Some(FALSE_PROGRESS_WARNING.to_string())
+        }
+        crate::types::FailureMode::Rediscovery => {
+            // For rediscovery, include the prior decision if available
+            let prior_decision = if !latest.capsule.decision.is_empty() {
+                format!(" Prior decision: \"{}\"", latest.capsule.decision)
+            } else {
+                String::new()
+            };
+
+            tracing::info!(
+                failure_mode = "rediscovery",
+                failure_signals = failure_signals,
+                prior_decision = %latest.capsule.decision,
+                "injecting rediscovery warning"
+            );
+
+            Some(format!("{}{}", REDISCOVERY_WARNING, prior_decision))
+        }
+        // RetrySpiral is already handled by symbol-based friction detection
+        // UnboundedHorizon is out of scope for now
+        _ => None,
+    }
+}
+
+fn has_any_marker(s: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|m| s.contains(m))
+}
+
+fn tokenize_keywords(s: &str) -> std::collections::HashSet<String> {
+    // ASCII-only, cheap tokenization; keep identifiers/paths-like tokens.
+    let mut out = std::collections::HashSet::new();
+    for raw in s
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '/' && c != '.' && c != '-')
+        .filter(|t| !t.is_empty())
+    {
+        let t = raw.to_ascii_lowercase();
+        if t.len() < 4 {
+            continue;
+        }
+        if t.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        // Very small stopword set; keep it conservative.
+        if matches!(
+            t.as_str(),
+            "that"
+                | "this"
+                | "with"
+                | "from"
+                | "have"
+                | "will"
+                | "into"
+                | "your"
+                | "then"
+                | "than"
+                | "when"
+                | "where"
+                | "what"
+                | "which"
+                | "should"
+                | "could"
+                | "would"
+                | "about"
+                | "please"
+                | "using"
+                | "because"
+                | "avoid"
+        ) {
+            continue;
+        }
+        out.insert(t);
+    }
+    out
+}
+
+fn window_contains(hay: &str, needle: &str, idx: usize, window: usize) -> bool {
+    let start = idx.saturating_sub(window);
+    let end = (idx + needle.len() + window).min(hay.len());
+    hay.get(start..end).unwrap_or("").contains(needle)
+}
+
+fn token_is_negated(prompt_lc: &str, token: &str) -> bool {
+    // If user is explicitly saying to avoid/not-do the token, treat as not a conflict.
+    const NEG: &[&str] = &[
+        "do not",
+        "don't",
+        "dont",
+        "avoid",
+        "never",
+        "must not",
+        "should not",
+        "no ",
+    ];
+    if let Some(idx) = prompt_lc.find(token) {
+        for m in NEG {
+            if window_contains(prompt_lc, m, idx, 28) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn decision_prohibits_token(decision_lc: &str, token: &str) -> bool {
+    const PROHIBIT: &[&str] = &[
+        "do not",
+        "don't",
+        "dont",
+        "avoid",
+        "never",
+        "must not",
+        "should not",
+        "not allowed",
+        "forbidden",
+        "ban",
+        "banned",
+        "no ",
+    ];
+    if let Some(idx) = decision_lc.find(token) {
+        for m in PROHIBIT {
+            if window_contains(decision_lc, m, idx, 40) {
+                return true;
+            }
+        }
+        // Special-case: "no <token>".
+        if decision_lc.contains(&format!("no {token}")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn prompt_requests_action(prompt_lc: &str) -> bool {
+    const ACTION: &[&str] = &[
+        "use ",
+        "add ",
+        "introduce ",
+        "implement ",
+        "switch ",
+        "migrate ",
+        "refactor ",
+        "create ",
+        "make ",
+        "move ",
+        "build ",
+        "wire ",
+        "route ",
+        "rewrite ",
+        "replace ",
+    ];
+    has_any_marker(prompt_lc, ACTION)
+}
+
+/// Detect a likely "I told you NOT to" moment: current request asks for something that
+/// conflicts with an established decision capsule.
+///
+/// This is intentionally heuristic and cheap (no extra LLM call):
+/// - semantic retrieval happens upstream (caller provides relevant hits)
+/// - we look for strong prohibition language in `capsule.decision`
+/// - we look for overlapping keywords between the prompt and the decision
+pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> Option<String> {
+    let prompt_lc = prompt.to_ascii_lowercase();
+    if prompt_lc.trim().is_empty() {
+        return None;
+    }
+    if !prompt_requests_action(&prompt_lc) {
+        return None;
+    }
+
+    // Pick the strongest nearby decision (first relevant hit with a non-empty decision).
+    let best = hits
+        .iter()
+        .find(|h| !h.capsule.decision.trim().is_empty())?;
+    let decision = best.capsule.decision.trim();
+    let decision_lc = decision.to_ascii_lowercase();
+
+    // Only trigger this mode when the stored decision reads like a constraint.
+    const PROHIBIT: &[&str] = &[
+        "do not",
+        "don't",
+        "dont",
+        "avoid",
+        "never",
+        "must not",
+        "should not",
+        "not allowed",
+        "forbidden",
+        "ban",
+        "banned",
+        "no ",
+    ];
+    if !has_any_marker(&decision_lc, PROHIBIT) {
+        return None;
+    }
+
+    // Keyword overlap is the guardrail against random matches.
+    let p_tok = tokenize_keywords(&prompt_lc);
+    let d_tok = tokenize_keywords(&decision_lc);
+    let shared: Vec<String> = p_tok.intersection(&d_tok).cloned().collect();
+    if shared.is_empty() {
+        return None;
+    }
+
+    // Confirm at least one shared token is actually prohibited and not negated in the prompt.
+    let mut conflict_token: Option<String> = None;
+    for t in shared {
+        if token_is_negated(&prompt_lc, &t) {
+            continue;
+        }
+        if decision_prohibits_token(&decision_lc, &t) {
+            conflict_token = Some(t);
+            break;
+        }
+    }
+    let _ = conflict_token?;
+
+    let cat = best.capsule.category.trim();
+    let cat_part = if cat.is_empty() {
+        String::new()
+    } else {
+        format!(" ({cat})")
+    };
+
+    Some(format!(
+        "{DECISION_CONFLICT_WARNING}{cat_part} Prior decision: \"{decision}\"\n\n"
+    ))
 }
 
 fn is_friction_label(label: &str) -> bool {
@@ -502,6 +893,8 @@ mod tests {
                 rationale: "".to_string(),
                 next_steps: vec![],
                 symbols: symbols.into_iter().map(String::from).collect(),
+                failure_mode: crate::types::FailureMode::None,
+                failure_signals: None,
             },
             meta: ResponseMeta {
                 source: "test".to_string(),
@@ -523,6 +916,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         assert!(evaluate_friction(&current, None, &[]).is_none());
     }
@@ -536,6 +931,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec![],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![make_hit(vec!["auth.ts"], Some("frustration"))];
         assert!(evaluate_friction(&current, None, &history).is_none());
@@ -550,6 +947,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![
             make_hit(vec!["auth.ts"], Some("joy")),
@@ -568,10 +967,14 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["utils.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![
-            make_hit(vec!["auth.ts"], Some("frustration")),
-            make_hit(vec!["auth.ts"], Some("anger")),
+            // Negative emotions would trigger *conversational* friction even without symbol overlap.
+            // This test is specifically about symbol-based loops.
+            make_hit(vec!["auth.ts"], Some("neutral")),
+            make_hit(vec!["auth.ts"], Some("joy")),
         ];
         assert!(evaluate_friction(&current, None, &history).is_none());
     }
@@ -585,6 +988,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![
             make_hit(vec!["auth.ts"], Some("frustration")),
@@ -607,6 +1012,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["db.rs".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![
             make_hit(vec!["db.rs"], Some("annoyance")),
@@ -625,6 +1032,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         // Not frustrated in history, but we are repeating symbols.
         let history = vec![
@@ -653,6 +1062,8 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.ts".to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
         let history = vec![
             make_hit(vec!["auth.ts"], Some("neutral")),

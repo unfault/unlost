@@ -319,6 +319,7 @@ impl ServeState {
             id: workspace_id.to_string(),
             db_dir: ws_dir.join("lancedb"),
             capsules_jsonl: ws_dir.join("capsules.jsonl"),
+            metrics_jsonl: ws_dir.join("metrics.jsonl"),
         }
     }
 
@@ -355,12 +356,24 @@ impl ServeState {
 
 pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
-Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
+\n\
 Rules:\n\
 - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
 - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
 - Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
+\n\
+Failure mode detection - set failure_mode to one of:\n\
+- none: No failure mode detected, conversation is productive.\n\
+- drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
+- rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
+- decision_conflict: Agent proposes or starts an approach that conflicts with an established project decision/constraint. Signs: user says \"we decided against that\", \"I told you not to\", \"that's not how we do it\"; a prior decision capsule forbids the approach.\n\
+- retry_spiral: Agent stuck in a loop. Signs: user frustration (\"same error\", \"you already tried that\", \"going in circles\"); same symbols appear repeatedly; agent apologizes then repeats similar approach.\n\
+- false_progress: Agent claims done but isn't. Signs: user says \"that's still not working\", \"the error is still there\"; agent declared completion but user disputes it.\n\
+- unbounded_horizon: Agent wandering off-task. Signs: \"while I'm here\" tangents; refactoring unrelated code; user redirects back to original task.\n\
+\n\
+Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
     loop {
         let job = match rx.recv().await {
@@ -423,6 +436,19 @@ Rules:\n\
             warn!(workspace_id = %job.workspace_id, error = ?e, "failed to append capsule jsonl");
         }
 
+        if let Err(e) = crate::metrics::record_capsule_saved(
+            &ws_paths,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            user_emotion.as_ref(),
+            assistant_emotion.as_ref(),
+            &capsule,
+        ) {
+            warn!(workspace_id = %job.workspace_id, error = ?e, "failed to record metrics event");
+        }
+
         match state.db_for(&job.workspace_id).await {
             Ok(db) => {
                 if let Err(e) = crate::storage::insert_capsule_row(
@@ -456,12 +482,24 @@ pub(crate) async fn process_flush_jobs_proxy(
     emotion: Arc<std::sync::Mutex<EmotionModel>>,
 ) {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
-Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
+\n\
 Rules:\n\
 - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
 - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
 - Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
+\n\
+Failure mode detection - set failure_mode to one of:\n\
+- none: No failure mode detected, conversation is productive.\n\
+- drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
+- rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
+- decision_conflict: Agent proposes or starts an approach that conflicts with an established project decision/constraint. Signs: user says \"we decided against that\", \"I told you not to\", \"that's not how we do it\"; a prior decision capsule forbids the approach.\n\
+- retry_spiral: Agent stuck in a loop. Signs: user frustration (\"same error\", \"you already tried that\", \"going in circles\"); same symbols appear repeatedly; agent apologizes then repeats similar approach.\n\
+- false_progress: Agent claims done but isn't. Signs: user says \"that's still not working\", \"the error is still there\"; agent declared completion but user disputes it.\n\
+- unbounded_horizon: Agent wandering off-task. Signs: \"while I'm here\" tangents; refactoring unrelated code; user redirects back to original task.\n\
+\n\
+Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
     loop {
         let job = match rx.recv().await {
@@ -521,6 +559,19 @@ Rules:\n\
             &capsule,
         ) {
             warn!(workspace_id = %job.workspace_id, error = ?e, "failed to append capsule jsonl");
+        }
+
+        if let Err(e) = crate::metrics::record_capsule_saved(
+            &ws,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            user_emotion.as_ref(),
+            assistant_emotion.as_ref(),
+            &capsule,
+        ) {
+            warn!(workspace_id = %job.workspace_id, error = ?e, "failed to record metrics event");
         }
 
         if let Err(e) = crate::storage::insert_capsule_row(

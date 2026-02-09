@@ -37,7 +37,7 @@ Add to `opencode.json`:
 Or via the CLI:
 
 ```bash
-unlost config agent opencode-plugin --path .
+unlost config agent opencode --path .
 ```
 
 Restart OpenCode. That's it.

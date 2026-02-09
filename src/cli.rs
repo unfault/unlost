@@ -214,6 +214,13 @@ pub(crate) enum Command {
         embed_cache_dir: Option<String>,
     },
 
+    /// Show workspace metrics (local, derived from metrics.jsonl)
+    Metrics {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+    },
+
     /// Inspect stored capsules for this workspace
     Inspect {
         /// Workspace path (defaults to current directory)
@@ -312,6 +319,17 @@ pub(crate) enum Command {
         yes: bool,
     },
 
+    /// Rebuild LanceDB index from capsules.jsonl
+    Reindex {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
     /// Test emotion detection on a string (developer tool)
     #[command(hide = true)]
     Emotion {
@@ -325,12 +343,30 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ShimCommand,
     },
+
+    /// Show where the workspace's files are stored
+    Where {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ShimCommand {
     /// Run the OpenCode stdio shim (JSON-RPC over stdin/stdout)
     Opencode {
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Run the Claude Code hooks shim (reads hook JSON from stdin)
+    Claudecode {
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -358,26 +394,30 @@ pub(crate) enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
-    /// Configure OpenCode via opencode.json in the workspace
+    /// Configure OpenCode to load the unlost plugin (stdio shim)
     Opencode {
         /// Workspace path (defaults to current directory; uses git toplevel)
         #[arg(long, default_value = ".")]
         path: String,
 
-        /// unlost server base URL (loopback)
-        #[arg(long, default_value = "http://127.0.0.1:3000")]
-        server: String,
+        /// npm package name to add
+        #[arg(long, default_value = "@unfault/unlost-opencode")]
+        plugin: String,
+
+        /// Install globally in ~/.config/opencode/opencode.json instead of per-project
+        #[arg(long)]
+        global: bool,
     },
 
-    /// Add the unlost OpenCode plugin to opencode.json (npm plugin)
-    OpencodePlugin {
+    /// Configure Claude Code hooks to use unlost
+    Claudecode {
         /// Workspace path (defaults to current directory; uses git toplevel)
         #[arg(long, default_value = ".")]
         path: String,
 
-        /// npm package name to add
-        #[arg(long, default_value = "@unfault/opencode-unlost")]
-        plugin: String,
+        /// Install globally in ~/.claude/settings.json instead of per-project
+        #[arg(long)]
+        global: bool,
     },
 }
 

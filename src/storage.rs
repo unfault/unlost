@@ -222,6 +222,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 .execute()
                 .await
                 .ok();
+            table.create_index(&["ts_ms"], Index::Auto).execute().await.ok();
 
             Ok(table)
         }
@@ -524,6 +525,9 @@ pub(crate) async fn query_capsules_lancedb(
                     rationale: r_text.to_string(),
                     next_steps: steps,
                     symbols: syms,
+                    // Existing capsules in DB don't have failure_mode yet
+                    failure_mode: crate::types::FailureMode::None,
+                    failure_signals: None,
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -549,6 +553,34 @@ pub(crate) async fn scan_capsules_lancedb(
     since: Option<i64>,
     until: Option<i64>,
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
+    scan_capsules_lancedb_impl(ws, limit, symbol, emotion, provider, since, until, false).await
+}
+
+/// Like `scan_capsules_lancedb` but returns the most recent rows first.
+/// Uses offset to skip to near the end of the table (assuming append-only insertion),
+/// fetches those rows, then sorts by ts_ms descending.
+pub(crate) async fn scan_capsules_lancedb_recent(
+    ws: &crate::WorkspacePaths,
+    limit: usize,
+    symbol: Option<&str>,
+    emotion: Option<&str>,
+    provider: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> anyhow::Result<Vec<crate::CapsuleHit>> {
+    scan_capsules_lancedb_impl(ws, limit, symbol, emotion, provider, since, until, true).await
+}
+
+async fn scan_capsules_lancedb_impl(
+    ws: &crate::WorkspacePaths,
+    limit: usize,
+    symbol: Option<&str>,
+    emotion: Option<&str>,
+    provider: Option<&str>,
+    since: Option<i64>,
+    until: Option<i64>,
+    recent_first: bool,
+) -> anyhow::Result<Vec<crate::CapsuleHit>> {
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
         .execute()
         .await?;
@@ -557,7 +589,19 @@ pub(crate) async fn scan_capsules_lancedb(
         Err(_) => return Ok(vec![]),
     };
 
-    let mut q = table.query().limit(limit);
+    let mut q = table.query();
+
+    // For recent_first, we skip to near the end of the table and fetch more rows to account for filtering
+    if recent_first {
+        let total = table.count_rows(None).await.unwrap_or(0);
+        let fetch_count = limit * 3; // fetch extra to handle potential filter reduction
+        if total > fetch_count {
+            q = q.offset(total - fetch_count);
+        }
+        q = q.limit(fetch_count);
+    } else {
+        q = q.limit(limit);
+    }
 
     let mut filters: Vec<String> = Vec::new();
 
@@ -688,7 +732,8 @@ pub(crate) async fn scan_capsules_lancedb(
         let symbols = idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
 
         for row in 0..batch.num_rows() {
-            if out.len() >= limit {
+            // Skip early-exit when recent_first since we need all rows to sort
+            if !recent_first && out.len() >= limit {
                 break;
             }
             let cat = category
@@ -820,6 +865,9 @@ pub(crate) async fn scan_capsules_lancedb(
                     rationale: r_text.to_string(),
                     next_steps: steps,
                     symbols: syms,
+                    // Existing capsules in DB don't have failure_mode yet
+                    failure_mode: crate::types::FailureMode::None,
+                    failure_signals: None,
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -831,6 +879,11 @@ pub(crate) async fn scan_capsules_lancedb(
                 },
             });
         }
+    }
+
+    if recent_first {
+        out.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+        out.truncate(limit);
     }
 
     Ok(out)
@@ -867,6 +920,14 @@ pub(crate) async fn insert_capsule_row(
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
 ) -> anyhow::Result<()> {
+    tracing::info!(
+        conn_id,
+        exchange_seq,
+        ts_ms,
+        has_usage = meta.usage.is_some(),
+        decision_bytes = capsule.decision.len(),
+        "insert_capsule_row called"
+    );
     tracing::debug!(
         conn_id,
         exchange_seq,

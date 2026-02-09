@@ -429,6 +429,8 @@ pub(crate) async fn run(
             rationale: String::new(),
             next_steps: Vec::new(),
             symbols: vec![crate::storage::CAPSULES_TABLE.to_string()],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         },
         crate::ResponseMeta {
             source: "init".to_string(),
@@ -475,6 +477,8 @@ pub(crate) async fn run(
                 rationale: String::new(),
                 next_steps: Vec::new(),
                 symbols: vec![qualified.clone(), file_path.clone(), format!("{method} {path}")],
+                failure_mode: crate::types::FailureMode::None,
+                failure_signals: None,
             },
             crate::ResponseMeta {
                 source: "init".to_string(),

@@ -281,6 +281,16 @@ pub(crate) async fn run(
         None => None,
     };
     let ws = crate::workspace::get_or_create_workspace_paths(&std::env::current_dir()?)?;
+
+    let _ = crate::metrics::record_command_query(
+        &ws,
+        &query,
+        limit,
+        symbol.as_deref(),
+        emotion_label,
+        provider_label,
+    );
+
     let embedder = crate::embed::load_embedder(
         &embed_model,
         embed_cache_dir.as_deref().map(std::path::PathBuf::from),

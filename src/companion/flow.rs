@@ -9,7 +9,7 @@
 
 use crate::embed::Embedder;
 use crate::emotion::{apply_context_heuristics, map_go_emotions, EmotionConfig, EmotionModel};
-use crate::governor::evaluate_friction;
+use crate::governor::{evaluate_decision_conflict, evaluate_failure_modes, evaluate_friction};
 use crate::recording::{looks_like_commit_or_pr, ChunkInput, FlushJob, WorkspaceChunker};
 use crate::storage::{ensure_capsules_table, insert_capsule_row};
 use crate::types::UsageMeta;
@@ -27,13 +27,14 @@ static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentKind {
     OpenCode,
-    // Future: ClaudeCode, Codex
+    ClaudeCode,
 }
 
 impl AgentKind {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             AgentKind::OpenCode => "opencode",
+            AgentKind::ClaudeCode => "claudecode",
         }
     }
 }
@@ -210,6 +211,10 @@ pub(crate) struct Flow {
     state: FlowState,
     #[allow(dead_code)]
     bg_state: Arc<Mutex<BackgroundState>>,
+    /// Sender half kept to control shutdown - dropping closes the channel
+    job_tx: kanal::AsyncSender<FlushJob>,
+    /// Handle to the background worker task
+    worker_handle: tokio::task::JoinHandle<()>,
 }
 
 impl Flow {
@@ -217,7 +222,7 @@ impl Flow {
     /// Spawns a background worker for processing flush jobs.
     pub(crate) fn new(config: FlowConfig) -> Self {
         let (job_tx, job_rx) = kanal::unbounded_async::<FlushJob>();
-        let state = FlowState::new(job_tx);
+        let state = FlowState::new(job_tx.clone());
         let bg_state = Arc::new(Mutex::new(BackgroundState::new(
             config.embed_model,
             config.embed_cache_dir,
@@ -225,17 +230,40 @@ impl Flow {
 
         // Spawn background worker
         let bg_state_clone = bg_state.clone();
-        tokio::spawn(async move {
+        let worker_handle = tokio::spawn(async move {
             background_worker(job_rx, bg_state_clone).await;
         });
 
-        Self { state, bg_state }
+        Self { state, bg_state, job_tx, worker_handle }
+    }
+
+    /// Drain pending jobs and shut down the background worker.
+    ///
+    /// This closes the job channel (signaling the worker to exit after processing
+    /// remaining jobs) and waits for the worker to finish.
+    ///
+    /// Call this before dropping the Flow if you need to ensure all enqueued
+    /// jobs are processed (e.g., in short-lived processes like hooks).
+    pub(crate) async fn drain(self) {
+        // Drop our sender to close the channel - worker will exit after draining
+        drop(self.job_tx);
+        // Also drop the chunker's sender
+        drop(self.state);
+        // Wait for worker to finish processing remaining jobs
+        let _ = self.worker_handle.await;
     }
 
     /// Check for friction before an LLM call.
     ///
     /// Returns a note to inject if friction is detected, or None otherwise.
     pub(crate) async fn check(&mut self, event: CheckEvent) -> CheckResult {
+        tracing::info!(
+            directory = %event.directory,
+            text_len = event.text.len(),
+            session = event.agent_session_id.as_deref().unwrap_or("-"),
+            "check called"
+        );
+        
         if event.directory.is_empty() {
             return CheckResult {
                 note: None,
@@ -262,16 +290,52 @@ impl Flow {
             }
         };
 
-        // Load recent capsules
-        let history = match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
+        // Decision/constraint intervention ("I told you NOT to")
+        // Runs before friction checks so it can interrupt immediately.
+        if !event.text.trim().is_empty() {
+            let embedder = {
+                let mut st = self.bg_state.lock().await;
+                st.ensure_embedder().await.ok()
+            };
+
+            if let Some(embedder) = embedder {
+                // Semantic search for relevant prior decisions.
+                let matches = crate::storage::query_capsules_lancedb(
+                    &event.text,
+                    8,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    embedder,
+                    &ws,
+                )
+                .await;
+
+                if let Ok(hits) = matches {
+                    if let Some(note) = evaluate_decision_conflict(&event.text, &hits) {
+                        tracing::info!(
+                            workspace = %ws.id,
+                            session = event.agent_session_id.as_deref().unwrap_or("-"),
+                            "decision conflict intervention will be injected"
+                        );
+                        return CheckResult { note: Some(note), error: None };
+                    }
+                }
+            }
+        }
+
+        // Load recent capsules (most recent first)
+        let history = match crate::storage::scan_capsules_lancedb_recent(&ws, 5, None, None, None, None, None).await {
             Ok(h) => h,
             Err(e) => {
-                tracing::debug!("scan_capsules_lancedb failed: {e}");
+                tracing::debug!("scan_capsules_lancedb_recent failed: {e}");
                 vec![]
             }
         };
 
-        // If we have no history, nothing to check friction against
+        // If we have no history, nothing to check friction/failure-modes against
         if history.is_empty() {
             return CheckResult { note: None, error: None };
         }
@@ -303,9 +367,35 @@ impl Flow {
             rationale: String::new(),
             next_steps: vec![],
             symbols,
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
         };
 
+        // First check for friction (emotion + symbol repetition OR conversational frustration)
         let note = evaluate_friction(&current, user_emotion.as_ref(), &history);
+        
+        if note.is_some() {
+            tracing::info!(
+                workspace = %ws.id,
+                session = event.agent_session_id.as_deref().unwrap_or("-"),
+                history_size = history.len(),
+                "friction check returned warning"
+            );
+            return CheckResult { note, error: None };
+        }
+        
+        // If no friction, check for LLM-detected failure modes (drift, false_progress, rediscovery)
+        let note = evaluate_failure_modes(&history);
+        
+        if note.is_some() {
+            tracing::info!(
+                workspace = %ws.id,
+                session = event.agent_session_id.as_deref().unwrap_or("-"),
+                history_size = history.len(),
+                "failure mode check returned warning"
+            );
+        }
+        
         CheckResult { note, error: None }
     }
 
@@ -417,12 +507,24 @@ async fn background_worker(rx: kanal::AsyncReceiver<FlushJob>, state: Arc<Mutex<
 
 async fn process_flush_job(state: &Arc<Mutex<BackgroundState>>, job: FlushJob) -> anyhow::Result<()> {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
-Return JSON only with fields: {category, intent, decision, rationale, next_steps (array), symbols (array)}.\n\
+Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
+\n\
 Rules:\n\
 - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
 - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
 - Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.";
+- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
+\n\
+Failure mode detection - set failure_mode to one of:\n\
+- none: No failure mode detected, conversation is productive.\n\
+- drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
+- rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
+- decision_conflict: Agent proposes or starts an approach that conflicts with an established project decision/constraint. Signs: user says \"we decided against that\", \"I told you not to\", \"that's not how we do it\"; a prior decision capsule forbids the approach.\n\
+- retry_spiral: Agent stuck in a loop. Signs: user frustration (\"same error\", \"you already tried that\", \"going in circles\"); same symbols appear repeatedly; agent apologizes then repeats similar approach.\n\
+- false_progress: Agent claims done but isn't. Signs: user says \"that's still not working\", \"the error is still there\"; agent declared completion but user disputes it.\n\
+- unbounded_horizon: Agent wandering off-task. Signs: \"while I'm here\" tangents; refactoring unrelated code; user redirects back to original task.\n\
+\n\
+Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
     // Extract user/assistant text for emotion classification
     let (user_text, assistant_text) = crate::emotion::extract_user_and_assistant_text(&job.input);
@@ -460,16 +562,40 @@ Rules:\n\
     // Extract capsule using LLM (this is the expensive network call)
     let capsule = crate::llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await?;
 
+    // Log if a failure mode was detected by the LLM
+    if capsule.failure_mode != crate::types::FailureMode::None {
+        tracing::info!(
+            workspace_id = %job.workspace_id,
+            failure_mode = ?capsule.failure_mode,
+            failure_signals = capsule.failure_signals.as_deref().unwrap_or("-"),
+            category = %capsule.category,
+            symbols = ?capsule.symbols,
+            "LLM detected failure mode"
+        );
+    }
+
     // Get workspace paths from the job
     let ws_dir = crate::unlost_workspace_dir(&job.workspace_id);
     let ws = crate::WorkspacePaths {
         id: job.workspace_id.clone(),
         db_dir: ws_dir.join("lancedb"),
         capsules_jsonl: ws_dir.join("capsules.jsonl"),
+        metrics_jsonl: ws_dir.join("metrics.jsonl"),
     };
 
     // Append to JSONL (cheap, local)
     append_capsule_jsonl(&ws.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule)?;
+
+    let _ = crate::metrics::record_capsule_saved(
+        &ws,
+        job.ts_ms,
+        job.conn_id,
+        job.exchange_seq,
+        &job.meta,
+        user_emotion.as_ref(),
+        assistant_emotion.as_ref(),
+        &capsule,
+    );
 
     // Insert into LanceDB
     let mut st = state.lock().await;

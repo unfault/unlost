@@ -10,6 +10,7 @@ pub(crate) struct WorkspacePaths {
     pub(crate) id: String,
     pub(crate) db_dir: std::path::PathBuf,
     pub(crate) capsules_jsonl: std::path::PathBuf,
+    pub(crate) metrics_jsonl: std::path::PathBuf,
 }
 
 fn xdg_config_home() -> std::path::PathBuf {
@@ -258,6 +259,7 @@ pub(crate) fn get_or_create_workspace_paths(
                 id: existing_id,
                 db_dir: ws_dir.join("lancedb"),
                 capsules_jsonl: ws_dir.join("capsules.jsonl"),
+                metrics_jsonl: ws_dir.join("metrics.jsonl"),
             });
         }
     }
@@ -289,6 +291,7 @@ pub(crate) fn get_or_create_workspace_paths(
         id,
         db_dir,
         capsules_jsonl,
+        metrics_jsonl: ws_dir.join("metrics.jsonl"),
     })
 }
 

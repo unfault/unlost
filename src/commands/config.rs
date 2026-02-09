@@ -94,55 +94,27 @@ fn handle_llm_command(cmd: LlmCommand) -> anyhow::Result<()> {
 
 fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
     match cmd {
-        AgentCommand::Opencode { path, server } => {
-            let root =
-                crate::workspace::git_toplevel(std::path::Path::new(&path)).unwrap_or_else(|| {
-                    crate::workspace::canonicalize_dir(std::path::Path::new(&path))
-                        .unwrap_or_else(|_| std::path::PathBuf::from(&path))
-                });
-            let root = crate::workspace::canonicalize_dir(&root)?;
-
-            let (workspace_id, _src) = crate::workspace::compute_workspace_id(&root)
-                .ok_or_else(|| anyhow::anyhow!("unable to compute workspace id"))?;
-
-            let server = server.trim_end_matches('/');
-            let base_url = format!("{server}/w/{workspace_id}/opencode/zen/v1");
-
-            let cfg_path = root.join("opencode.json");
-            let mut json = match std::fs::read_to_string(&cfg_path) {
-                Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    serde_json::Value::Object(serde_json::Map::new())
-                }
-                Err(e) => return Err(e.into()),
+        AgentCommand::Opencode {
+            path,
+            plugin,
+            global,
+        } => {
+            let cfg_path = if global {
+                opencode_global_config_path()?
+            } else {
+                let root = crate::workspace::git_toplevel(std::path::Path::new(&path))
+                    .unwrap_or_else(|| {
+                        crate::workspace::canonicalize_dir(std::path::Path::new(&path))
+                            .unwrap_or_else(|_| std::path::PathBuf::from(&path))
+                    });
+                let root = crate::workspace::canonicalize_dir(&root)?;
+                root.join("opencode.json")
             };
 
-            set_nested_string(
-                &mut json,
-                &["$schema"],
-                "https://opencode.ai/config.json".to_string(),
-            );
-            set_nested_string(
-                &mut json,
-                &["provider", "opencode", "options", "baseURL"],
-                base_url,
-            );
+            if let Some(parent) = cfg_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
 
-            let rendered = serde_json::to_string_pretty(&json)?;
-            std::fs::write(&cfg_path, rendered)?;
-            println!("configured: {}", cfg_path.display());
-        }
-
-        AgentCommand::OpencodePlugin { path, plugin } => {
-            let root =
-                crate::workspace::git_toplevel(std::path::Path::new(&path)).unwrap_or_else(|| {
-                    crate::workspace::canonicalize_dir(std::path::Path::new(&path))
-                        .unwrap_or_else(|_| std::path::PathBuf::from(&path))
-                });
-            let root = crate::workspace::canonicalize_dir(&root)?;
-
-            let cfg_path = root.join("opencode.json");
             let mut json = match std::fs::read_to_string(&cfg_path) {
                 Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
                     .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
@@ -161,10 +133,132 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
 
             let rendered = serde_json::to_string_pretty(&json)?;
             std::fs::write(&cfg_path, rendered)?;
-            println!("configured: {}", cfg_path.display());
+
+            let scope = if global { "global" } else { "project" };
+            println!("configured ({scope}): {}", cfg_path.display());
+        }
+
+        AgentCommand::Claudecode { path, global } => {
+            configure_claudecode(&path, global)?;
         }
     }
     Ok(())
+}
+
+fn opencode_global_config_path() -> anyhow::Result<std::path::PathBuf> {
+    let dir = if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        std::path::PathBuf::from(dir)
+    } else {
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
+            .map_err(|_| anyhow::anyhow!("could not determine home directory"))?;
+        home.join(".config")
+    };
+
+    Ok(dir.join("opencode").join("opencode.json"))
+}
+
+fn configure_claudecode(path: &str, global: bool) -> anyhow::Result<()> {
+    let cfg_path = if global {
+        // Global: ~/.claude/settings.json
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
+            .map_err(|_| anyhow::anyhow!("could not determine home directory"))?;
+        home.join(".claude").join("settings.json")
+    } else {
+        // Per-project: <project>/.claude/settings.json
+        let root =
+            crate::workspace::git_toplevel(std::path::Path::new(path)).unwrap_or_else(|| {
+                crate::workspace::canonicalize_dir(std::path::Path::new(path))
+                    .unwrap_or_else(|_| std::path::PathBuf::from(path))
+            });
+        let root = crate::workspace::canonicalize_dir(&root)?;
+        root.join(".claude").join("settings.json")
+    };
+
+    // Ensure parent directory exists
+    if let Some(parent) = cfg_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Load existing config or start fresh
+    let mut json = match std::fs::read_to_string(&cfg_path) {
+        Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Build the hooks config
+    let unlost_hook = serde_json::json!({
+        "type": "command",
+        "command": "unlost shim claudecode"
+    });
+
+    let unlost_hook_async = serde_json::json!({
+        "type": "command",
+        "command": "unlost shim claudecode",
+        "async": true
+    });
+
+    // Ensure hooks object exists
+    let obj = ensure_object(&mut json);
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let hooks_obj = ensure_object(hooks);
+
+    // Add UserPromptSubmit hook
+    let user_prompt_submit = hooks_obj
+        .entry("UserPromptSubmit")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    add_unlost_hook_if_missing(user_prompt_submit, unlost_hook);
+
+    // Add Stop hook
+    let stop = hooks_obj
+        .entry("Stop")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    add_unlost_hook_if_missing(stop, unlost_hook_async);
+
+    // Write back
+    let rendered = serde_json::to_string_pretty(&json)?;
+    std::fs::write(&cfg_path, rendered)?;
+
+    let scope = if global { "global" } else { "project" };
+    println!("configured ({scope}): {}", cfg_path.display());
+    Ok(())
+}
+
+/// Add an unlost hook to a hook array if not already present
+fn add_unlost_hook_if_missing(hook_array: &mut serde_json::Value, hook: serde_json::Value) {
+    if !hook_array.is_array() {
+        *hook_array = serde_json::Value::Array(Vec::new());
+    }
+    let arr = hook_array.as_array_mut().unwrap();
+
+    // Check if unlost hook already exists
+    let has_unlost = arr.iter().any(|entry| {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c.contains("unlost shim claudecode"))
+                    .unwrap_or(false)
+            })
+        } else {
+            false
+        }
+    });
+
+    if !has_unlost {
+        arr.push(serde_json::json!({
+            "hooks": [hook]
+        }));
+    }
 }
 
 pub(crate) fn run(command: ConfigCommand) -> anyhow::Result<()> {

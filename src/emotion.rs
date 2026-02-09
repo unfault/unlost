@@ -253,10 +253,71 @@ const DOUBT_PATTERNS: &[&str] = &[
     "shouldn't we",
 ];
 
+/// Heuristic patterns that indicate frustration/negative emotions.
+/// Used to boost negative emotion detection when the model misclassifies as positive/neutral.
+const FRUSTRATION_SIGNALS: &[&str] = &[
+    // Exasperation
+    "sigh",
+    "uh?",
+    "ugh",
+    "seriously",
+    "come on",
+    "again?",
+    "again!",
+    // Sarcasm/rhetorical
+    "you kidding",
+    "are you serious",
+    "this is ridiculous",
+    "that's ridiculous",
+    // Repetition complaints
+    "still not",
+    "already tried",
+    "same error",
+    "same issue",
+    "same problem",
+    "we discussed this",
+    "going in circles",
+    "not working",
+    "doesn't work",
+    "broken",
+    // Short dismissive
+    "whatever",
+    "never mind",
+    "forget it",
+    // Direct frustration
+    "frustrated",
+    "annoyed",
+    "annoying",
+    "irritating",
+    "terrible",
+    "awful",
+    "useless",
+    "pointless",
+    "waste of time",
+];
+
+/// Emotions that are considered negative for friction detection purposes.
+pub(crate) const NEGATIVE_EMOTIONS: &[&str] = &[
+    "frustration",
+    "anger",
+    "sad",
+    "confused",
+    "doubt",
+    "disapproval",
+];
+
+/// Check if an emotion label is considered negative.
+pub(crate) fn is_negative_emotion(label: &str) -> bool {
+    NEGATIVE_EMOTIONS.contains(&label)
+}
+
 /// Apply text-based heuristics to catch doubt patterns the model misses.
 /// Only overrides neutral/confused, preserves stronger signals.
 pub(crate) fn apply_context_heuristics(text: &str, meta: EmotionMeta) -> EmotionMeta {
-    // Only override weak signals
+    // First, try to boost negative emotions if the model misclassified
+    let meta = boost_negative_emotions(text, meta);
+
+    // Only apply doubt heuristics to weak signals (neutral/confused)
     if meta.label != "neutral" && meta.label != "confused" {
         return meta;
     }
@@ -274,6 +335,94 @@ pub(crate) fn apply_context_heuristics(text: &str, meta: EmotionMeta) -> Emotion
     } else {
         meta
     }
+}
+
+/// Boost negative emotion detection when text contains frustration signals
+/// but the model classified as positive (joy) or neutral.
+///
+/// This helps catch sarcasm, exasperation ("sigh"), and other signals
+/// that the model often misclassifies.
+fn boost_negative_emotions(text: &str, meta: EmotionMeta) -> EmotionMeta {
+    // If model already detected a negative emotion, trust it
+    if is_negative_emotion(&meta.label) {
+        return meta;
+    }
+
+    let lower = text.to_lowercase();
+
+    // Check for frustration signal patterns
+    let has_frustration_signal = FRUSTRATION_SIGNALS.iter().any(|p| lower.contains(p));
+
+    // Check for rhetorical markers (e.g., "?!" or multiple "?")
+    let has_rhetorical = text.contains("?!") || text.contains("!?") || text.matches('?').count() >= 2;
+
+    // Check for short dismissive replies (< 15 words with certain keywords)
+    let word_count = text.split_whitespace().count();
+    let is_short_dismissive = word_count < 15
+        && (lower.contains("fine")
+            || lower.contains("ok then")
+            || lower.contains("okay then")
+            || lower.contains("i guess"));
+
+    // Count how many signals we found
+    let signal_count =
+        has_frustration_signal as u8 + has_rhetorical as u8 + is_short_dismissive as u8;
+
+    if signal_count == 0 {
+        return meta;
+    }
+
+    // If model said joy but we found frustration signals, override to frustration
+    if meta.label == "joy" && signal_count >= 1 {
+        tracing::debug!(
+            original_label = %meta.label,
+            original_confidence = meta.confidence,
+            has_frustration_signal,
+            has_rhetorical,
+            is_short_dismissive,
+            "boosting emotion from joy to frustration based on text signals"
+        );
+        return EmotionMeta {
+            label: "frustration".to_string(),
+            valence: -0.6,
+            intensity: 0.5,
+            // Use a moderate confidence since we're overriding the model
+            confidence: 0.6_f32.max(meta.confidence * 0.7),
+        };
+    }
+
+    // If model said neutral and we have strong signals (2+), boost to frustration
+    if meta.label == "neutral" && signal_count >= 2 {
+        tracing::debug!(
+            original_label = %meta.label,
+            original_confidence = meta.confidence,
+            signal_count,
+            "boosting emotion from neutral to frustration based on multiple text signals"
+        );
+        return EmotionMeta {
+            label: "frustration".to_string(),
+            valence: -0.5,
+            intensity: 0.45,
+            confidence: 0.55,
+        };
+    }
+
+    // If model said neutral and we have 1 signal, boost to mild disapproval
+    if meta.label == "neutral" && signal_count == 1 {
+        tracing::debug!(
+            original_label = %meta.label,
+            original_confidence = meta.confidence,
+            "boosting emotion from neutral to disapproval based on text signal"
+        );
+        return EmotionMeta {
+            label: "disapproval".to_string(),
+            valence: -0.4,
+            intensity: 0.4,
+            confidence: 0.5,
+        };
+    }
+
+    meta
 }
 
 impl EmotionModel {

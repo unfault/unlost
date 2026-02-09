@@ -12,4 +12,4 @@ Claude Code hooks integration. Configures `UserPromptSubmit` and `Stop` hooks th
 
 ### OpenCode (`agents/opencode/`)
 
-OpenCode plugin integration. Configures `opencode.json` to point at the unlost server endpoint.
+OpenCode plugin integration. Configures `opencode.json` to load the unlost plugin, which runs `unlost shim opencode` over stdio.

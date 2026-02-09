@@ -51,13 +51,13 @@ That's it. Unlost hooks into every Claude Code session, checks for friction befo
 All your OpenCode projects (global config):
 
 ```bash
-unlost config agent opencode-plugin --global
+unlost config agent opencode --global
 ```
 
 Or one project at a time:
 
 ```bash
-unlost config agent opencode-plugin --path .
+unlost config agent opencode --path .
 ```
 
 Same deal. Unlost spots drift, catches false progress, and builds a local trail of decisions — without storing full transcripts.

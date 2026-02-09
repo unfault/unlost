@@ -16,3 +16,15 @@ target/
 # End of https://www.toptal.com/developers/gitignore/api/rust
 .unfault/
 internal/
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+*.js
+*.d.ts
+*.map
+
+# npm
+package-lock.json
+.unfault/

@@ -369,6 +369,8 @@ pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
 pub(crate) async fn llm_recall_narrative(
     llm_model_override: Option<&str>,
     scope: Option<&str>,
+    workspace_id: &str,
+    workspace_root: &str,
     hits: &[crate::CapsuleHit],
 ) -> Result<String> {
     let mut context = String::new();
@@ -378,7 +380,13 @@ pub(crate) async fn llm_recall_narrative(
         context.push_str(s);
         context.push_str("\n\n");
     } else {
-        context.push_str("Scope:\n<workspace>\n\n");
+        context.push_str("Scope:\n");
+        context.push_str("workspace: ");
+        context.push_str(workspace_id);
+        context.push('\n');
+        context.push_str("root: ");
+        context.push_str(workspace_root);
+        context.push_str("\n\n");
     }
     context.push_str("Capsules (most recent first):\n");
     for (i, hit) in hits.iter().enumerate() {

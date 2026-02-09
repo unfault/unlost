@@ -15,7 +15,12 @@ pub(crate) async fn run(
     embed_model: String,
     embed_cache_dir: Option<String>,
 ) -> anyhow::Result<()> {
-    let ws = crate::workspace::get_or_create_workspace_paths(&std::env::current_dir()?)?;
+    let cwd = std::env::current_dir()?;
+    let ws = crate::workspace::get_or_create_workspace_paths(&cwd)?;
+    let workspace_root = crate::workspace::git_toplevel(&cwd)
+        .unwrap_or_else(|| crate::workspace::canonicalize_dir(&cwd).unwrap_or(cwd.clone()));
+    let workspace_root = crate::workspace::canonicalize_dir(&workspace_root).unwrap_or(workspace_root);
+    let workspace_root = workspace_root.to_string_lossy().to_string();
 
     let spinner = if let Some(target) = crate::narrative::spinner_draw_target(output) {
         let pb = ProgressBar::new_spinner();
@@ -57,6 +62,14 @@ pub(crate) async fn run(
         Some(ref u) => crate::util::parse_time_filter(u)?,
         None => None,
     };
+
+    let _ = crate::metrics::record_command_recall(
+        &ws,
+        scope_opt.as_deref().unwrap_or(""),
+        limit,
+        emotion_label,
+        provider_label,
+    );
 
     let embedder = crate::embed::load_embedder(
         &embed_model,
@@ -136,6 +149,8 @@ pub(crate) async fn run(
     let narrative = crate::narrative::llm_recall_narrative(
         llm_model.as_deref(),
         scope_opt.as_deref(),
+        &ws.id,
+        &workspace_root,
         &hits,
     )
     .await?;
