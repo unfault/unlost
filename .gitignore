@@ -16,6 +16,7 @@ target/
 # End of https://www.toptal.com/developers/gitignore/api/rust
 .unfault/
 internal/
+.opencode/
 
 # Dependencies
 node_modules/
