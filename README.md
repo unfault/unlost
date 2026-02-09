@@ -113,7 +113,11 @@ unlost query --symbol proxy_request
 
 ## Install
 
-Download the binary from [releases](https://github.com/unfault/unlost/releases).
+```bash
+curl -fsSL https://ul.unfault.dev/install.sh | bash
+```
+
+Or download the binary manually from [releases](https://github.com/unfault/unlost/releases).
 
 ## Dev
 

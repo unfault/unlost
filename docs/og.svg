@@ -1,0 +1,57 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="titleGradient" x1="240" y1="0" x2="980" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#241D45"/>
+      <stop offset="0.55" stop-color="#D1B487"/>
+      <stop offset="1" stop-color="#E74F26"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(980 120) rotate(145) scale(560 420)">
+      <stop stop-color="#D1B487" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#D1B487" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#FFFFFF"/>
+  <rect width="1200" height="630" fill="url(#bgGlow)"/>
+
+  <!-- Header -->
+  <g transform="translate(72 64)">
+    <rect x="0" y="0" width="64" height="64" rx="18" fill="#241D45"/>
+    <image href="public/unlost-logo.png" x="10" y="10" width="44" height="44" preserveAspectRatio="xMidYMid meet"/>
+
+    <text x="84" y="42" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="26" font-weight="600">Unlost</text>
+    <circle cx="172" cy="34" r="6" fill="#E74F26"/>
+
+    <text x="84" y="66" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Local-first agent orientation + workspace memory</text>
+  </g>
+
+  <!-- Title -->
+  <g transform="translate(72 190)">
+    <text x="0" y="0" fill="url(#titleGradient)" font-family="Lexend, DejaVu Sans, sans-serif" font-size="64" font-weight="600">Keep your agents from going off the rails</text>
+  </g>
+
+  <!-- Three boxes -->
+  <g transform="translate(72 280)">
+    <rect x="0" y="0" width="344" height="148" rx="26" fill="#FFFFFF" stroke="#BD51EA" stroke-opacity="0.60" stroke-width="4"/>
+    <text x="26" y="56" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="24" font-weight="600">Intercept context</text>
+    <text x="26" y="92" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Journal agent events, append-only JSONL</text>
+  </g>
+
+  <g transform="translate(428 280)">
+    <rect x="0" y="0" width="344" height="148" rx="26" fill="#FFFFFF" stroke="#00A483" stroke-opacity="0.60" stroke-width="4"/>
+    <text x="26" y="56" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="24" font-weight="600">Detect friction</text>
+    <text x="26" y="92" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Spot drift, retry spirals, false progress</text>
+  </g>
+
+  <g transform="translate(784 280)">
+    <rect x="0" y="0" width="344" height="148" rx="26" fill="#FFFFFF" stroke="#9856CA" stroke-opacity="0.60" stroke-width="4"/>
+    <text x="26" y="56" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="24" font-weight="600">Re-orient agent</text>
+    <text x="26" y="92" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Automatic guidance injection + recall/query</text>
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(72 562)">
+    <text x="0" y="0" fill="#241D45" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="16" font-weight="500" opacity="0.70">unfault.github.io/unlost</text>
+    <text x="1050" y="0" fill="#241D45" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="16" font-weight="500" opacity="0.55" text-anchor="end">github.com/unfault/unlost</text>
+  </g>
+</svg>

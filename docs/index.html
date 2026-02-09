@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unlost - Agent orientation for OpenCode that spots friction and keeps agents on track</title>
+
+  <meta name="description" content="Unlost keeps your agents oriented. It detects friction, records decisions, and lets you recall and query what happened in a codebase.">
+
+  <meta property="og:title" content="Unlost">
+  <meta property="og:description" content="Keep your agents from going off the rails. Detect friction, record decisions, and recall/query what happened.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://unfault.github.io/unlost/">
+  <meta property="og:image" content="https://unfault.github.io/unlost/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Unlost">
+  <meta name="twitter:description" content="Keep your agents from going off the rails. Detect friction, record decisions, and recall/query what happened.">
+  <meta name="twitter:image" content="https://unfault.github.io/unlost/og.png">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Lexend:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <style type="text/tailwindcss">
+    @theme {
+      --color-midnight-violet-950: oklch(15.25% 0.040 290.85);
+      --color-midnight-violet-900: oklch(17.89% 0.053 288.32);
+      --color-midnight-violet-800: oklch(25.80% 0.095 286.19);
+      --color-fiery-terracotta: #E74F26;
+      --color-tan: #D1B487;
+      --font-sans: 'Inter', system-ui, sans-serif;
+      --font-display: 'Lexend', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    @layer base {
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        @apply bg-white text-midnight-violet-950 font-sans antialiased;
+        font-feature-settings: 'liga' 1, 'calt' 1;
+      }
+      h1, h2, h3, h4, h5, h6 {
+        @apply font-medium tracking-tight;
+        font-family: 'Lexend', system-ui, sans-serif;
+      }
+      code {
+        @apply bg-midnight-violet-950/5 px-1.5 py-0.5 rounded text-sm font-mono;
+      }
+      pre {
+        @apply bg-midnight-violet-950 text-white p-5 rounded-lg overflow-x-auto font-mono text-sm leading-relaxed;
+      }
+      pre code {
+        @apply bg-transparent p-0;
+      }
+    }
+
+    @layer components {
+      .section {
+        @apply py-20 px-4 sm:px-6 lg:px-8;
+      }
+      .container-narrow {
+        @apply max-w-2xl mx-auto;
+      }
+      .terminal {
+        @apply bg-midnight-violet-950 rounded-lg p-5 font-mono text-sm;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav id="navbar" class="fixed top-0 left-0 right-0 z-50 bg-white transition-all duration-300">
+    <div class="container-narrow px-4 py-4 flex items-center justify-between">
+      <a href="#" class="text-midnight-violet-950 font-medium">unlost</a>
+      <div class="hidden md:flex items-center gap-6 text-sm">
+        <a href="#problem" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Problem</a>
+        <a href="#solution" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Solution</a>
+        <a href="#install" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Install</a>
+        <a href="#commands" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Commands</a>
+        <a href="https://github.com/unfault/unlost" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <script>
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 10) {
+        navbar.classList.add('bg-white/90', 'backdrop-blur-sm', 'shadow-sm');
+      } else {
+        navbar.classList.remove('bg-white/90', 'backdrop-blur-sm', 'shadow-sm');
+      }
+    });
+  </script>
+
+  <!-- Hero -->
+  <section class="section pt-32">
+    <div class="container-narrow">
+      <h1 class="text-5xl sm:text-6xl mb-6 leading-tight font-medium">
+        Keep your agents from going off track
+      </h1>
+      
+      <p class="text-xl text-midnight-violet-950/60 mb-8 leading-relaxed">
+        Unlost intercepts before your agents drift. It spots friction, 
+        injects guidance, and records what actually happened.
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-16">
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
+          <div class="text-lg font-semibold mb-2" font-['Lexend']>Privacy First</div>
+          <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+            Capsules and indexes stay on your machine.
+          </p>
+        </div>
+
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
+          <div class="text-lg font-semibold mb-2" font-['Lexend']>Open-Source</div>
+          <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+            Built in the open under a MIT license.
+          </p>
+        </div>
+
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
+          <div class="text-lg font-semibold mb-2" font-['Lexend']>Non-Blocking</div>
+          <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+            Journaling returns immediately; heavy work runs async.
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="container-narrow">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div class="text-center">
+          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <img src="public/claude-3.svg" alt="Claude Code" class="w-full h-full object-contain">
+          </div>
+        </div>
+
+        <div class="text-center">
+          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <img src="public/opencode-wordmark-simple-light.svg" alt="OpenCode" class="w-full h-full object-contain">
+          </div>
+        </div>
+
+        <div class="text-center">
+          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center opacity-40">
+            <img src="public/openai-wordmark.svg" alt="Codex" class="w-full h-full object-contain">
+          </div>
+          <p class="text-sm text-midnight-violet-950/40">Coming soon</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The Problem -->
+  <section id="problem" class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">The Babysitting Tax <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      
+      <div class="space-y-8">
+        <div>
+          <div class="flex justify-between items-baseline mb-2">
+            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Drift</div>
+            <h3 class="text-lg font-semibold text-fiery-terracotta">The Apology Loop</h3>
+          </div>
+          <p class="text-midnight-violet-950/70 leading-relaxed">
+            "I'm sorry, you're right. Let me fix that." 
+            <span class="text-midnight-violet-950/40">[Proceeds to break the exact same thing for the 4th time]</span>
+          </p>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-2">
+            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Re-discovery</div>
+            <h3 class="text-lg font-semibold text-fiery-terracotta">Context Gaslighting</h3>
+          </div>
+          <p class="text-midnight-violet-950/70 leading-relaxed">
+            The agent is convinced it fixed the bug. The terminal is a sea of red. 
+            The agent tells you you're wrong.
+          </p>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-2">
+            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">False Progress</div>
+            <h3 class="text-lg font-semibold text-fiery-terracotta">The $50 Side-Quest</h3>
+          </div>
+          <p class="text-midnight-violet-950/70 leading-relaxed">
+            You asked for a CSS tweak; you come back 10 minutes later and it's 
+            refactoring your entire auth flow for no reason.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section id="install" class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Install <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+
+      <div class="space-y-8">
+        <div>
+          <h3 class="text-lg font-semibold mb-4">Get Unlost</h3>
+          <pre><code>curl -fsSL https://ul.unfault.dev/install.sh | bash</code></pre>
+          <small class="text-midnight-violet-950/60">For Windows, please download the binary from our <a href="https://github.com/unfault/unlost/releases" class="text-fiery-terracotta hover:underline">releases</a> page.</small>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-semibold mb-4">Agent Integration</h3>
+          <p class="text-midnight-violet-950/60 mb-4">
+            Hook unlost into your agent. Choose global for system-wide coverage, or per-project for opt-in control.
+          </p>
+          <pre><code># Claude Code - one command, works everywhere
+unlost config agent claudecode --global
+
+# OpenCode - opt-in per repository
+cd your-project
+unlost config agent opencode --path .</code></pre>
+          <small class="text-midnight-violet-950/60">If you want to use Unlost with your favourite agent, please <a href="https://github.com/unfault/unlost/issues" class="text-fiery-terracotta hover:underline">drop us a note</a>.</small>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-semibold mb-4">Configure Your LLM</h3>
+          <p class="text-midnight-violet-950/60 mb-4">
+            Unlost requires an LLM for capsule extraction and summarization. While friction detection 
+            works locally, a dedicated extraction model dramatically improves capsule quality. 
+            Better structured data means more accurate recall and sharper pattern detection.
+          </p>
+          <pre><code>unlost config llm anthropic --model claude-sonnet-4-5-20250929
+unlost config llm openai --model gpt-4o-mini</code></pre>
+          <small class="text-midnight-violet-950/60">
+            <strong>Recommendation:</strong> Use a fast, cheap model like GPT-4o-mini or Claude 3.5 Haiku. 
+            Extraction doesn't need reasoning; just structured output. You'll process thousands of 
+            messages; speed and cost matter more than intelligence.
+          </small>
+        </div>
+
+        <div class="pl-4 border-l-4 border-fiery-terracotta">
+          <p class="text-midnight-violet-950/70">
+            That's it. Next time you start your agent, unlost will automatically work alongside it.
+            <span class="text-midnight-violet-950/50">Happy coding!</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Commands -->
+  <section id="commands" class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Commands <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+
+      <div class="space-y-10">
+        <!-- Memory -->
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost recall</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea]">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Recall the story so far (proactive overview) from a specific file or directory.</p>
+          <pre><code>unlost recall src/http_proxy.rs
+unlost recall src/ --depth 5</code></pre>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost query</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea]">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Semantic search across recorded capsules with natural language.</p>
+          <pre><code>unlost query "why did we rename the capsules table?"
+unlost query --symbol proxy_request
+unlost query "auth flow changes" --since 7d</code></pre>
+        </div>
+
+        <!-- Monitor -->
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483]">Monitor</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Show workspace metrics (local, derived from metrics.jsonl).</p>
+          <pre><code>unlost metrics</code></pre>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost inspect</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483]">Monitor</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Inspect stored capsules for this workspace.</p>
+          <pre><code>unlost inspect</code></pre>
+        </div>
+
+        <!-- Manage -->
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost reindex</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Rebuild LanceDB index from capsules.jsonl.</p>
+          <pre><code>unlost reindex</code></pre>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost clear</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Delete all generated data for the current workspace.</p>
+          <pre><code>unlost clear</code></pre>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost where</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Show where the workspace's files are stored.</p>
+          <pre><code>unlost where</code></pre>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-baseline mb-3">
+            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost config</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Manage configuration (LLM provider, agent integrations, etc.).</p>
+          <pre><code>unlost config
+unlost config agent claudecode --global
+unlost config agent opencode --path .
+unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section id="solution" class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">How It Works <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      
+       <div class="space-y-16">
+         <!-- Step 1 -->
+         <div class="grid grid-cols-12 gap-8 items-start">
+           <div class="col-span-2">
+              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
+           </div>
+           <div class="col-span-10">
+             <h3 class="text-xl font-semibold mb-3">Intercept & Record</h3>
+             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+               Hooks into agent events and writes everything to an append-only JSONL journal. 
+               Non-blocking; returns immediately while processing continues in the background.
+             </p>
+             <div class="terminal">
+               <div class="text-white/40 mb-1"># Journal entry</div>
+               <div class="text-white/80">{timestamp: "2025-02-09T14:23:00Z", event: "message", role: "assistant", content: "..."}</div>
+             </div>
+           </div>
+         </div>
+ 
+         <!-- Step 2 -->
+         <div class="grid grid-cols-12 gap-8 items-start">
+           <div class="col-span-2">
+              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
+           </div>
+           <div class="col-span-10">
+             <h3 class="text-xl font-semibold mb-3">Summarize & Store</h3>
+             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+               LLM extracts structured capsules (intent, decision, rationale, next_steps). 
+               FastEmbed generates local embeddings. Everything stored in LanceDB; no data leaves your machine.
+             </p>
+             <div class="terminal">
+               <div class="text-white/40 mb-1"># Capsule + embedding</div>
+               <div class="text-white/80">{intent: "Fix auth", decision: "Use middleware", rationale: "...", embedding: [0.23, -0.45, ...]}</div>
+             </div>
+           </div>
+         </div>
+ 
+         <!-- Step 3 -->
+         <div class="grid grid-cols-12 gap-8 items-start">
+           <div class="col-span-2">
+              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
+           </div>
+           <div class="col-span-10">
+             <h3 class="text-xl font-semibold mb-3">Friction & Failure Mode Detection</h3>
+             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+               Analyzes conversation patterns in real-time: drift, retry spirals, false progress, 
+               unbounded horizons. Detects when the agent is about to go off the rails.
+             </p>
+             <div class="terminal">
+               <div class="text-white/40 mb-1"># Friction detected</div>
+               <div class="text-fiery-terracotta">retry spiral after 3 failed attempts</div>
+               <div class="text-white/50">pattern: "The Apology Loop" | confidence: 0.87</div>
+             </div>
+           </div>
+         </div>
+ 
+         <!-- Step 4 -->
+         <div class="grid grid-cols-12 gap-8 items-start">
+           <div class="col-span-2">
+              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
+           </div>
+           <div class="col-span-10">
+             <h3 class="text-xl font-semibold mb-3">Injection Decision</h3>
+             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+               Automatic intervention when friction is detected. Injects contextual guidance 
+               into the conversation before the agent sends its next prompt. No manual intervention.
+             </p>
+             <div class="terminal">
+               <div class="text-white/40 mb-1"># System message injected</div>
+               <div class="text-white/80">[SYSTEM: You've attempted this fix 3 times. Consider a different approach.]</div>
+             </div>
+           </div>
+         </div>
+ 
+         <!-- Step 5 -->
+         <div class="grid grid-cols-12 gap-8 items-start">
+           <div class="col-span-2">
+              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
+           </div>
+           <div class="col-span-10">
+             <h3 class="text-xl font-semibold mb-3">Recall & Query</h3>
+             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+               Async semantic search across your workspace memory. Query by natural language, 
+               symbols, or file paths. Returns relevant capsules with context; why did we do X?
+             </p>
+             <div class="terminal">
+               <div class="text-white/40 mb-1"># User query</div>
+               <div class="text-white/80">$ unlost query "why did we switch to postgres?"</div>
+               <div class="text-white/40 mt-2 mb-1"># Result</div>
+               <div class="text-white/80">→ Found: 3 capsules | Intent: "Improve analytics performance"</div>
+             </div>
+           </div>
+         </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- Who's Behind This -->
+  <section class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Who's behind this? <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+
+      <p class="text-midnight-violet-950/60 leading-relaxed">
+        I built Unlost because I keep coming back to codebases (including my own) and spending the first hour
+        rebuilding context. Agents make that worse when they drift and I usually got upset with them. 
+        Unlost is my attempt at keeping the joy alive.
+      </p>
+      <p class="text-midnight-violet-950/60 leading-relaxed mt-4">
+        If something feels rough, open an issue. I read them.
+        <a href="https://github.com/unfault/unlost/issues" class="text-fiery-terracotta hover:underline">github.com/unfault/unlost/issues</a>
+      </p>
+      <p class="text-midnight-violet-950/50 mt-6">- Sylvain</p>
+    </div>
+  </section>
+
+
+  <!-- Footer -->
+  <footer class="py-12 px-4">
+    <div class="container-narrow flex items-center justify-between text-sm text-midnight-violet-950/40">
+      <span>MIT License · © 2026 Sylvain Hellegouarch</span>
+      <div class="flex items-center gap-4">
+        <a href="https://github.com/unfault/unlost" class="text-midnight-violet-950/60 hover:text-fiery-terracotta transition-colors">GitHub</a>
+        <a href="https://unfault.dev" class="text-midnight-violet-950/60 hover:text-fiery-terracotta transition-colors">unfault.dev</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
