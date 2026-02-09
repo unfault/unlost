@@ -1,8 +1,27 @@
 # Changelog
 
+## [0.1.1] - 2026-02-09
+
+### Added
+- OpenCode plugin integration with friction detection
+- Agent session ID tracking for multi-session workflows
+- Async companion recording with usage-aware output
+- Query and recall filter flags (`--session`, `--agent`, etc.)
+- Windows support with `ort` copy-dylibs enabled
+
+### Changed
+- OpenCode config switched to plugin-only + global install pattern
+- Shim architecture extracted for companion flow separation
+- README overhauled with agent orientation and failure modes
+
+### Fixed
+- Suppressed duplicate flush jobs
+- Improved recall output formatting
+
 ## [0.1.0] - 2026-01-26
 
-- Added local mood metadata (ONNX) stored alongside capsules
+### Added
+- Local mood metadata (ONNX) stored alongside capsules
 - Recall prompt now includes mood and per-request metadata for richer storytelling
 
 Initial public version.
@@ -18,4 +37,5 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
-[0.1.0]: https://github.com/unfault/cli/compare/HEAD
+[0.1.1]: https://github.com/unfault/unlost/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/unfault/unlost/releases/tag/v0.1.0
