@@ -37,6 +37,7 @@ ort = { version = "2.0.0-rc.11", default-features = false, features = [
   "ndarray",
   "tracing",
   "download-binaries",
+  "copy-dylibs",
   "tls-rustls",
 ] }
 tokenizers = { version = "0.20.4", default-features = false, features = ["onig"] }
