@@ -78,7 +78,91 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
   }
 
   const dumpEvents = process.env.UNLOST_DEBUG_DUMP_EVENTS === "1"
+  const recordTouchedPaths = process.env.UNLOST_RECORD_TOUCHED_PATHS !== "0"
   const recordGitPaths = process.env.UNLOST_RECORD_GIT_PATHS === "1"
+
+  // Best-effort: track last session we saw activity for.
+  // Some events (eg `file.edited`) may not carry session IDs.
+  let lastSeenSessionId: string | null = null
+
+  // Track touched paths per session. This is the preferred signal source for
+  // file association in capsules. It comes from OpenCode events like `file.edited`
+  // and tool execution hooks.
+  const touchedPathsBySession = new Map<string, Set<string>>()
+
+  const UNKNOWN_SESSION_KEY = "*"
+
+  function normalizeTouchedPath(p: string): string | null {
+    let s = (p || "").trim()
+    if (!s) return null
+
+    // Normalize slashes.
+    s = s.replace(/\\/g, "/")
+
+    // Strip leading ./
+    if (s.startsWith("./")) s = s.slice(2)
+
+    // If absolute under workingDirectory, strip prefix.
+    const wd = workingDirectory.replace(/\\/g, "/").replace(/\/$/, "")
+    if (s.startsWith(wd + "/")) {
+      s = s.slice(wd.length + 1)
+    }
+
+    // Drop obvious non-path junk.
+    if (!s) return null
+    if (s === "/") return null
+    if (s.startsWith("http://") || s.startsWith("https://")) return null
+
+    // Keep it workspace-relative.
+    if (s.startsWith("/")) s = s.slice(1)
+    if (!s) return null
+
+    // Size guard.
+    if (s.length > 260) return null
+
+    return s
+  }
+
+  function resolveSessionId(sessionId: string | null): string {
+    return sessionId || lastSeenSessionId || UNKNOWN_SESSION_KEY
+  }
+
+  function addTouchedPath(sessionId: string | null, p: string) {
+    if (!recordTouchedPaths) return
+    const norm = normalizeTouchedPath(p)
+    if (!norm) return
+
+    const sid = resolveSessionId(sessionId)
+    const set = touchedPathsBySession.get(sid) || new Set<string>()
+    set.add(norm)
+    touchedPathsBySession.set(sid, set)
+  }
+
+  function drainTouchedPaths(sessionId: string): string[] {
+    const sid = sessionId || UNKNOWN_SESSION_KEY
+
+    const out: string[] = []
+    const seen = new Set<string>()
+
+    const takeFrom = (key: string) => {
+      const set = touchedPathsBySession.get(key)
+      if (!set) return
+      touchedPathsBySession.delete(key)
+      for (const p of set) {
+        if (out.length >= 64) break
+        if (!seen.has(p)) {
+          seen.add(p)
+          out.push(p)
+        }
+      }
+    }
+
+    takeFrom(sid)
+    if (sid !== UNKNOWN_SESSION_KEY) {
+      takeFrom(UNKNOWN_SESSION_KEY)
+    }
+    return out
+  }
 
   function getGitTouchedPaths(): string[] {
     if (!recordGitPaths) return []
@@ -244,7 +328,9 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     const userText = userMsg?.text || ""
     const assistantText = assistantMsg?.text || ""
-    const touchedPaths = getGitTouchedPaths()
+    const touchedPaths = drainTouchedPaths(sessionId)
+    const gitTouchedPaths = getGitTouchedPaths()
+    const touchedPathsToSend = [...touchedPaths, ...gitTouchedPaths].slice(0, 64)
 
     if (!userText && !assistantText) return
 
@@ -256,7 +342,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
       user_text: userText,
       assistant_text: assistantText,
       directory: workingDirectory,
-      touched_paths: touchedPaths,
+      touched_paths: touchedPathsToSend,
       agent_session_id: sessionId,
       usage: usageToSend,
     }).catch(() => {})
@@ -341,12 +427,116 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     // Capture message metadata and content via events
     event: async ({ event }) => {
+      const e = event as any
+      const etype = (e?.type || "") as string
+
       if (dumpEvents) {
-        log("info", `RAW_EVENT ${event.type} ${safeJson(event)}`)
+        log("info", `RAW_EVENT ${etype} ${safeJson(e)}`)
+      }
+
+      // file.edited - track touched paths for better capsule symbols
+      if (etype === "file.edited") {
+        try {
+          const props = e.properties as { file?: string; path?: string; sessionID?: string; sessionId?: string }
+          const sid = (props.sessionID || props.sessionId || null) as string | null
+          const p = props.file || props.path || ""
+          if (p) addTouchedPath(sid, p)
+        } catch {
+          // ignore
+        }
+      }
+
+      // file.watcher.updated - can include a batch of updated paths
+      if (etype === "file.watcher.updated") {
+        try {
+          const props = e.properties as {
+            file?: string
+            files?: string[]
+            paths?: string[]
+            sessionID?: string
+            sessionId?: string
+          }
+          const sid = (props.sessionID || props.sessionId || null) as string | null
+
+          if (typeof props.file === "string" && props.file) {
+            addTouchedPath(sid, props.file)
+          }
+          const list = (props.paths || props.files || []) as string[]
+          for (const p of list) addTouchedPath(sid, p)
+        } catch {
+          // ignore
+        }
+      }
+
+      // session.diff - includes file diffs (good touched-path signal)
+      if (etype === "session.diff") {
+        try {
+          const props = e.properties as { sessionID?: string; sessionId?: string; diff?: Array<{ file?: string }> }
+          const sid = (props.sessionID || props.sessionId || null) as string | null
+          for (const d of props.diff || []) {
+            if (d?.file) addTouchedPath(sid, d.file)
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // tool.execute.before/after may include file paths in args/result
+      if (etype === "tool.execute.before" || etype === "tool.execute.after") {
+        try {
+          const props = e.properties as {
+            sessionID?: string
+            sessionId?: string
+            tool?: { name?: string; input?: unknown; args?: unknown }
+            input?: unknown
+            args?: unknown
+            result?: unknown
+          }
+          const sid = (props.sessionID || props.sessionId || null) as string | null
+          const candidates: unknown[] = []
+          if (props.tool) {
+            candidates.push(props.tool.input, props.tool.args)
+          }
+          candidates.push(props.input, props.args, props.result)
+
+          const visit = (v: unknown) => {
+            if (!v) return
+            if (typeof v === "string") {
+              // Avoid scanning arbitrary strings; accept only path-like patterns.
+              if (v.includes("/") || v.includes("\\") || v.includes(".")) {
+                addTouchedPath(sid, v)
+              }
+              return
+            }
+            if (Array.isArray(v)) {
+              for (const x of v) visit(x)
+              return
+            }
+            if (typeof v === "object") {
+              const o = v as Record<string, unknown>
+              for (const k of [
+                "path",
+                "file",
+                "file_path",
+                "filePath",
+                "filepath",
+                "filename",
+                "target",
+              ]) {
+                if (o[k]) visit(o[k])
+              }
+              return
+            }
+          }
+
+          for (const c of candidates) visit(c)
+        } catch {
+          // ignore
+        }
       }
 
       // message.updated - get role and session mapping
-      if (event.type === "message.updated") {
+      if (etype === "message.updated") {
         const props = event.properties as {
           info?: {
             id?: string
@@ -365,6 +555,8 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
         }
         const info = props?.info
         if (info?.id && info?.sessionID && info?.role) {
+          lastSeenSessionId = info.sessionID
+
           const existing = messageData.get(info.id)
           const usage: Usage | undefined =
             info.role === "assistant"
@@ -404,23 +596,42 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
       }
 
       // message.part.updated - get actual text content
-      if (event.type === "message.part.updated") {
-        const props = event.properties as {
-          part?: {
-            type?: string
-            messageID?: string
-            sessionID?: string
-            text?: string
-            cost?: number
-            tokens?: {
-              input?: number
-              output?: number
-              reasoning?: number
-              cache?: { read?: number; write?: number }
+      if (etype === "message.part.updated") {
+        const props = event.properties as { part?: unknown }
+        const part = props?.part as any
+
+        if (typeof part?.sessionID === "string" && part.sessionID) {
+          lastSeenSessionId = part.sessionID
+        }
+
+        // Rich signals for file association:
+        // - patch parts list files
+        // - tool parts may have file attachments with `source.path`
+        // - file parts have `source.path`
+        if (part?.type === "patch" && Array.isArray(part.files) && part.sessionID) {
+          for (const f of part.files) {
+            if (typeof f === "string") addTouchedPath(part.sessionID, f)
+          }
+        }
+
+        if (part?.type === "file" && part.sessionID) {
+          const p = part?.source?.path
+          if (typeof p === "string") addTouchedPath(part.sessionID, p)
+          const fn = part?.filename
+          if (typeof fn === "string") addTouchedPath(part.sessionID, fn)
+        }
+
+        if (part?.type === "tool" && part.sessionID) {
+          const atts = part?.state?.attachments
+          if (Array.isArray(atts)) {
+            for (const a of atts) {
+              const p = a?.source?.path
+              if (typeof p === "string") addTouchedPath(part.sessionID, p)
+              const fn = a?.filename
+              if (typeof fn === "string") addTouchedPath(part.sessionID, fn)
             }
           }
         }
-        const part = props?.part
 
         if (part?.type === "text" && part?.messageID && part?.sessionID && typeof part?.text === "string") {
           const existing = messageData.get(part.messageID)
@@ -484,10 +695,11 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
       }
 
       // session.idle - record the exchange
-      if (event.type === "session.idle") {
+      if (etype === "session.idle") {
         const props = event.properties as { sessionID?: string }
         const sessionId = props?.sessionID
         if (sessionId) {
+          lastSeenSessionId = sessionId
           log("debug", `session.idle: ${sessionId}`)
           // Small delay to ensure all message.part.updated events are processed
           setTimeout(() => {
