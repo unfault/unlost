@@ -429,15 +429,15 @@ impl ServeState {
 
 pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
-Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
-\n\
-Rules:\n\
-- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
-- Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
-- Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
-\n\
-Failure mode detection - set failure_mode to one of:\n\
+ Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
+ \n\
+ Rules:\n\
+ - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
+ - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
+ - Keep each field concise; next_steps max 3.\n\
+ - symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned. If a 'Touched paths:' section is present, include those paths in symbols.\n\
+ \n\
+ Failure mode detection - set failure_mode to one of:\n\
 - none: No failure mode detected, conversation is productive.\n\
 - drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
 - rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
@@ -496,7 +496,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         .ok()
         .flatten();
 
-        let capsule =
+        let mut capsule =
             match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -510,6 +510,8 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                     continue;
                 }
             };
+
+        crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
 
         let ws_paths = state.workspace_paths(&job.workspace_id);
         if let Err(e) = append_capsule_jsonl(
@@ -569,15 +571,15 @@ pub(crate) async fn process_flush_jobs_proxy(
     emotion: Arc<std::sync::Mutex<EmotionModel>>,
 ) {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
-Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
-\n\
-Rules:\n\
-- Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
-- Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
-- Keep each field concise; next_steps max 3.\n\
-- symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
-\n\
-Failure mode detection - set failure_mode to one of:\n\
+ Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
+ \n\
+ Rules:\n\
+ - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
+ - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
+ - Keep each field concise; next_steps max 3.\n\
+ - symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned. If a 'Touched paths:' section is present, include those paths in symbols.\n\
+ \n\
+ Failure mode detection - set failure_mode to one of:\n\
 - none: No failure mode detected, conversation is productive.\n\
 - drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
 - rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
@@ -636,7 +638,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         .ok()
         .flatten();
 
-        let capsule =
+        let mut capsule =
             match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
                 Ok(c) => c,
                 Err(e) => {
@@ -650,6 +652,8 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                     continue;
                 }
             };
+
+        crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
 
         if let Err(e) = append_capsule_jsonl(
             &ws.capsules_jsonl,

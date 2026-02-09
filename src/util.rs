@@ -167,6 +167,148 @@ pub(crate) fn wrap_plain_text(input: &str, width: usize) -> String {
     out
 }
 
+fn looks_like_file_token(mut s: &str) -> Option<&str> {
+    s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Trim common punctuation/bracketing around tokens.
+    while let Some(ch) = s.chars().next() {
+        if ch.is_ascii_punctuation() && ch != '/' && ch != '.' && ch != '_' && ch != '-' {
+            s = &s[ch.len_utf8()..];
+            continue;
+        }
+        break;
+    }
+    while let Some(ch) = s.chars().rev().next() {
+        if ch.is_ascii_punctuation() && ch != '/' && ch != '.' && ch != '_' && ch != '-' {
+            s = &s[..s.len() - ch.len_utf8()];
+            continue;
+        }
+        break;
+    }
+
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.starts_with("http://") || s.starts_with("https://") {
+        return None;
+    }
+
+    // Heuristics: paths or common filename extensions.
+    if s.contains('/') || s.starts_with("./") {
+        return Some(s);
+    }
+
+    const EXTS: [&str; 18] = [
+        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".md", ".toml", ".json", ".yml",
+        ".yaml", ".html", ".css", ".scss", ".png", ".svg", ".sh",
+    ];
+    if EXTS.iter().any(|e| s.ends_with(e)) {
+        return Some(s);
+    }
+
+    None
+}
+
+pub(crate) fn extract_touched_paths_from_exchange_input(input: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1) Prefer explicit section injected by the companion flow.
+    let mut in_touched = false;
+    for line in input.lines() {
+        let l = line.trim_end();
+        if !in_touched {
+            if l.trim() == "Touched paths:" {
+                in_touched = true;
+            }
+            continue;
+        }
+
+        if l.trim().is_empty() {
+            break;
+        }
+        if let Some(tok) = looks_like_file_token(l) {
+            let tok = tok.trim_start_matches("./");
+            if !tok.is_empty() && seen.insert(tok.to_string()) {
+                out.push(tok.to_string());
+            }
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+
+    // 2) Also scan for inline mentions in the conversation slice.
+    if out.len() < 64 {
+        // Backtick-enclosed tokens are often paths.
+        let mut cur = String::new();
+        let mut in_ticks = false;
+        for ch in input.chars() {
+            if ch == '`' {
+                if in_ticks {
+                    if let Some(tok) = looks_like_file_token(&cur) {
+                        let tok = tok.trim_start_matches("./");
+                        if !tok.is_empty() && seen.insert(tok.to_string()) {
+                            out.push(tok.to_string());
+                        }
+                    }
+                    cur.clear();
+                }
+                in_ticks = !in_ticks;
+                continue;
+            }
+            if in_ticks {
+                if cur.len() < 512 {
+                    cur.push(ch);
+                }
+            }
+        }
+
+        // Whitespace tokens (best-effort).
+        for raw in input.split_whitespace() {
+            if out.len() >= 64 {
+                break;
+            }
+            if let Some(tok) = looks_like_file_token(raw) {
+                let tok = tok.trim_start_matches("./");
+                if !tok.is_empty() && seen.insert(tok.to_string()) {
+                    out.push(tok.to_string());
+                }
+            }
+        }
+    }
+
+    out
+}
+
+pub(crate) fn augment_capsule_symbols_from_input(capsule: &mut crate::IntentCapsule, input: &str) {
+    let extracted = extract_touched_paths_from_exchange_input(input);
+    if extracted.is_empty() {
+        return;
+    }
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut merged: Vec<String> = Vec::new();
+
+    for s in capsule.symbols.iter() {
+        if seen.insert(s.clone()) {
+            merged.push(s.clone());
+        }
+    }
+    for s in extracted {
+        if seen.insert(s.clone()) {
+            merged.push(s);
+        }
+    }
+
+    merged.truncate(32);
+    capsule.symbols = merged;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
