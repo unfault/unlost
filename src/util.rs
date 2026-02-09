@@ -167,29 +167,12 @@ pub(crate) fn wrap_plain_text(input: &str, width: usize) -> String {
     out
 }
 
-fn looks_like_file_token(mut s: &str) -> Option<&str> {
-    s = s.trim();
-    if s.is_empty() {
-        return None;
+fn normalize_file_token(raw: &str) -> Option<String> {
+    fn allowed(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')
     }
 
-    // Trim common punctuation/bracketing around tokens.
-    while let Some(ch) = s.chars().next() {
-        if ch.is_ascii_punctuation() && ch != '/' && ch != '.' && ch != '_' && ch != '-' {
-            s = &s[ch.len_utf8()..];
-            continue;
-        }
-        break;
-    }
-    while let Some(ch) = s.chars().rev().next() {
-        if ch.is_ascii_punctuation() && ch != '/' && ch != '.' && ch != '_' && ch != '-' {
-            s = &s[..s.len() - ch.len_utf8()];
-            continue;
-        }
-        break;
-    }
-
-    let s = s.trim();
+    let mut s = raw.trim();
     if s.is_empty() {
         return None;
     }
@@ -197,17 +180,69 @@ fn looks_like_file_token(mut s: &str) -> Option<&str> {
         return None;
     }
 
-    // Heuristics: paths or common filename extensions.
-    if s.contains('/') || s.starts_with("./") {
+    // Trim leading/trailing non-path punctuation.
+    while let Some(ch) = s.chars().next() {
+        if allowed(ch) {
+            break;
+        }
+        s = &s[ch.len_utf8()..];
+    }
+    while let Some(ch) = s.chars().rev().next() {
+        if allowed(ch) {
+            break;
+        }
+        s = &s[..s.len() - ch.len_utf8()];
+    }
+
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Normalize slashes and leading ./
+    let s = s.replace('\\', "/");
+    let s = s.strip_prefix("./").unwrap_or(&s).to_string();
+    if s.is_empty() || s == "/" {
+        return None;
+    }
+
+    // Require at least one alnum so we don't ingest junk like "/".
+    if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+
+    // Treat absolute-looking tokens as relative by stripping the leading slash.
+    let s = s.strip_prefix('/').unwrap_or(&s).to_string();
+    if s.is_empty() {
+        return None;
+    }
+
+    let has_sep = s.contains('/');
+    let last_seg = s.rsplit('/').next().unwrap_or(s.as_str());
+    let has_ext = last_seg.rsplit_once('.').is_some_and(|(_, ext)| {
+        let ext = ext.trim();
+        !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    });
+
+    // Allow: clear file paths, or common repo directories.
+    if has_ext {
         return Some(s);
     }
 
-    const EXTS: [&str; 18] = [
-        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".md", ".toml", ".json", ".yml",
-        ".yaml", ".html", ".css", ".scss", ".png", ".svg", ".sh",
-    ];
-    if EXTS.iter().any(|e| s.ends_with(e)) {
-        return Some(s);
+    if has_sep {
+        const PREFIXES: [&str; 8] = [
+            "src/",
+            "docs/",
+            "agents/",
+            "tests/",
+            "examples/",
+            "crates/",
+            ".github/",
+            "scripts/",
+        ];
+        if PREFIXES.iter().any(|p| s.starts_with(p)) {
+            return Some(s);
+        }
     }
 
     None
@@ -231,10 +266,9 @@ pub(crate) fn extract_touched_paths_from_exchange_input(input: &str) -> Vec<Stri
         if l.trim().is_empty() {
             break;
         }
-        if let Some(tok) = looks_like_file_token(l) {
-            let tok = tok.trim_start_matches("./");
-            if !tok.is_empty() && seen.insert(tok.to_string()) {
-                out.push(tok.to_string());
+        if let Some(tok) = normalize_file_token(l) {
+            if seen.insert(tok.clone()) {
+                out.push(tok);
             }
         }
         if out.len() >= 64 {
@@ -250,10 +284,9 @@ pub(crate) fn extract_touched_paths_from_exchange_input(input: &str) -> Vec<Stri
         for ch in input.chars() {
             if ch == '`' {
                 if in_ticks {
-                    if let Some(tok) = looks_like_file_token(&cur) {
-                        let tok = tok.trim_start_matches("./");
-                        if !tok.is_empty() && seen.insert(tok.to_string()) {
-                            out.push(tok.to_string());
+                    if let Some(tok) = normalize_file_token(&cur) {
+                        if seen.insert(tok.clone()) {
+                            out.push(tok);
                         }
                     }
                     cur.clear();
@@ -268,18 +301,7 @@ pub(crate) fn extract_touched_paths_from_exchange_input(input: &str) -> Vec<Stri
             }
         }
 
-        // Whitespace tokens (best-effort).
-        for raw in input.split_whitespace() {
-            if out.len() >= 64 {
-                break;
-            }
-            if let Some(tok) = looks_like_file_token(raw) {
-                let tok = tok.trim_start_matches("./");
-                if !tok.is_empty() && seen.insert(tok.to_string()) {
-                    out.push(tok.to_string());
-                }
-            }
-        }
+        // NOTE: we intentionally avoid scanning arbitrary whitespace tokens to reduce false positives.
     }
 
     out
