@@ -1,3 +1,7 @@
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::needless_option_as_deref)]
+#![allow(clippy::too_many_arguments)]
+
 use clap::{CommandFactory, Parser};
 
 mod analysis;
@@ -25,9 +29,9 @@ mod workspace;
 mod test_support;
 
 pub(crate) use crate::llm::llm_extract;
-pub(crate) use crate::types::{CapsuleHit, InitCapsulesOutput, QueryNarrativeOutput, ResponseMeta};
 pub use crate::types::IntentCapsule;
-pub(crate) use crate::workspace::{now_ms, unlost_data_root, unlost_workspace_dir, WorkspacePaths};
+pub(crate) use crate::types::{CapsuleHit, InitCapsulesOutput, QueryNarrativeOutput, ResponseMeta};
+pub(crate) use crate::workspace::{WorkspacePaths, now_ms, unlost_data_root, unlost_workspace_dir};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -174,8 +178,17 @@ async fn main() -> anyhow::Result<()> {
         crate::cli::Command::Metrics { path } => {
             crate::commands::metrics::run(path)?;
         }
-        crate::cli::Command::Inspect { path, limit, emotion, provider, since, until, filter } => {
-            crate::commands::inspect::run(path, limit, emotion, provider, since, until, filter).await?;
+        crate::cli::Command::Inspect {
+            path,
+            limit,
+            emotion,
+            provider,
+            since,
+            until,
+            filter,
+        } => {
+            crate::commands::inspect::run(path, limit, emotion, provider, since, until, filter)
+                .await?;
         }
         crate::cli::Command::Init {
             path,

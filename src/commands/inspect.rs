@@ -42,7 +42,13 @@ pub(crate) async fn run(
     };
 
     match crate::storage::scan_capsules_lancedb_recent(
-        &ws, limit, filter.as_deref(), emotion_label.as_deref(), provider_label.as_deref(), since_ms, until_ms,
+        &ws,
+        limit,
+        filter.as_deref(),
+        emotion_label.as_deref(),
+        provider_label.as_deref(),
+        since_ms,
+        until_ms,
     )
     .await
     {
@@ -53,7 +59,7 @@ pub(crate) async fn run(
                 let meta = hit.meta;
                 println!("---");
                 println!("chunked_at: {}", fmt_ts_utc(hit.ts_ms));
-if let Some(ref session) = meta.agent_session_id {
+                if let Some(ref session) = meta.agent_session_id {
                     println!("session:   {}", session);
                 }
                 println!(
@@ -79,16 +85,39 @@ if let Some(ref session) = meta.agent_session_id {
                 if let Some(ref u) = meta.usage {
                     let model = u.model_id.as_deref().unwrap_or("-");
                     let provider = u.provider_id.as_deref().unwrap_or("-");
-                    let cost = u.cost.map(|c| format!("{c:.6}")).unwrap_or_else(|| "-".to_string());
-                    let tokens = u.tokens_total().map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-                    let input = u.tokens_input.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-                    let output = u.tokens_output.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-                    let reasoning = u.tokens_reasoning.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-                    let cache_r = u.tokens_cache_read.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-                    let cache_w = u.tokens_cache_write.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
+                    let cost = u
+                        .cost
+                        .map(|c| format!("{c:.6}"))
+                        .unwrap_or_else(|| "-".to_string());
+                    let tokens = u
+                        .tokens_total()
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let input = u
+                        .tokens_input
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let output = u
+                        .tokens_output
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let reasoning = u
+                        .tokens_reasoning
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let cache_r = u
+                        .tokens_cache_read
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let cache_w = u
+                        .tokens_cache_write
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "-".to_string());
                     println!("model:     {provider}/{model}");
                     println!("cost:      {cost}");
-                    println!("tokens:    total={tokens} in={input} out={output} reason={reasoning} cache_r={cache_r} cache_w={cache_w}");
+                    println!(
+                        "tokens:    total={tokens} in={input} out={output} reason={reasoning} cache_r={cache_r} cache_w={cache_w}"
+                    );
                 }
                 if !cap.intent.trim().is_empty() {
                     println!("intent:    {}", cap.intent);

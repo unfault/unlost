@@ -7,18 +7,18 @@
 //! Shims (e.g., `opencode_stdio`) translate external protocols into these events
 //! and call the flow methods.
 
+use crate::IntentCapsule;
 use crate::embed::Embedder;
-use crate::emotion::{apply_context_heuristics, map_go_emotions, EmotionConfig, EmotionModel};
+use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
 use crate::governor::{evaluate_decision_conflict, evaluate_failure_modes, evaluate_friction};
-use crate::recording::{looks_like_commit_or_pr, ChunkInput, FlushJob, WorkspaceChunker};
+use crate::recording::{ChunkInput, FlushJob, WorkspaceChunker, looks_like_commit_or_pr};
 use crate::storage::{ensure_capsules_table, insert_capsule_row};
 use crate::types::UsageMeta;
 use crate::workspace::get_or_create_workspace_paths;
-use crate::IntentCapsule;
 use lancedb::connection::Connection;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -47,6 +47,7 @@ pub(crate) struct CheckEvent {
     /// User's message text
     pub text: String,
     /// Which agent platform this came from
+    #[allow(dead_code)]
     pub agent_kind: AgentKind,
     /// Optional session ID for grouping
     #[allow(dead_code)]
@@ -152,8 +153,12 @@ impl BackgroundState {
 
     async fn ensure_embedder(&mut self) -> anyhow::Result<Embedder> {
         if self.embedder.is_none() {
-            let cache_path = self.embed_cache_dir.as_deref().map(std::path::PathBuf::from);
-            let embedder = crate::embed::load_embedder(&self.embed_model, cache_path, false).await?;
+            let cache_path = self
+                .embed_cache_dir
+                .as_deref()
+                .map(std::path::PathBuf::from);
+            let embedder =
+                crate::embed::load_embedder(&self.embed_model, cache_path, false).await?;
             self.embedder = Some(embedder.clone());
             Ok(embedder)
         } else {
@@ -161,7 +166,11 @@ impl BackgroundState {
         }
     }
 
-    async fn db_for(&mut self, workspace_id: &str, db_dir: &std::path::Path) -> anyhow::Result<Connection> {
+    async fn db_for(
+        &mut self,
+        workspace_id: &str,
+        db_dir: &std::path::Path,
+    ) -> anyhow::Result<Connection> {
         if let Some(db) = self.db_cache.get(workspace_id) {
             return Ok(db.clone());
         }
@@ -234,7 +243,12 @@ impl Flow {
             background_worker(job_rx, bg_state_clone).await;
         });
 
-        Self { state, bg_state, job_tx, worker_handle }
+        Self {
+            state,
+            bg_state,
+            job_tx,
+            worker_handle,
+        }
     }
 
     /// Drain pending jobs and shut down the background worker.
@@ -263,7 +277,7 @@ impl Flow {
             session = event.agent_session_id.as_deref().unwrap_or("-"),
             "check called"
         );
-        
+
         if event.directory.is_empty() {
             return CheckResult {
                 note: None,
@@ -320,14 +334,21 @@ impl Flow {
                             session = event.agent_session_id.as_deref().unwrap_or("-"),
                             "decision conflict intervention will be injected"
                         );
-                        return CheckResult { note: Some(note), error: None };
+                        return CheckResult {
+                            note: Some(note),
+                            error: None,
+                        };
                     }
                 }
             }
         }
 
         // Load recent capsules (most recent first)
-        let history = match crate::storage::scan_capsules_lancedb_recent(&ws, 5, None, None, None, None, None).await {
+        let history = match crate::storage::scan_capsules_lancedb_recent(
+            &ws, 5, None, None, None, None, None,
+        )
+        .await
+        {
             Ok(h) => h,
             Err(e) => {
                 tracing::debug!("scan_capsules_lancedb_recent failed: {e}");
@@ -337,7 +358,10 @@ impl Flow {
 
         // If we have no history, nothing to check friction/failure-modes against
         if history.is_empty() {
-            return CheckResult { note: None, error: None };
+            return CheckResult {
+                note: None,
+                error: None,
+            };
         }
 
         // Extract symbols from the text
@@ -373,7 +397,7 @@ impl Flow {
 
         // First check for friction (emotion + symbol repetition OR conversational frustration)
         let note = evaluate_friction(&current, user_emotion.as_ref(), &history);
-        
+
         if note.is_some() {
             tracing::info!(
                 workspace = %ws.id,
@@ -383,10 +407,10 @@ impl Flow {
             );
             return CheckResult { note, error: None };
         }
-        
+
         // If no friction, check for LLM-detected failure modes (drift, false_progress, rediscovery)
         let note = evaluate_failure_modes(&history);
-        
+
         if note.is_some() {
             tracing::info!(
                 workspace = %ws.id,
@@ -395,7 +419,7 @@ impl Flow {
                 "failure mode check returned warning"
             );
         }
-        
+
         CheckResult { note, error: None }
     }
 
@@ -431,7 +455,10 @@ impl Flow {
 
         // Skip if both texts are empty
         if event.user_text.trim().is_empty() && event.assistant_text.trim().is_empty() {
-            return RecordResult { ok: true, error: None };
+            return RecordResult {
+                ok: true,
+                error: None,
+            };
         }
 
         // Build exchange text in the format expected by the chunker
@@ -487,7 +514,10 @@ impl Flow {
         self.state.chunker.flush_workspace(&ws.id).await;
 
         // Return immediately; the background worker will process the job asynchronously.
-        RecordResult { ok: true, error: None }
+        RecordResult {
+            ok: true,
+            error: None,
+        }
     }
 }
 
@@ -505,7 +535,10 @@ async fn background_worker(rx: kanal::AsyncReceiver<FlushJob>, state: Arc<Mutex<
     }
 }
 
-async fn process_flush_job(state: &Arc<Mutex<BackgroundState>>, job: FlushJob) -> anyhow::Result<()> {
+async fn process_flush_job(
+    state: &Arc<Mutex<BackgroundState>>,
+    job: FlushJob,
+) -> anyhow::Result<()> {
     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
 Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
 \n\
@@ -584,7 +617,14 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
     };
 
     // Append to JSONL (cheap, local)
-    append_capsule_jsonl(&ws.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule)?;
+    append_capsule_jsonl(
+        &ws.capsules_jsonl,
+        job.ts_ms,
+        job.conn_id,
+        job.exchange_seq,
+        &job.meta,
+        &capsule,
+    )?;
 
     let _ = crate::metrics::record_capsule_saved(
         &ws,

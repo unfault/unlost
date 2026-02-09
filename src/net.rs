@@ -1,9 +1,9 @@
 use anyhow::Context;
 use bytes::Bytes;
 use futures_util::TryStreamExt;
-use http_body_util::{BodyExt, BodyStream, combinators::BoxBody, Full};
-use hyper::header::{HeaderMap, HeaderName, HeaderValue};
+use http_body_util::{BodyExt, BodyStream, Full, combinators::BoxBody};
 use hyper::Uri;
+use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 
 pub(crate) fn hop_by_hop_names(headers: &HeaderMap) -> Vec<HeaderName> {
     // RFC 7230 §6.1: headers listed in `Connection` are hop-by-hop.
@@ -80,12 +80,12 @@ pub(crate) fn build_upstream_uri(
 ) -> anyhow::Result<Uri> {
     let pq = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
     let authority = format!("{upstream_host}:{upstream_port}");
-    Ok(Uri::builder()
+    Uri::builder()
         .scheme("https")
         .authority(authority)
         .path_and_query(pq)
         .build()
-        .context("failed to build upstream URI")?)
+        .context("failed to build upstream URI")
 }
 
 pub(crate) fn text_body(msg: &'static [u8]) -> BoxBody<Bytes, hyper::Error> {
@@ -186,9 +186,7 @@ pub(crate) fn extract_openai_message_text(v: &serde_json::Value) -> Option<Strin
 }
 
 pub(crate) fn extract_anthropic_user_text(v: &serde_json::Value) -> Option<String> {
-    let Some(messages) = v.get("messages").and_then(|m| m.as_array()) else {
-        return None;
-    };
+    let messages = v.get("messages").and_then(|m| m.as_array())?;
 
     let mut out: Vec<String> = Vec::new();
     for msg in messages.iter().rev() {
@@ -248,9 +246,7 @@ pub(crate) fn extract_openai_assistant_text_from_json(v: &serde_json::Value) -> 
 }
 
 pub(crate) fn extract_anthropic_assistant_text_from_json(v: &serde_json::Value) -> Option<String> {
-    let Some(content) = v.get("content") else {
-        return None;
-    };
+    let content = v.get("content")?;
     if let Some(s) = content.as_str() {
         return Some(s.to_string());
     }
@@ -287,7 +283,8 @@ pub(crate) fn extract_symbols_from_body(body: &[u8], path: &str) -> Vec<String> 
         extract_openai_message_text(&json)
     };
 
-    text.map(|t| extract_symbols_from_text(&t)).unwrap_or_default()
+    text.map(|t| extract_symbols_from_text(&t))
+        .unwrap_or_default()
 }
 
 /// Extract file paths and identifiers from text.
@@ -297,11 +294,24 @@ pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
     // File paths: src/foo.rs, ./lib/bar.py, auth.ts
     // Match patterns like word/word.ext or ./word.ext
     for word in text.split_whitespace() {
-        let word = word.trim_matches(|c: char| c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ',');
+        let word = word.trim_matches(|c: char| {
+            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ','
+        });
         // Check if it looks like a file path
-        if word.contains('.') && (word.contains('/') || word.ends_with(".rs") || word.ends_with(".ts") || word.ends_with(".py") || word.ends_with(".js") || word.ends_with(".go")) {
+        if word.contains('.')
+            && (word.contains('/')
+                || word.ends_with(".rs")
+                || word.ends_with(".ts")
+                || word.ends_with(".py")
+                || word.ends_with(".js")
+                || word.ends_with(".go"))
+        {
             // Basic sanity: not too long, has reasonable characters
-            if word.len() < 200 && word.chars().all(|c| c.is_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-') {
+            if word.len() < 200
+                && word
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-')
+            {
                 out.push(word.to_string());
             }
         }
@@ -314,7 +324,11 @@ pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
         if c == '`' {
             if in_backtick && current.len() >= 3 {
                 // Only include if it looks like an identifier (starts with letter, alphanumeric)
-                if current.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false)
+                if current
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic())
+                    .unwrap_or(false)
                     && current.chars().all(|c| c.is_alphanumeric() || c == '_')
                 {
                     out.push(current.clone());

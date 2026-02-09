@@ -21,14 +21,18 @@ pub(crate) fn show_llm_config() {
         None => {
             println!("LLM: not configured");
         }
-        Some(LlmConfig::Openai { base_url, model, .. }) => {
+        Some(LlmConfig::Openai {
+            base_url, model, ..
+        }) => {
             println!("LLM: openai");
             println!("model: {model}");
             if let Some(b) = base_url {
                 println!("base_url: {b}");
             }
         }
-        Some(LlmConfig::Anthropic { base_url, model, .. }) => {
+        Some(LlmConfig::Anthropic {
+            base_url, model, ..
+        }) => {
             println!("LLM: anthropic");
             println!("model: {model}");
             if let Some(b) = base_url {
@@ -40,7 +44,9 @@ pub(crate) fn show_llm_config() {
             println!("model: {model}");
             println!("base_url: {base_url}");
         }
-        Some(LlmConfig::Custom { base_url, model, .. }) => {
+        Some(LlmConfig::Custom {
+            base_url, model, ..
+        }) => {
             println!("LLM: custom");
             println!("model: {model}");
             println!("base_url: {base_url}");
@@ -96,7 +102,9 @@ where
                 // Same idea as OpenAI: keep extractor traffic off the local recorder.
                 builder = builder.base_url("https://api.anthropic.com");
             }
-            let client = builder.build().context("failed to build Anthropic client")?;
+            let client = builder
+                .build()
+                .context("failed to build Anthropic client")?;
             Ok(client
                 .extractor::<T>(model)
                 .preamble(preamble)
@@ -127,7 +135,8 @@ where
         }) => {
             let model = model_override.unwrap_or(&model);
             let key = api_key.as_deref().unwrap_or("custom");
-            let mut builder: openai::ClientBuilder<reqwest::Client> = openai::Client::builder().api_key(key);
+            let mut builder: openai::ClientBuilder<reqwest::Client> =
+                openai::Client::builder().api_key(key);
             builder = builder.base_url(&base_url);
             let client = builder
                 .build()
@@ -171,12 +180,6 @@ mod tests {
             unsafe { std::env::set_var(key, val) };
             Self { key, prev }
         }
-
-        fn remove(key: &'static str) -> Self {
-            let prev = std::env::var_os(key);
-            unsafe { std::env::remove_var(key) };
-            Self { key, prev }
-        }
     }
 
     impl Drop for EnvVarGuard {
@@ -214,7 +217,11 @@ mod tests {
 
         let retrieved = get_llm_config();
         match retrieved {
-            Some(LlmConfig::Openai { api_key, base_url, model }) => {
+            Some(LlmConfig::Openai {
+                api_key,
+                base_url,
+                model,
+            }) => {
                 assert_eq!(api_key, "sk-test-key");
                 assert_eq!(base_url, Some("https://api.example.com".to_string()));
                 assert_eq!(model, "gpt-4");
@@ -250,7 +257,11 @@ mod tests {
 
         let retrieved = get_llm_config();
         match retrieved {
-            Some(LlmConfig::Anthropic { api_key, base_url, model }) => {
+            Some(LlmConfig::Anthropic {
+                api_key,
+                base_url,
+                model,
+            }) => {
                 assert_eq!(api_key, "sk-ant-test");
                 assert_eq!(base_url, None);
                 assert_eq!(model, "claude-3-sonnet");

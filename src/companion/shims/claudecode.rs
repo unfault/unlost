@@ -321,7 +321,10 @@ fn parse_transcript_from_cursor(
 // Main entry point
 // ============================================================================
 
-pub(crate) async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow::Result<()> {
+pub(crate) async fn run(
+    embed_model: String,
+    embed_cache_dir: Option<String>,
+) -> anyhow::Result<()> {
     // Read hook input from stdin
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;

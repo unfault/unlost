@@ -19,7 +19,8 @@ pub(crate) async fn run(
     let ws = crate::workspace::get_or_create_workspace_paths(&cwd)?;
     let workspace_root = crate::workspace::git_toplevel(&cwd)
         .unwrap_or_else(|| crate::workspace::canonicalize_dir(&cwd).unwrap_or(cwd.clone()));
-    let workspace_root = crate::workspace::canonicalize_dir(&workspace_root).unwrap_or(workspace_root);
+    let workspace_root =
+        crate::workspace::canonicalize_dir(&workspace_root).unwrap_or(workspace_root);
     let workspace_root = workspace_root.to_string_lossy().to_string();
 
     let spinner = if let Some(target) = crate::narrative::spinner_draw_target(output) {
@@ -80,7 +81,13 @@ pub(crate) async fn run(
 
     let mut hits: Vec<crate::CapsuleHit> = Vec::new();
     if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
-        &ws, 120, None, emotion_label.as_deref(), provider_label.as_deref(), since_ms, until_ms,
+        &ws,
+        120,
+        None,
+        emotion_label.as_deref(),
+        provider_label.as_deref(),
+        since_ms,
+        until_ms,
     )
     .await
     {
@@ -91,7 +98,13 @@ pub(crate) async fn run(
     if let Some(scope) = scope_opt.as_deref() {
         if let Some(expr) = crate::util::scope_filter_expr(scope) {
             if let Ok(mut scoped) = crate::storage::scan_capsules_lancedb(
-                &ws, 80, Some(&expr), emotion_label.as_deref(), provider_label.as_deref(), since_ms, until_ms,
+                &ws,
+                80,
+                Some(&expr),
+                emotion_label.as_deref(),
+                provider_label.as_deref(),
+                since_ms,
+                until_ms,
             )
             .await
             {
@@ -101,7 +114,13 @@ pub(crate) async fn run(
         }
 
         if let Ok(mut sem) = crate::storage::query_capsules_lancedb(
-            scope, 18, None, emotion_label.as_deref(), provider_label.as_deref(), since_ms, until_ms,
+            scope,
+            18,
+            None,
+            emotion_label.as_deref(),
+            provider_label.as_deref(),
+            since_ms,
+            until_ms,
             embedder.clone(),
             &ws,
         )

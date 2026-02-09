@@ -1,15 +1,7 @@
 use anyhow::Context;
 use arrow_array::{
-    Array,
-    FixedSizeListArray,
-    Float32Array,
-    Float64Array,
-    Int32Array,
-    Int64Array,
-    ListArray,
-    RecordBatch,
-    RecordBatchIterator,
-    StringArray,
+    Array, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, ListArray,
+    RecordBatch, RecordBatchIterator, StringArray,
     builder::{ListBuilder, StringBuilder},
     types::Float32Type,
 };
@@ -34,7 +26,6 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("conn_id", DataType::Int64, false),
         Field::new("exchange_seq", DataType::Int64, false),
         Field::new("agent_session_id", DataType::Utf8, true),
-
         // Best-effort usage fields (mostly from agent plugins)
         Field::new("agent_provider_id", DataType::Utf8, true),
         Field::new("agent_model_id", DataType::Utf8, true),
@@ -79,11 +70,8 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
         Ok(t) => {
             // Best-effort schema evolution: older installs may not have usage columns.
             if let Ok(schema) = t.schema().await {
-                let existing: std::collections::HashSet<&str> = schema
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().as_str())
-                    .collect();
+                let existing: std::collections::HashSet<&str> =
+                    schema.fields().iter().map(|f| f.name().as_str()).collect();
                 let mut exprs: Vec<(String, String)> = Vec::new();
 
                 let add_str = |name: &str, exprs: &mut Vec<(String, String)>| {
@@ -113,7 +101,10 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
 
                 if !exprs.is_empty() {
                     let _ = t
-                        .add_columns(lancedb::table::NewColumnTransform::SqlExpressions(exprs), None)
+                        .add_columns(
+                            lancedb::table::NewColumnTransform::SqlExpressions(exprs),
+                            None,
+                        )
                         .await;
                 }
             }
@@ -132,25 +123,37 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let http_status = Arc::new(Int32Array::from_iter_values(std::iter::empty::<i32>()));
             let conn_id = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
             let exchange_seq = Arc::new(Int64Array::from_iter_values(std::iter::empty::<i64>()));
-            let agent_session_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let agent_session_id =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
 
-            let agent_provider_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
-            let agent_model_id = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let agent_provider_id =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let agent_model_id =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
             let agent_cost = Arc::new(Float64Array::from_iter(std::iter::empty::<Option<f64>>()));
             let tokens_input = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
             let tokens_output = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
-            let tokens_reasoning = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
-            let tokens_cache_read = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
-            let tokens_cache_write = Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_reasoning =
+                Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_cache_read =
+                Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
+            let tokens_cache_write =
+                Arc::new(Int64Array::from_iter(std::iter::empty::<Option<i64>>()));
 
             let user_emotion = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
-            let user_emotion_conf = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
+            let user_emotion_conf =
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
             let user_valence = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
-            let user_intensity = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
-            let assistant_emotion = Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
-            let assistant_emotion_conf = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
-            let assistant_valence = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
-            let assistant_intensity = Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
+            let user_intensity =
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
+            let assistant_emotion =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let assistant_emotion_conf =
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
+            let assistant_valence =
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
+            let assistant_intensity =
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()));
 
             let category = Arc::new(StringArray::from_iter_values(std::iter::empty::<&str>()));
             let intent = Arc::new(StringArray::from_iter_values(std::iter::empty::<&str>()));
@@ -163,10 +166,12 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let mut symbols_builder = ListBuilder::new(StringBuilder::new());
             let symbols = Arc::new(symbols_builder.finish());
 
-            let embedding = Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                std::iter::empty::<Option<Vec<Option<f32>>>>(),
-                384,
-            ));
+            let embedding = Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                    std::iter::empty::<Option<Vec<Option<f32>>>>(),
+                    384,
+                ),
+            );
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
@@ -180,7 +185,6 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     conn_id,
                     exchange_seq,
                     agent_session_id,
-
                     agent_provider_id,
                     agent_model_id,
                     agent_cost,
@@ -189,7 +193,6 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     tokens_reasoning,
                     tokens_cache_read,
                     tokens_cache_write,
-
                     user_emotion,
                     user_emotion_conf,
                     user_valence,
@@ -216,13 +219,24 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 .await
                 .with_context(|| format!("failed to create {CAPSULES_TABLE}"))?;
 
-            table.create_index(&["embedding"], Index::Auto).execute().await.ok();
             table
-                .create_index(&["symbols"], Index::LabelList(LabelListIndexBuilder::default()))
+                .create_index(&["embedding"], Index::Auto)
                 .execute()
                 .await
                 .ok();
-            table.create_index(&["ts_ms"], Index::Auto).execute().await.ok();
+            table
+                .create_index(
+                    &["symbols"],
+                    Index::LabelList(LabelListIndexBuilder::default()),
+                )
+                .execute()
+                .await
+                .ok();
+            table
+                .create_index(&["ts_ms"], Index::Auto)
+                .execute()
+                .await
+                .ok();
 
             Ok(table)
         }
@@ -272,11 +286,11 @@ pub(crate) async fn query_capsules_lancedb(
     }
 
     if let Some(provider) = provider {
-        let provider_host = match &*provider {
+        let provider_host = match provider {
             "openai" => "api.openai.com",
             "anthropic" => "api.anthropic.com",
             "opencode" => "opencode.ai",
-            _ => &*provider,
+            _ => provider,
         };
         filters.push(format!("upstream_host = '{provider_host}'"));
     }
@@ -342,12 +356,14 @@ pub(crate) async fn query_capsules_lancedb(
         };
 
         let id_col = col_str("id");
-        let ts_ms_col = idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let conn_id_col = idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let exchange_seq_col = idx("exchange_seq")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let http_status_col = idx("http_status")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
+        let ts_ms_col =
+            idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let conn_id_col =
+            idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let exchange_seq_col =
+            idx("exchange_seq").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let http_status_col =
+            idx("http_status").and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
         let source = col_str("source");
         let intent = col_str("intent");
         let decision = col_str("decision");
@@ -359,10 +375,10 @@ pub(crate) async fn query_capsules_lancedb(
 
         let agent_provider_id_col = col_str("agent_provider_id");
         let agent_model_id_col = col_str("agent_model_id");
-        let agent_cost_col = idx("agent_cost")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
-        let tokens_input_col = idx("tokens_input")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let agent_cost_col =
+            idx("agent_cost").and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
+        let tokens_input_col =
+            idx("tokens_input").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
         let tokens_output_col = idx("tokens_output")
             .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
         let tokens_reasoning_col = idx("tokens_reasoning")
@@ -381,11 +397,17 @@ pub(crate) async fn query_capsules_lancedb(
         let assistant_valence = col_f32("assistant_valence");
         let assistant_intensity = col_f32("assistant_intensity");
 
-        let distance = idx("_distance")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<arrow_array::Float32Array>());
+        let distance = idx("_distance").and_then(|i| {
+            batch
+                .column(i)
+                .as_any()
+                .downcast_ref::<arrow_array::Float32Array>()
+        });
 
-        let next_steps = idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
-        let symbols = idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let next_steps =
+            idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let symbols =
+            idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
 
         for row in 0..batch.num_rows() {
             if out.len() >= limit {
@@ -430,8 +452,10 @@ pub(crate) async fn query_capsules_lancedb(
             let agent_model_id = agent_model_id_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
             let agent_cost = agent_cost_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
-            let tokens_input = tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
-            let tokens_output = tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_input =
+                tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_output =
+                tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
             let tokens_reasoning =
                 tokens_reasoning_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
             let tokens_cache_read =
@@ -618,11 +642,11 @@ async fn scan_capsules_lancedb_impl(
     }
 
     if let Some(provider) = provider {
-        let provider_host = match &*provider {
+        let provider_host = match provider {
             "openai" => "api.openai.com",
             "anthropic" => "api.anthropic.com",
             "opencode" => "opencode.ai",
-            _ => &*provider,
+            _ => provider,
         };
         filters.push(format!("upstream_host = '{provider_host}'"));
     }
@@ -688,12 +712,14 @@ async fn scan_capsules_lancedb_impl(
         };
 
         let id_col = col_str("id");
-        let ts_ms_col = idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let conn_id_col = idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let exchange_seq_col = idx("exchange_seq")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let http_status_col = idx("http_status")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
+        let ts_ms_col =
+            idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let conn_id_col =
+            idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let exchange_seq_col =
+            idx("exchange_seq").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let http_status_col =
+            idx("http_status").and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
 
         let source = col_str("source");
         let intent = col_str("intent");
@@ -706,10 +732,10 @@ async fn scan_capsules_lancedb_impl(
 
         let agent_provider_id_col = col_str("agent_provider_id");
         let agent_model_id_col = col_str("agent_model_id");
-        let agent_cost_col = idx("agent_cost")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
-        let tokens_input_col = idx("tokens_input")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let agent_cost_col =
+            idx("agent_cost").and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
+        let tokens_input_col =
+            idx("tokens_input").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
         let tokens_output_col = idx("tokens_output")
             .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
         let tokens_reasoning_col = idx("tokens_reasoning")
@@ -728,8 +754,10 @@ async fn scan_capsules_lancedb_impl(
         let assistant_valence = col_f32("assistant_valence");
         let assistant_intensity = col_f32("assistant_intensity");
 
-        let next_steps = idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
-        let symbols = idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let next_steps =
+            idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let symbols =
+            idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
 
         for row in 0..batch.num_rows() {
             // Skip early-exit when recent_first since we need all rows to sort
@@ -771,8 +799,10 @@ async fn scan_capsules_lancedb_impl(
             let agent_model_id = agent_model_id_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
             let agent_cost = agent_cost_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
-            let tokens_input = tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
-            let tokens_output = tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_input =
+                tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_output =
+                tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
             let tokens_reasoning =
                 tokens_reasoning_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
             let tokens_cache_read =
@@ -961,7 +991,9 @@ pub(crate) async fn insert_capsule_row(
     let agent_model_id_arr = Arc::new(StringArray::from(vec![
         meta.usage.as_ref().and_then(|u| u.model_id.as_deref()),
     ]));
-    let agent_cost_arr = Arc::new(Float64Array::from(vec![meta.usage.as_ref().and_then(|u| u.cost)]));
+    let agent_cost_arr = Arc::new(Float64Array::from(vec![
+        meta.usage.as_ref().and_then(|u| u.cost),
+    ]));
     let tokens_input_arr = Arc::new(Int64Array::from(vec![
         meta.usage.as_ref().and_then(|u| u.tokens_input),
     ]));
@@ -978,18 +1010,26 @@ pub(crate) async fn insert_capsule_row(
         meta.usage.as_ref().and_then(|u| u.tokens_cache_write),
     ]));
 
-    let user_emotion_arr = Arc::new(StringArray::from(vec![user_emotion.map(|e| e.label.as_str())]));
-    let user_emotion_conf_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.confidence)]));
+    let user_emotion_arr = Arc::new(StringArray::from(vec![
+        user_emotion.map(|e| e.label.as_str()),
+    ]));
+    let user_emotion_conf_arr =
+        Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.confidence)]));
     let user_valence_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.valence)]));
     let user_intensity_arr = Arc::new(Float32Array::from(vec![user_emotion.map(|e| e.intensity)]));
 
-    let assistant_emotion_arr =
-        Arc::new(StringArray::from(vec![assistant_emotion.map(|e| e.label.as_str())]));
-    let assistant_emotion_conf_arr =
-        Arc::new(Float32Array::from(vec![assistant_emotion.map(|e| e.confidence)]));
-    let assistant_valence_arr = Arc::new(Float32Array::from(vec![assistant_emotion.map(|e| e.valence)]));
-    let assistant_intensity_arr =
-        Arc::new(Float32Array::from(vec![assistant_emotion.map(|e| e.intensity)]));
+    let assistant_emotion_arr = Arc::new(StringArray::from(vec![
+        assistant_emotion.map(|e| e.label.as_str()),
+    ]));
+    let assistant_emotion_conf_arr = Arc::new(Float32Array::from(vec![
+        assistant_emotion.map(|e| e.confidence),
+    ]));
+    let assistant_valence_arr = Arc::new(Float32Array::from(vec![
+        assistant_emotion.map(|e| e.valence),
+    ]));
+    let assistant_intensity_arr = Arc::new(Float32Array::from(vec![
+        assistant_emotion.map(|e| e.intensity),
+    ]));
     let category_arr = Arc::new(StringArray::from(vec![capsule.category.as_str()]));
     let intent_arr = Arc::new(StringArray::from(vec![capsule.intent.as_str()]));
     let decision_arr = Arc::new(StringArray::from(vec![capsule.decision.as_str()]));
@@ -1009,10 +1049,12 @@ pub(crate) async fn insert_capsule_row(
     symbols_builder.append(true);
     let symbols_arr = Arc::new(symbols_builder.finish());
 
-    let embedding_arr = Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-        std::iter::once(Some(embedding.into_iter().map(Some).collect::<Vec<_>>())),
-        384,
-    ));
+    let embedding_arr = Arc::new(
+        FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            std::iter::once(Some(embedding.into_iter().map(Some).collect::<Vec<_>>())),
+            384,
+        ),
+    );
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -1026,7 +1068,6 @@ pub(crate) async fn insert_capsule_row(
             conn_id_arr,
             exchange_seq_arr,
             agent_session_id_arr,
-
             agent_provider_id_arr,
             agent_model_id_arr,
             agent_cost_arr,
@@ -1035,7 +1076,6 @@ pub(crate) async fn insert_capsule_row(
             tokens_reasoning_arr,
             tokens_cache_read_arr,
             tokens_cache_write_arr,
-
             user_emotion_arr,
             user_emotion_conf_arr,
             user_valence_arr,
@@ -1056,6 +1096,10 @@ pub(crate) async fn insert_capsule_row(
     .context("failed to build insert batch")?;
 
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-    table.add(batches).execute().await.context("lancedb insert failed")?;
+    table
+        .add(batches)
+        .execute()
+        .await
+        .context("lancedb insert failed")?;
     Ok(())
 }

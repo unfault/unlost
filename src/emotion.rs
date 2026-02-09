@@ -17,13 +17,7 @@ pub(crate) struct EmotionMeta {
 }
 
 fn clamp01(x: f32) -> f32 {
-    if x < 0.0 {
-        0.0
-    } else if x > 1.0 {
-        1.0
-    } else {
-        x
-    }
+    x.clamp(0.0, 1.0)
 }
 
 fn is_turn_marker(t: &str) -> bool {
@@ -122,7 +116,11 @@ fn sanitize_repo_dir_name(repo: &str) -> String {
     repo.replace('/', "_")
 }
 
-async fn download_hf_file(repo: &str, rfilename: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+async fn download_hf_file(
+    repo: &str,
+    rfilename: &str,
+    dest: &std::path::Path,
+) -> anyhow::Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -187,8 +185,8 @@ pub(crate) fn map_go_emotions(label: &str, score: f32) -> EmotionMeta {
 
     let (bucket, valence, base_intensity) = match l.as_str() {
         // Positive cluster
-        "admiration" | "amusement" | "approval" | "caring" | "desire" | "excitement" | "gratitude"
-        | "joy" | "love" | "optimism" | "pride" | "relief" => ("joy", 0.8, 0.4),
+        "admiration" | "amusement" | "approval" | "caring" | "desire" | "excitement"
+        | "gratitude" | "joy" | "love" | "optimism" | "pride" | "relief" => ("joy", 0.8, 0.4),
 
         // Negative cluster
         "anger" => ("anger", -0.9, 0.75),
@@ -354,7 +352,8 @@ fn boost_negative_emotions(text: &str, meta: EmotionMeta) -> EmotionMeta {
     let has_frustration_signal = FRUSTRATION_SIGNALS.iter().any(|p| lower.contains(p));
 
     // Check for rhetorical markers (e.g., "?!" or multiple "?")
-    let has_rhetorical = text.contains("?!") || text.contains("!?") || text.matches('?').count() >= 2;
+    let has_rhetorical =
+        text.contains("?!") || text.contains("!?") || text.matches('?').count() >= 2;
 
     // Check for short dismissive replies (< 15 words with certain keywords)
     let word_count = text.split_whitespace().count();
@@ -529,7 +528,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_repo_dir_name() {
-        assert_eq!(sanitize_repo_dir_name("SamLowe/roberta-base"), "SamLowe_roberta-base");
+        assert_eq!(
+            sanitize_repo_dir_name("SamLowe/roberta-base"),
+            "SamLowe_roberta-base"
+        );
         assert_eq!(sanitize_repo_dir_name("a/b/c"), "a_b_c");
     }
 
@@ -715,7 +717,7 @@ Bye
         let doubt = map_go_emotions("nervousness", 0.7);
         let disapproval = map_go_emotions("disapproval", 0.7);
         let frustration = map_go_emotions("annoyance", 0.7);
-        
+
         // doubt (-0.3) > disapproval (-0.5) > frustration (-0.7)
         assert!(doubt.valence > disapproval.valence);
         assert!(disapproval.valence > frustration.valence);

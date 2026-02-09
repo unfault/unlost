@@ -5,12 +5,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 use unfault_core::{
-    build_code_graph,
+    FileId, Language as UfLanguage, SourceFile, build_code_graph,
     parse::parse_source_file,
-    semantics::{build_source_semantics, SourceSemantics},
-    FileId,
-    Language as UfLanguage,
-    SourceFile,
+    semantics::{SourceSemantics, build_source_semantics},
 };
 
 fn detect_language(path: &std::path::Path) -> Option<UfLanguage> {
@@ -68,7 +65,9 @@ fn collect_source_files(root: &std::path::Path) -> anyhow::Result<Vec<SourceFile
         }
 
         let path = entry.path();
-        let Some(lang) = detect_language(path) else { continue };
+        let Some(lang) = detect_language(path) else {
+            continue;
+        };
 
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -151,13 +150,7 @@ fn collect_git_history_summary(
 
         let files = std::process::Command::new("git")
             .current_dir(repo_root)
-            .args([
-                "diff-tree",
-                "--no-commit-id",
-                "--name-only",
-                "-r",
-                hash,
-            ])
+            .args(["diff-tree", "--no-commit-id", "--name-only", "-r", hash])
             .args(
                 scope_rel
                     .filter(|s| !s.trim().is_empty())
@@ -272,7 +265,10 @@ async fn llm_init_capsules(
  Do not include long excerpts; do not include any tool/system boilerplate.\n\
  Populate symbols with real identifiers, file paths, and endpoints when available.";
 
-    let crate::InitCapsulesOutput { debrief, mut capsules } = crate::llm_extract::<crate::InitCapsulesOutput>(
+    let crate::InitCapsulesOutput {
+        debrief,
+        mut capsules,
+    } = crate::llm_extract::<crate::InitCapsulesOutput>(
         llm_model_override,
         preamble,
         &format!("max_capsules: {llm_max_capsules}\n\n{context}"),
@@ -476,7 +472,11 @@ pub(crate) async fn run(
                 ),
                 rationale: String::new(),
                 next_steps: Vec::new(),
-                symbols: vec![qualified.clone(), file_path.clone(), format!("{method} {path}")],
+                symbols: vec![
+                    qualified.clone(),
+                    file_path.clone(),
+                    format!("{method} {path}"),
+                ],
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
             },
@@ -526,19 +526,9 @@ pub(crate) async fn run(
     }
 
     for (cap, meta) in capsules {
-        crate::storage::insert_capsule_row(
-            &db,
-            &embedder,
-            0,
-            0,
-            now_ms,
-            &meta,
-            None,
-            None,
-            &cap,
-        )
-        .await
-        .ok();
+        crate::storage::insert_capsule_row(&db, &embedder, 0, 0, now_ms, &meta, None, None, &cap)
+            .await
+            .ok();
     }
 
     println!("workspace: {}", ws.id);

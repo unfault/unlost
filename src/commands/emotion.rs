@@ -3,7 +3,7 @@
 //! This is a hidden developer tool for validating emotion classification.
 //! Usage: unlost emotion "I'm not sure this is right"
 
-use crate::emotion::{apply_context_heuristics, map_go_emotions, EmotionConfig, EmotionModel};
+use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
 
 pub(crate) async fn run(text: String) -> anyhow::Result<()> {
     println!("Loading emotion model...");
@@ -23,12 +23,25 @@ pub(crate) async fn run(text: String) -> anyhow::Result<()> {
         println!("After heuristics:    {} (overridden)", meta.label);
     }
     println!("Final bucket:        {}", meta.label);
-    println!("Valence:             {:.2} (-1=negative, +1=positive)", meta.valence);
-    println!("Intensity:           {:.2} (0=calm, 1=intense)", meta.intensity);
+    println!(
+        "Valence:             {:.2} (-1=negative, +1=positive)",
+        meta.valence
+    );
+    println!(
+        "Intensity:           {:.2} (0=calm, 1=intense)",
+        meta.intensity
+    );
 
     // Show if this would trigger friction detection
     // Note: "sad" in agent context usually means dissatisfaction, not actual sadness
-    let friction_emotions = ["frustration", "anger", "annoyance", "disapproval", "doubt", "sad"];
+    let friction_emotions = [
+        "frustration",
+        "anger",
+        "annoyance",
+        "disapproval",
+        "doubt",
+        "sad",
+    ];
     let triggers_friction = friction_emotions.contains(&meta.label.as_str());
     println!();
     println!(

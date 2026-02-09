@@ -523,7 +523,7 @@ pub(crate) fn parse_bind(s: &str) -> anyhow::Result<SocketAddr> {
     }
 
     // `ip:port`
-    Ok(s.parse().context("invalid bind address")?)
+    s.parse().context("invalid bind address")
 }
 
 #[cfg(test)]

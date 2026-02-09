@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, BufReader, AsyncWriteExt, AsyncReadExt};
-use serde::Deserialize;
 use anyhow::Context;
+use serde::Deserialize;
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Deserialize)]
 struct JsonCapsule {
@@ -63,19 +63,27 @@ pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
         anyhow::bail!("capsules.jsonl not found at {}", jsonl_path.display());
     }
 
-    let capsules_count = count_capsules(&jsonl_path).await?;
-    println!("Found {} capsules in {}", capsules_count, jsonl_path.display());
+    let capsules_count = count_capsules(jsonl_path).await?;
+    println!(
+        "Found {} capsules in {}",
+        capsules_count,
+        jsonl_path.display()
+    );
 
     if !yes {
         let mut stdout = tokio::io::stdout();
-        stdout.write_all(b"Reindex will delete LanceDB and rebuild from JSONL. Continue? [y/N] ").await?;
+        stdout
+            .write_all(b"Reindex will delete LanceDB and rebuild from JSONL. Continue? [y/N] ")
+            .await?;
         stdout.flush().await?;
 
         let mut input = Vec::new();
         let mut stdin = tokio::io::stdin();
         stdin.read_to_end(&mut input).await?;
         let input_str = String::from_utf8(input)?;
-        if !input_str.trim().eq_ignore_ascii_case("y") && !input_str.trim().eq_ignore_ascii_case("yes") {
+        if !input_str.trim().eq_ignore_ascii_case("y")
+            && !input_str.trim().eq_ignore_ascii_case("yes")
+        {
             println!("Cancelled.");
             return Ok(());
         }
@@ -93,11 +101,8 @@ pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
         .execute()
         .await
         .context("failed to connect to lancedb")?;
-    let embedder = crate::embed::load_embedder(
-        crate::constants::DEFAULT_EMBED_MODEL,
-        None,
-        false,
-    ).await?;
+    let embedder =
+        crate::embed::load_embedder(crate::constants::DEFAULT_EMBED_MODEL, None, false).await?;
 
     let file = File::open(&jsonl_path).await?;
     let reader = BufReader::new(file);
@@ -123,8 +128,14 @@ pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
                 tokens_input: u.tokens.as_ref().and_then(|t| t.input),
                 tokens_output: u.tokens.as_ref().and_then(|t| t.output),
                 tokens_reasoning: u.tokens.as_ref().and_then(|t| t.reasoning),
-                tokens_cache_read: u.tokens.as_ref().and_then(|t| t.cache.as_ref().and_then(|c| c.read)),
-                tokens_cache_write: u.tokens.as_ref().and_then(|t| t.cache.as_ref().and_then(|c| c.write)),
+                tokens_cache_read: u
+                    .tokens
+                    .as_ref()
+                    .and_then(|t| t.cache.as_ref().and_then(|c| c.read)),
+                tokens_cache_write: u
+                    .tokens
+                    .as_ref()
+                    .and_then(|t| t.cache.as_ref().and_then(|c| c.write)),
             }),
         };
 
@@ -159,7 +170,8 @@ pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             None,
             None,
             &intent_capsule,
-        ).await?;
+        )
+        .await?;
 
         count += 1;
         if count % 100 == 0 {

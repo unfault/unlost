@@ -1,7 +1,9 @@
-use crate::analysis::{AnalysisMsg, AnalysisMeta};
-use crate::emotion::{apply_context_heuristics, extract_user_and_assistant_text, map_go_emotions, EmotionModel};
-use crate::storage::ensure_capsules_table;
+use crate::analysis::{AnalysisMeta, AnalysisMsg};
 use crate::embed::Embedder;
+use crate::emotion::{
+    EmotionModel, apply_context_heuristics, extract_user_and_assistant_text, map_go_emotions,
+};
+use crate::storage::ensure_capsules_table;
 use bytes::Bytes;
 use kanal::AsyncReceiver;
 use lancedb::connection::Connection;
@@ -69,10 +71,7 @@ fn contains_hex_hash(s: &str) -> bool {
         if tok.len() < 7 || tok.len() > 40 {
             continue;
         }
-        if tok
-            .chars()
-            .all(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F'))
-        {
+        if tok.chars().all(|c: char| c.is_ascii_hexdigit()) {
             return true;
         }
     }
@@ -185,7 +184,9 @@ impl WorkspaceChunker {
                 .or_insert_with(|| WorkspaceBuffer::new(now));
 
             // If this buffer has been idle, flush it before appending new content.
-            if !buf.turns.is_empty() && now.duration_since(buf.last_activity) >= Self::IDLE_FLUSH_AFTER {
+            if !buf.turns.is_empty()
+                && now.duration_since(buf.last_activity) >= Self::IDLE_FLUSH_AFTER
+            {
                 maybe_flush = Some(build_flush_job(workspace_id.clone(), buf));
                 *buf = WorkspaceBuffer::new(now);
             }
@@ -410,19 +411,20 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         .ok()
         .flatten();
 
-        let capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(
-                    workspace_id = %job.workspace_id,
-                    conn_id = job.conn_id,
-                    exchange_seq = job.exchange_seq,
-                    error = ?e,
-                    "capsule extraction failed"
-                );
-                continue;
-            }
-        };
+        let capsule =
+            match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(
+                        workspace_id = %job.workspace_id,
+                        conn_id = job.conn_id,
+                        exchange_seq = job.exchange_seq,
+                        error = ?e,
+                        "capsule extraction failed"
+                    );
+                    continue;
+                }
+            };
 
         let ws_paths = state.workspace_paths(&job.workspace_id);
         if let Err(e) = append_capsule_jsonl(
@@ -536,19 +538,20 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         .ok()
         .flatten();
 
-        let capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(
-                    workspace_id = %job.workspace_id,
-                    conn_id = job.conn_id,
-                    exchange_seq = job.exchange_seq,
-                    error = ?e,
-                    "capsule extraction failed"
-                );
-                continue;
-            }
-        };
+        let capsule =
+            match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(
+                        workspace_id = %job.workspace_id,
+                        conn_id = job.conn_id,
+                        exchange_seq = job.exchange_seq,
+                        error = ?e,
+                        "capsule extraction failed"
+                    );
+                    continue;
+                }
+            };
 
         if let Err(e) = append_capsule_jsonl(
             &ws.capsules_jsonl,

@@ -46,7 +46,10 @@ pub(crate) async fn llm_query_narrative(
         session_tags.insert(*s, format!("s{}", i + 1));
     }
     if sessions.len() > 1 {
-        context.push_str(&format!("Distinct agent sessions in matches: {}\n", sessions.len()));
+        context.push_str(&format!(
+            "Distinct agent sessions in matches: {}\n",
+            sessions.len()
+        ));
     }
     context.push_str("Matches (lower distance = closer):\n");
     for (i, hit) in matches.iter().enumerate() {
@@ -83,7 +86,10 @@ pub(crate) async fn llm_query_narrative(
             context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
         }
         if !cap.rationale.trim().is_empty() {
-            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
         }
         if let Some(e) = hit.user_emotion.as_ref() {
             context.push_str(&format!(
@@ -140,9 +146,10 @@ Style rules:
 - Wrap code identifiers in backticks (e.g. `proxy_request`), file paths in backticks (e.g. `src/main.rs`, `main.py`), and routes in backticks (e.g. `GET /inventory`).
 - End with ONE actionable next step, phrased as a concrete `unlost query ...` suggestion (not grep/file search)."#;
 
-    let out = crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
-        .await?
-        .narrative;
+    let out =
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
+            .await?
+            .narrative;
     Ok(crate::util::strip_llm_boilerplate(out))
 }
 
@@ -155,8 +162,8 @@ pub(crate) fn colorize_backticks(input: &str) -> String {
         "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE",
     ];
     let exts = [
-        ".rs", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".java", ".toml", ".json",
-        ".yaml", ".yml", ".md",
+        ".rs", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".java", ".toml", ".json", ".yaml",
+        ".yml", ".md",
     ];
 
     let mut out = String::with_capacity(input.len() + 32);
@@ -277,10 +284,7 @@ fn wrap_line_preserving_backticks(line: &str, width: usize) -> Vec<String> {
         return vec![line.to_string()];
     }
 
-    let indent_len = line
-        .chars()
-        .take_while(|c| c.is_ascii_whitespace())
-        .count();
+    let indent_len = line.chars().take_while(|c| c.is_ascii_whitespace()).count();
     let indent = " ".repeat(indent_len);
 
     let trimmed = line.trim_start();
@@ -424,7 +428,10 @@ pub(crate) async fn llm_recall_narrative(
             context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
         }
         if !cap.rationale.trim().is_empty() {
-            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
         }
         if !cap.next_steps.is_empty() {
             let steps = cap
@@ -469,9 +476,11 @@ Output format:
 - If the evidence is thin, say so plainly and recommend ONE follow-up `unlost query ...`.
 "#;
 
-    Ok(crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
-        .await?
-        .narrative)
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
+            .await?
+            .narrative,
+    )
 }
 
 pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {

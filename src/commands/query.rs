@@ -1,6 +1,6 @@
 use crate::cli::OutputFormat;
-use indicatif::{ProgressBar, ProgressStyle};
 use chrono::{SecondsFormat, TimeZone};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 use tracing::warn;
 
@@ -144,7 +144,9 @@ fn query_capsules_jsonl(path: &str, query: &str, limit: usize) -> anyhow::Result
             println!("cost:        {cost:.6}");
         }
         if let Some(tokens) = usage.tokens.as_ref() {
-            let total = tokens.input.unwrap_or(0) + tokens.output.unwrap_or(0) + tokens.reasoning.unwrap_or(0);
+            let total = tokens.input.unwrap_or(0)
+                + tokens.output.unwrap_or(0)
+                + tokens.reasoning.unwrap_or(0);
             if total > 0 {
                 println!(
                     "tokens:      total={total} in={} out={} reasoning={}",
@@ -350,8 +352,10 @@ pub(crate) async fn run(
                             pb.finish_and_clear();
                         }
                         let footer = render_query_footer(output, &matches);
-                        let mut full = crate::util::strip_llm_boilerplate(format!("{rendered}{footer}"));
-                        let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+                        let mut full =
+                            crate::util::strip_llm_boilerplate(format!("{rendered}{footer}"));
+                        let wrap =
+                            output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
                         if wrap {
                             full = crate::util::wrap_plain_text(&full, 80);
                         }
@@ -418,10 +422,16 @@ pub(crate) async fn run(
                         print_usage(usage);
                     }
                     if let Some(e) = &hit.user_emotion {
-                        println!("user_mood: {} (conf={:.2} val={:.2} int={:.2})", e.label, e.confidence, e.valence, e.intensity);
+                        println!(
+                            "user_mood: {} (conf={:.2} val={:.2} int={:.2})",
+                            e.label, e.confidence, e.valence, e.intensity
+                        );
                     }
                     if let Some(e) = &hit.assistant_emotion {
-                        println!("asst_mood: {} (conf={:.2} val={:.2} int={:.2})", e.label, e.confidence, e.valence, e.intensity);
+                        println!(
+                            "asst_mood: {} (conf={:.2} val={:.2} int={:.2})",
+                            e.label, e.confidence, e.valence, e.intensity
+                        );
                     }
                     println!("path:      {}", meta.request_path);
                     if !cap.intent.trim().is_empty() {

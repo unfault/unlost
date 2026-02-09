@@ -140,6 +140,14 @@ fn read_meta_files(workspace_root: &std::path::Path) -> Vec<(String, String)> {
 }
 
 fn extract_project_name_from_meta_files(meta_files: &[(String, String)]) -> Option<String> {
+    let re_pyproject_project =
+        regex::Regex::new(r#"\[project\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#).ok();
+    let re_pyproject_poetry =
+        regex::Regex::new(r#"\[tool\.poetry\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#).ok();
+    let re_cargo =
+        regex::Regex::new(r#"\[package\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#).ok();
+    let re_go_mod = regex::Regex::new(r#"^module\s+(\S+)"#).ok();
+
     for (kind, contents) in meta_files {
         match kind.as_str() {
             "package_json" => {
@@ -149,33 +157,30 @@ fn extract_project_name_from_meta_files(meta_files: &[(String, String)]) -> Opti
                 }
             }
             "pyproject" => {
-                let re =
-                    regex::Regex::new(r#"\[project\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#)
-                        .ok()?;
-                if let Some(caps) = re.captures(contents) {
-                    return Some(caps.get(1)?.as_str().to_string());
+                if let Some(re) = &re_pyproject_project {
+                    if let Some(caps) = re.captures(contents) {
+                        return Some(caps.get(1)?.as_str().to_string());
+                    }
                 }
-                let re = regex::Regex::new(
-                    r#"\[tool\.poetry\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#,
-                )
-                .ok()?;
-                if let Some(caps) = re.captures(contents) {
-                    return Some(caps.get(1)?.as_str().to_string());
+                if let Some(re) = &re_pyproject_poetry {
+                    if let Some(caps) = re.captures(contents) {
+                        return Some(caps.get(1)?.as_str().to_string());
+                    }
                 }
             }
             "cargo_toml" => {
-                let re =
-                    regex::Regex::new(r#"\[package\]\s*\n[^\[]*?name\s*=\s*[\"']([^\"']+)[\"']"#)
-                        .ok()?;
-                if let Some(caps) = re.captures(contents) {
-                    return Some(caps.get(1)?.as_str().to_string());
+                if let Some(re) = &re_cargo {
+                    if let Some(caps) = re.captures(contents) {
+                        return Some(caps.get(1)?.as_str().to_string());
+                    }
                 }
             }
             "go_mod" => {
-                let re = regex::Regex::new(r#"^module\s+(\S+)"#).ok()?;
-                for line in contents.lines() {
-                    if let Some(caps) = re.captures(line) {
-                        return Some(caps.get(1)?.as_str().to_string());
+                if let Some(re) = &re_go_mod {
+                    for line in contents.lines() {
+                        if let Some(caps) = re.captures(line) {
+                            return Some(caps.get(1)?.as_str().to_string());
+                        }
                     }
                 }
             }

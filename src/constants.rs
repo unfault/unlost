@@ -15,7 +15,6 @@ mod tests {
 
     #[test]
     fn test_default_embed_dim() {
-        assert!(DEFAULT_EMBED_DIM > 0);
         assert_eq!(DEFAULT_EMBED_DIM, 384);
     }
 

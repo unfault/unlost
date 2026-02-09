@@ -18,11 +18,7 @@ impl UsageMeta {
         let sum = self.tokens_input.unwrap_or(0)
             + self.tokens_output.unwrap_or(0)
             + self.tokens_reasoning.unwrap_or(0);
-        if sum > 0 {
-            Some(sum)
-        } else {
-            None
-        }
+        if sum > 0 { Some(sum) } else { None }
     }
 }
 
@@ -40,10 +36,11 @@ pub(crate) struct ResponseMeta {
 
 /// Failure modes that unlost can detect in agent conversations.
 /// See internal/DEVELOPMENT.md for detailed definitions.
-#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureMode {
     /// No failure mode detected
+    #[default]
     None,
     /// Agent believes the system works one way, but code says otherwise
     Drift,
@@ -57,12 +54,6 @@ pub enum FailureMode {
     FalseProgress,
     /// Agent wandering into unrelated side-quests
     UnboundedHorizon,
-}
-
-impl Default for FailureMode {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
@@ -117,7 +108,6 @@ pub(crate) struct CapsuleHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_intent_capsule_serialization() {

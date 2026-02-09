@@ -155,7 +155,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let _g1 = EnvVarGuard::set("XDG_DATA_HOME", temp_dir.path().as_os_str());
         let _g2 = EnvVarGuard::remove("UNLOST_EMBED_CACHE_DIR");
-        let expected = temp_dir.path().join("unlost").join("models").join("fastembed");
+        let expected = temp_dir
+            .path()
+            .join("unlost")
+            .join("models")
+            .join("fastembed");
         assert_eq!(default_embed_cache_dir(), expected);
     }
 

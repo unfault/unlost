@@ -1,26 +1,16 @@
 use anyhow::Context;
 use bytes::Bytes;
-use http_body_util::{
-    BodyExt,
-    BodyStream,
-    StreamBody,
-    combinators::BoxBody,
-};
-use hyper::{
-    Request,
-    Response,
-    StatusCode,
-    Uri,
-};
+use futures_util::TryStreamExt;
+use http_body_util::{BodyExt, BodyStream, StreamBody, combinators::BoxBody};
 use hyper::server::conn::http1;
+use hyper::{Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::{
     client::legacy::Client,
     rt::{TokioExecutor, TokioIo},
 };
-use futures_util::TryStreamExt;
-use std::io::IsTerminal;
 use std::convert::Infallible;
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,7 +46,10 @@ impl UpstreamProvider {
 
 fn parse_multiplexed_uri(uri: &Uri) -> anyhow::Result<(String, UpstreamProvider, String)> {
     let path = uri.path();
-    let segs = path.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>();
+    let segs = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
     if segs.len() < 3 || segs[0] != "w" {
         anyhow::bail!("expected path /w/<workspace_id>/<provider>/... (got {path})");
     }
@@ -78,7 +71,10 @@ fn parse_multiplexed_uri(uri: &Uri) -> anyhow::Result<(String, UpstreamProvider,
 }
 
 async fn serve_request(
-    client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
+    client: Client<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        BoxBody<Bytes, hyper::Error>,
+    >,
     state: crate::recording::ServeState,
     conn_id: u64,
     analysis_tx: kanal::Sender<crate::analysis::AnalysisMsg>,
@@ -91,7 +87,9 @@ async fn serve_request(
             warn!(conn_id, error = ?e, "bad multiplexed uri");
             let resp = Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(crate::net::text_body(b"expected /w/<workspace_id>/<provider>/..."))
+                .body(crate::net::text_body(
+                    b"expected /w/<workspace_id>/<provider>/...",
+                ))
                 .unwrap();
             return Ok(resp);
         }
@@ -210,7 +208,6 @@ async fn serve_request(
         if current_symbols.is_empty() {
             req_body_bytes
         } else {
-            
             // Build minimal IntentCapsule for friction check
             let current_intent = crate::IntentCapsule {
                 category: String::new(),
@@ -318,11 +315,15 @@ async fn serve_request(
             match bs.try_next().await {
                 Ok(Some(frame)) => {
                     if let Some(data) = frame.data_ref() {
-                        match tx.try_send(crate::analysis::AnalysisMsg::ResponseChunk(data.clone())) {
+                        match tx.try_send(crate::analysis::AnalysisMsg::ResponseChunk(data.clone()))
+                        {
                             Ok(true) => {}
                             Ok(false) => {
                                 if !drops_logged.swap(true, Ordering::Relaxed) {
-                                    info!(conn_id, "analysis channel full; dropping response bytes");
+                                    info!(
+                                        conn_id,
+                                        "analysis channel full; dropping response bytes"
+                                    );
                                 }
                             }
                             Err(_) => {}
@@ -352,7 +353,10 @@ async fn serve_request(
 }
 
 async fn proxy_request(
-    client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, BoxBody<Bytes, hyper::Error>>,
+    client: Client<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        BoxBody<Bytes, hyper::Error>,
+    >,
     ws: crate::WorkspacePaths,
     emotion: Arc<std::sync::Mutex<crate::emotion::EmotionModel>>,
     upstream_host: String,
@@ -362,17 +366,18 @@ async fn proxy_request(
     analysis_drops_logged: Arc<AtomicBool>,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
-    let upstream_uri = match crate::net::build_upstream_uri(&upstream_host, upstream_port, req.uri()) {
-        Ok(u) => u,
-        Err(e) => {
-            warn!(conn_id, error = ?e, "bad request URI");
-            let resp = Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(crate::net::text_body(b"bad request"))
-                .unwrap();
-            return Ok(resp);
-        }
-    };
+    let upstream_uri =
+        match crate::net::build_upstream_uri(&upstream_host, upstream_port, req.uri()) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!(conn_id, error = ?e, "bad request URI");
+                let resp = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(crate::net::text_body(b"bad request"))
+                    .unwrap();
+                return Ok(resp);
+            }
+        };
 
     let (parts, body) = req.into_parts();
     let request_path = parts
@@ -407,13 +412,14 @@ async fn proxy_request(
         if current_symbols.is_empty() {
             req_body_bytes
         } else {
-            let current_user_text = crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
-                if request_path.contains("/v1/messages") {
-                    crate::net::extract_anthropic_user_text(&json)
-                } else {
-                    crate::net::extract_openai_message_text(&json)
-                }
-            });
+            let current_user_text =
+                crate::net::decode_json_lossy(&req_body_bytes).and_then(|json| {
+                    if request_path.contains("/v1/messages") {
+                        crate::net::extract_anthropic_user_text(&json)
+                    } else {
+                        crate::net::extract_openai_message_text(&json)
+                    }
+                });
 
             // Build minimal IntentCapsule for friction check
             let current_intent = crate::IntentCapsule {
@@ -446,7 +452,8 @@ async fn proxy_request(
             };
 
             // Query recent history and check for friction
-            match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
+            match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await
+            {
                 Ok(history) => {
                     if let Some(warning) = crate::governor::evaluate_friction(
                         &current_intent,
@@ -523,11 +530,15 @@ async fn proxy_request(
             match bs.try_next().await {
                 Ok(Some(frame)) => {
                     if let Some(data) = frame.data_ref() {
-                        match tx.try_send(crate::analysis::AnalysisMsg::ResponseChunk(data.clone())) {
+                        match tx.try_send(crate::analysis::AnalysisMsg::ResponseChunk(data.clone()))
+                        {
                             Ok(true) => {}
                             Ok(false) => {
                                 if !drops_logged.swap(true, Ordering::Relaxed) {
-                                    info!(conn_id, "analysis channel full; dropping response bytes");
+                                    info!(
+                                        conn_id,
+                                        "analysis channel full; dropping response bytes"
+                                    );
                                 }
                             }
                             Err(_) => {}
@@ -556,7 +567,10 @@ async fn proxy_request(
     Ok(out_res)
 }
 
-pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder) -> anyhow::Result<()> {
+pub(crate) async fn run_serve(
+    bind: SocketAddr,
+    embedder: crate::embed::Embedder,
+) -> anyhow::Result<()> {
     let https = HttpsConnectorBuilder::new()
         .with_native_roots()
         .context("no native root CA certificates found")?
@@ -582,7 +596,11 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
     } else {
         ("", "")
     };
-    let (dim_on, dim_off) = if use_color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+    let (dim_on, dim_off) = if use_color {
+        ("\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
 
     let host = if addr.ip().is_unspecified() {
         "127.0.0.1".to_string()
@@ -607,11 +625,14 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
         let anthropic_env = std::env::var("ANTHROPIC_BASE_URL").ok();
         if openai_env.is_some() || anthropic_env.is_some() {
             println!();
-            println!("{dim_on}Note:{dim_off} if you set base-url env vars in this shell (e.g. OPENAI_BASE_URL), unlost will ignore them for its own extractor calls.");
+            println!(
+                "{dim_on}Note:{dim_off} if you set base-url env vars in this shell (e.g. OPENAI_BASE_URL), unlost will ignore them for its own extractor calls."
+            );
         }
     }
 
-    let emotion = crate::emotion::EmotionModel::load(crate::emotion::EmotionConfig::default()).await?;
+    let emotion =
+        crate::emotion::EmotionModel::load(crate::emotion::EmotionConfig::default()).await?;
     let state = crate::recording::ServeState::new(embedder, emotion);
 
     const FLUSH_CHAN_CAP: usize = 256;
@@ -628,7 +649,10 @@ pub(crate) async fn run_serve(bind: SocketAddr, embedder: crate::embed::Embedder
         });
     }
 
-    tokio::spawn(crate::recording::process_flush_jobs_serve(flush_rx.to_async(), state.clone()));
+    tokio::spawn(crate::recording::process_flush_jobs_serve(
+        flush_rx.to_async(),
+        state.clone(),
+    ));
 
     loop {
         let (stream, peer) = listener.accept().await?;
@@ -686,7 +710,8 @@ pub(crate) async fn run_proxy(
         .await?;
     let _ = crate::storage::ensure_capsules_table(&db).await?;
 
-    let emotion = crate::emotion::EmotionModel::load(crate::emotion::EmotionConfig::default()).await?;
+    let emotion =
+        crate::emotion::EmotionModel::load(crate::emotion::EmotionConfig::default()).await?;
     let emotion = Arc::new(std::sync::Mutex::new(emotion));
 
     let https = HttpsConnectorBuilder::new()

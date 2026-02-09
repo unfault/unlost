@@ -226,8 +226,7 @@ const SOFT_FRICTION_WARNING: &str =
     "The user seems frustrated. Consider pausing to acknowledge their concern before continuing.";
 
 /// Firm warning for 3+ frustrated messages in window  
-const FIRM_FRICTION_WARNING: &str =
-    "The user has expressed repeated frustration. Stop and ask what's wrong or how you can help differently.";
+const FIRM_FRICTION_WARNING: &str = "The user has expressed repeated frustration. Stop and ask what's wrong or how you can help differently.";
 
 /// Evaluate conversational friction based on user emotion patterns alone.
 ///
@@ -290,17 +289,13 @@ pub(crate) fn evaluate_conversational_friction(
 }
 
 /// Warning messages for LLM-detected failure modes
-const DRIFT_WARNING: &str = 
-    "Previous context may be stale or incorrect. The last exchange showed signs of drift (wrong mental model). Verify your assumptions about the codebase before proceeding.";
+const DRIFT_WARNING: &str = "Previous context may be stale or incorrect. The last exchange showed signs of drift (wrong mental model). Verify your assumptions about the codebase before proceeding.";
 
-const FALSE_PROGRESS_WARNING: &str = 
-    "The user disputed completion in a recent exchange. Verify that your changes actually work before claiming the task is done.";
+const FALSE_PROGRESS_WARNING: &str = "The user disputed completion in a recent exchange. Verify that your changes actually work before claiming the task is done.";
 
-const REDISCOVERY_WARNING: &str = 
-    "This topic was already discussed recently. Check the prior decision before re-exploring the same ground.";
+const REDISCOVERY_WARNING: &str = "This topic was already discussed recently. Check the prior decision before re-exploring the same ground.";
 
-const DECISION_CONFLICT_WARNING: &str =
-    "Intervention: This approach conflicts with a prior project decision. Re-route to the compliant pattern.";
+const DECISION_CONFLICT_WARNING: &str = "Intervention: This approach conflicts with a prior project decision. Re-route to the compliant pattern.";
 
 /// Evaluate recent capsules for LLM-detected failure modes.
 ///
@@ -605,11 +600,7 @@ fn jaccard(a: &[String], b: &[String]) -> f32 {
     let sb: std::collections::HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
     let inter = sa.intersection(&sb).count() as f32;
     let uni = sa.union(&sb).count() as f32;
-    if uni <= 0.0 {
-        0.0
-    } else {
-        inter / uni
-    }
+    if uni <= 0.0 { 0.0 } else { inter / uni }
 }
 
 fn build_hydration_packet(
