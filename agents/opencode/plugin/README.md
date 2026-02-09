@@ -1,58 +1,63 @@
-# @unfault/opencode-unlost
+# Unlost
 
-OpenCode plugin for unlost/unloop.
+Intercepts loops, injects guidance, and quietly records what actually happened.
 
-## What it does (v0)
+## Why this exists
 
-- Uses OpenCode's `experimental.chat.messages.transform` hook to perform pre-flight prompt injection.
-- Detects basic "thrash + negative cue" loops using only the in-memory message history.
+You know the drill:
 
-This avoids the UX footguns of:
-- starting a proxy server manually
-- changing provider endpoints
+- You ask it to rename a function. It renames it, then renames it again. Then again. You intervene: "stop renaming, just add a wrapper."
+- You come back after the weekend. The agent made decisions you don't understand. Nobody remembers why.
+- It says it finished. It didn't. It created a file that was never committed.
+
+That's the babysitting tax.
+
+## What it does
+
+It intercepts before your agent goes off the rails:
+
+- Checks prompts for signs of thrashing before sending them
+- Injects a warning into the conversation when it detects friction
+- Records user/assistant exchanges for later recall
+- Runs locally, talks to `unlost shim opencode` over stdio
+
+No proxy server, no config juggling. Just add the plugin and go.
 
 ## Install
 
-Add this plugin to `opencode.json`:
+Add to `opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@unfault/opencode-unlost"]
+  "plugin": ["@unfault/unlost-opencode"]
 }
 ```
 
-Or via unlost:
+Or via the CLI:
 
 ```bash
 unlost config agent opencode-plugin --path .
 ```
 
-Restart OpenCode after changes.
+Restart OpenCode. That's it.
 
-## Notes
+## How it works
 
-This initial version is intentionally dependency-free and runs locally.
-The plugin spawns a local unlost shim for conversation recording and friction detection.
-
-## Shim Integration
-
-The plugin spawns `unlost shim opencode` and communicates via stdio JSON-RPC:
+The plugin speaks JSON-RPC to a companion process:
 
 ```
-check  → {"method": "check", "params": {"text": "...", "directory": "..."}}
-       ← {"note": "warning to inject"} or {"note": null}
+check    → {"method": "check", "params": {"text": "...", "directory": "..."}}
+         ← {"note": "warning to inject"} or {"note": null}
 
-record → {"method": "record", "params": {"user_text": "...", "assistant_text": "...", "directory": "..."}}
-       ← {"ok": true}
-
-record (optional usage) → {"method": "record", "params": {"user_text": "...", "assistant_text": "...", "directory": "...", "usage": {"provider_id": "...", "model_id": "...", "cost": 0.0, "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}}
-                     ← {"ok": true}
+record   → {"method": "record", "params": {"user_text": "...", "assistant_text": "...", "directory": "..."}}
+         ← {"ok": true}
 ```
 
-**Performance guarantee**: The `record` call returns immediately (~0ms). All heavy processing
-(LLM extraction, embedding, LanceDB insert) happens asynchronously in a background task.
-This ensures the agent is never blocked waiting for unlost.
+`check` runs before each prompt. `record` runs after each exchange.
 
-**Trade-off**: Queries have eventual consistency—a capsule may not appear in search results
-for a few seconds after the `record` call returns.
+## Performance
+
+`record` returns immediately. Everything heavy (LLM extraction, embeddings, storage) happens in the background. Your agent never waits.
+
+Trade-off: capsules won't show up in queries for a few seconds after recording.

@@ -1,7 +1,7 @@
 {
-  "name": "@unfault/opencode-unlost",
+  "name": "@unfault/unlost-opencode",
   "version": "0.0.5",
-  "description": "OpenCode plugin for unlost/unloop (local loop-breaker + capture hooks)",
+  "description": "Agent orientation for OpenCode that spots friction and keeps agents on track",
   "license": "MIT",
   "type": "module",
   "main": "index.js",

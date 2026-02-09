@@ -1,0 +1,42 @@
+name: release-plugin
+
+on:
+  push:
+    tags:
+      - 'opencode-v*'
+    paths:
+      - 'agents/opencode/plugin/**'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: cd agents/opencode/plugin && npm ci
+
+      - name: Build
+        run: cd agents/opencode/plugin && npm run build
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${TAG#opencode-}" >> $GITHUB_OUTPUT
+        env:
+          TAG: ${GITHUB_REF#refs/tags/}
+
+      - name: Update package.json version
+        run: cd agents/opencode/plugin && npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
+
+      - name: Publish to npm
+        run: cd agents/opencode/plugin && npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
