@@ -3,7 +3,7 @@
 // Records conversations and detects friction loops.
 // Spawns `unlost companion` as a child process for all logic.
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, type ChildProcess, execFileSync } from "node:child_process"
 import { createInterface } from "node:readline"
 import type { Plugin } from "@opencode-ai/plugin"
 
@@ -78,6 +78,54 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
   }
 
   const dumpEvents = process.env.UNLOST_DEBUG_DUMP_EVENTS === "1"
+  const recordGitPaths = process.env.UNLOST_RECORD_GIT_PATHS === "1"
+
+  function getGitTouchedPaths(): string[] {
+    if (!recordGitPaths) return []
+
+    try {
+      const out = execFileSync(
+        "git",
+        ["-C", workingDirectory, "status", "--porcelain=v1"],
+        { encoding: "utf8" }
+      )
+      const paths: string[] = []
+      const seen = new Set<string>()
+
+      for (const rawLine of out.split(/\r?\n/)) {
+        const line = rawLine.trimEnd()
+        if (!line) continue
+
+        // porcelain v1: XY <path> OR ?? <path>
+        // Rename: XY <from> -> <to>
+        const rest = line.length >= 3 ? line.slice(3) : ""
+        if (!rest) continue
+
+        let p = rest
+        const arrow = rest.lastIndexOf(" -> ")
+        if (arrow !== -1) {
+          p = rest.slice(arrow + 4)
+        }
+        p = p.trim()
+        if (!p) continue
+
+        // Best-effort normalization
+        p = p.replace(/\\/g, "/")
+
+        if (!seen.has(p)) {
+          seen.add(p)
+          paths.push(p)
+        }
+
+        if (paths.length >= 64) break
+      }
+
+      return paths
+    } catch (e) {
+      log("debug", `git touched_paths failed: ${String(e)}`)
+      return []
+    }
+  }
 
   function schedulePartialFlush(sessionId: string) {
     const existing = partialFlushTimers.get(sessionId)
@@ -196,6 +244,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     const userText = userMsg?.text || ""
     const assistantText = assistantMsg?.text || ""
+    const touchedPaths = getGitTouchedPaths()
 
     if (!userText && !assistantText) return
 
@@ -207,6 +256,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
       user_text: userText,
       assistant_text: assistantText,
       directory: workingDirectory,
+      touched_paths: touchedPaths,
       agent_session_id: sessionId,
       usage: usageToSend,
     }).catch(() => {})

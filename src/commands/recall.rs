@@ -196,42 +196,14 @@ pub(crate) async fn run(
     .await?;
 
     let mut hits: Vec<crate::CapsuleHit> = Vec::new();
-    if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
-        &ws,
-        120,
-        None,
-        emotion_label.as_deref(),
-        provider_label.as_deref(),
-        since_ms,
-        until_ms,
-    )
-    .await
-    {
-        recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
-        hits.extend(recent);
-    }
+    let want = limit.min(40);
 
     if let Some(scope) = scope_opt.as_deref() {
-        if let Some(expr) = crate::util::scope_filter_expr(scope) {
-            if let Ok(mut scoped) = crate::storage::scan_capsules_lancedb(
-                &ws,
-                80,
-                Some(&expr),
-                emotion_label.as_deref(),
-                provider_label.as_deref(),
-                since_ms,
-                until_ms,
-            )
-            .await
-            {
-                scoped.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
-                hits.extend(scoped);
-            }
-        }
-
+        // When scoped, prioritize capsules that explicitly mention or relate to the scope
+        // Use semantic search to catch text mentions (increased from 18 to 50)
         if let Ok(mut sem) = crate::storage::query_capsules_lancedb(
             scope,
-            18,
+            50,
             None,
             emotion_label.as_deref(),
             provider_label.as_deref(),
@@ -249,6 +221,59 @@ pub(crate) async fn run(
             });
             hits.extend(sem);
         }
+
+        // Also fetch by symbols field for direct references
+        if let Some(expr) = crate::util::scope_filter_expr(scope) {
+            if let Ok(mut scoped) = crate::storage::scan_capsules_lancedb(
+                &ws,
+                80,
+                Some(&expr),
+                emotion_label.as_deref(),
+                provider_label.as_deref(),
+                since_ms,
+                until_ms,
+            )
+            .await
+            {
+                scoped.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+                hits.extend(scoped);
+            }
+        }
+
+        // Only backfill with recent capsules if we're under the limit
+        // This ensures scoped results dominate the narrative
+        if hits.len() < want {
+            if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
+                &ws,
+                want.saturating_sub(hits.len()),
+                None,
+                emotion_label.as_deref(),
+                provider_label.as_deref(),
+                since_ms,
+                until_ms,
+            )
+            .await
+            {
+                recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+                hits.extend(recent);
+            }
+        }
+    } else {
+        // No scope: fetch recent capsules for general workspace context
+        if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
+            &ws,
+            120,
+            None,
+            emotion_label.as_deref(),
+            provider_label.as_deref(),
+            since_ms,
+            until_ms,
+        )
+        .await
+        {
+            recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+            hits.extend(recent);
+        }
     }
 
     let mut by_id: HashMap<String, crate::CapsuleHit> = HashMap::new();
@@ -261,7 +286,6 @@ pub(crate) async fn run(
         }
     }
     let mut hits = by_id.into_values().collect::<Vec<_>>();
-    let want = limit.min(40);
     hits = select_hits_for_recall(hits, want);
 
     if hits.is_empty() {

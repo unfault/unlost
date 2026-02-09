@@ -377,6 +377,54 @@ pub(crate) async fn llm_recall_narrative(
     workspace_root: &str,
     hits: &[crate::CapsuleHit],
 ) -> Result<String> {
+    fn workspace_git_status_porcelain(workspace_root: &str) -> Option<String> {
+        use std::process::Command;
+
+        let root = std::path::Path::new(workspace_root);
+        if !root.join(".git").exists() {
+            return None;
+        }
+
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["status", "--porcelain=v1"]) // stable, easy to parse
+            .output()
+            .ok()?;
+
+        if !out.status.success() {
+            return None;
+        }
+
+        let s = String::from_utf8_lossy(&out.stdout);
+        let mut lines = s.lines();
+
+        let mut snap = String::new();
+        let mut n = 0usize;
+        while let Some(line) = lines.next() {
+            let line = line.trim_end();
+            if line.is_empty() {
+                continue;
+            }
+            if n == 0 {
+                snap.push_str("git status --porcelain=v1:\n");
+            }
+            if n >= 40 {
+                snap.push_str("... (truncated)\n");
+                break;
+            }
+            snap.push_str(line);
+            snap.push('\n');
+            n += 1;
+        }
+
+        if snap.is_empty() {
+            Some("git status: clean\n".to_string())
+        } else {
+            Some(snap)
+        }
+    }
+
     let mut context = String::new();
     context.push_str("Recall context\n\n");
     if let Some(s) = scope {
@@ -391,6 +439,16 @@ pub(crate) async fn llm_recall_narrative(
         context.push_str("root: ");
         context.push_str(workspace_root);
         context.push_str("\n\n");
+
+        // Optional: allow callers to include a git snapshot to reflect uncommitted work.
+        // Default is off to keep recall strictly capsule-driven.
+        if std::env::var_os("UNLOST_RECALL_GIT_SNAPSHOT").is_some() {
+            if let Some(snap) = workspace_git_status_porcelain(workspace_root) {
+                context.push_str("Workspace snapshot (non-capsule evidence):\n");
+                context.push_str(&snap);
+                context.push('\n');
+            }
+        }
     }
     context.push_str("Capsules (most recent first):\n");
     for (i, hit) in hits.iter().enumerate() {
@@ -463,14 +521,15 @@ pub(crate) async fn llm_recall_narrative(
 
 Rules:
 - Base your output ONLY on the provided capsules.
+- If a "Workspace snapshot (non-capsule evidence)" section is present, you MAY use it only to describe current uncommitted work (e.g., which files are being edited). Do not treat it as decisions/intent; do not infer beyond what it shows.
 - Do NOT quote or excerpt the conversation.
-- If scoped (a file path or symbol), focus on that scope but explicitly call out cross-scope impacts: any important symbols or files outside the scope that appear connected.
+- When scoped to a specific file or symbol, the narrative MUST be primarily ABOUT that scope. Only mention cross-scope impacts if they directly and significantly affect the scoped item. Do not include general workspace context unless it specifically relates to the scoped item.
 - Keep it high-signal: intent, decisions, rationale, and what's next.
 - Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the capsules. If present, use this to paint the emotional context.
 - If there are no mood lines, do NOT infer or guess emotion; leave it out entirely.
 
 Output format:
-- 2-3 sentences: overall state of the work.
+- 2-3 sentences: overall state of the work focused on the scope (if scoped).
 - Then 3-6 short bullets: key decisions (with 1-2 backticked tokens each).
 - Then 2-4 short bullets: suggested next steps (as actions).
 - If the evidence is thin, say so plainly and recommend ONE follow-up `unlost query ...`.

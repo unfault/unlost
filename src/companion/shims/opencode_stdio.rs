@@ -55,6 +55,9 @@ struct RecordParams {
     /// Workspace directory (absolute path)
     #[serde(default)]
     directory: String,
+    /// Best-effort list of touched paths (workspace-relative). Optional.
+    #[serde(default)]
+    touched_paths: Vec<String>,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     #[serde(default)]
     agent_session_id: Option<String>,
@@ -158,6 +161,7 @@ impl From<RecordParams> for RecordTurnEvent {
             directory: p.directory,
             user_text: p.user_text,
             assistant_text: p.assistant_text,
+            touched_paths: p.touched_paths,
             agent_kind: AgentKind::OpenCode,
             agent_session_id: p.agent_session_id,
             usage,

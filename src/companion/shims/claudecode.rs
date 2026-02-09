@@ -12,6 +12,7 @@ use crate::workspace::get_or_create_workspace_paths;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 // ============================================================================
 // Hook input types (from Claude Code)
@@ -61,6 +62,8 @@ struct TranscriptLine {
     is_sidechain: Option<bool>,
     uuid: Option<String>,
     message: Option<TranscriptMessage>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +126,125 @@ struct ParsedTurn {
     user_text: String,
     assistant_text: String,
     usage: Option<UsageEvent>,
+    touched_paths: Vec<String>,
+}
+
+fn normalize_touched_path(p: &str, cwd: &Path) -> Option<String> {
+    let mut s = p.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Normalize slashes.
+    let owned;
+    if s.contains('\\') {
+        owned = s.replace('\\', "/");
+        s = &owned;
+    }
+
+    // Strip leading ./
+    let s = s.strip_prefix("./").unwrap_or(s);
+
+    // If absolute and under cwd, strip cwd prefix.
+    if let Ok(abs) = std::path::Path::new(s).canonicalize() {
+        if let Ok(cwd_abs) = cwd.canonicalize() {
+            if let Ok(rel) = abs.strip_prefix(&cwd_abs) {
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                let rel = rel.trim_start_matches('/').to_string();
+                if !rel.is_empty() {
+                    return Some(rel);
+                }
+            }
+        }
+    }
+
+    Some(s.trim_start_matches('/').to_string())
+}
+
+fn looks_like_path(s: &str) -> bool {
+    // Heuristic: avoid grabbing arbitrary prose.
+    // Accept common repo-ish patterns.
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    if s.len() > 260 {
+        return false;
+    }
+    if s.contains('\n') || s.contains('\r') {
+        return false;
+    }
+    if s.contains(' ') {
+        return false;
+    }
+    if !(s.contains('/') || s.contains('\\')) {
+        return false;
+    }
+    true
+}
+
+fn collect_touched_paths_from_value(v: &serde_json::Value, cwd: &Path, out: &mut HashSet<String>) {
+    match v {
+        serde_json::Value::String(s) => {
+            if looks_like_path(s) {
+                if let Some(p) = normalize_touched_path(s, cwd) {
+                    out.insert(p);
+                }
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for x in a {
+                collect_touched_paths_from_value(x, cwd, out);
+            }
+        }
+        serde_json::Value::Object(m) => {
+            // Prefer keys commonly used for file paths.
+            for k in [
+                "path",
+                "file",
+                "file_path",
+                "filepath",
+                "filename",
+                "target",
+                "target_file",
+            ] {
+                if let Some(val) = m.get(k) {
+                    collect_touched_paths_from_value(val, cwd, out);
+                }
+            }
+            // Also walk everything; snapshots vary.
+            for (_k, val) in m.iter() {
+                collect_touched_paths_from_value(val, cwd, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_touched_paths_from_content(content: &serde_json::Value, cwd: &Path) -> Vec<String> {
+    let mut out: HashSet<String> = HashSet::new();
+
+    // Content may be an array of blocks.
+    if let serde_json::Value::Array(blocks) = content {
+        for block in blocks {
+            if let Some(obj) = block.as_object() {
+                let ty = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty == "tool_use" || ty == "tool_result" {
+                    if let Some(v) = obj.get("input") {
+                        collect_touched_paths_from_value(v, cwd, &mut out);
+                    }
+                    if let Some(v) = obj.get("result") {
+                        collect_touched_paths_from_value(v, cwd, &mut out);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut v = out.into_iter().collect::<Vec<_>>();
+    v.sort();
+    v.truncate(64);
+    v
 }
 
 /// Extract text content from a message's content field
@@ -167,6 +289,7 @@ fn is_tool_result_message(content: &serde_json::Value) -> bool {
 fn parse_transcript_from_cursor(
     transcript_path: &Path,
     cursor: &CursorState,
+    cwd: &Path,
 ) -> anyhow::Result<(Vec<ParsedTurn>, CursorState)> {
     let file = std::fs::File::open(transcript_path)?;
     let metadata = file.metadata()?;
@@ -185,6 +308,9 @@ fn parse_transcript_from_cursor(
     let mut turns = Vec::new();
     let mut current_user_text: Option<String> = None;
     let mut current_assistant_text = String::new();
+
+    // Best-effort: collect touched paths during a turn.
+    let mut pending_touched: HashSet<String> = HashSet::new();
 
     let mut current_usage: Option<UsageEvent> = None;
     let mut last_uuid: Option<String> = cursor.last_uuid.clone();
@@ -209,6 +335,16 @@ fn parse_transcript_from_cursor(
             Some(t) => t.as_str(),
             None => continue,
         };
+
+        if line_type == "file-history-snapshot" {
+            for (_k, v) in parsed.extra.iter() {
+                collect_touched_paths_from_value(v, cwd, &mut pending_touched);
+            }
+            if let Some(uuid) = &parsed.uuid {
+                last_uuid = Some(uuid.clone());
+            }
+            continue;
+        }
 
         // Skip sidechains (prompt suggestions, background agents)
         if parsed.is_sidechain == Some(true) {
@@ -240,6 +376,10 @@ fn parse_transcript_from_cursor(
             None => continue,
         };
 
+        for p in extract_touched_paths_from_content(content, cwd) {
+            pending_touched.insert(p);
+        }
+
         match (line_type, role) {
             ("user", "user") => {
                 // Skip tool_result messages
@@ -259,6 +399,7 @@ fn parse_transcript_from_cursor(
                             user_text,
                             assistant_text: std::mem::take(&mut current_assistant_text),
                             usage: current_usage.take(),
+                            touched_paths: pending_touched.drain().collect(),
                         });
                     }
                 }
@@ -305,6 +446,7 @@ fn parse_transcript_from_cursor(
                 user_text,
                 assistant_text: current_assistant_text,
                 usage: current_usage,
+                touched_paths: pending_touched.drain().collect(),
             });
         }
     }
@@ -433,7 +575,8 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
 
     // Load cursor and parse new turns
     let cursor = load_cursor(&ws.id, &input.session_id);
-    let (turns, new_cursor) = parse_transcript_from_cursor(&transcript_path, &cursor)?;
+    let cwd_path = std::path::Path::new(&input.cwd);
+    let (turns, new_cursor) = parse_transcript_from_cursor(&transcript_path, &cursor, cwd_path)?;
 
     tracing::info!(
         turns_count = turns.len(),
@@ -448,6 +591,7 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
             directory: input.cwd.clone(),
             user_text: turn.user_text,
             assistant_text: turn.assistant_text,
+            touched_paths: turn.touched_paths,
             agent_kind: AgentKind::ClaudeCode,
             agent_session_id: Some(input.session_id.clone()),
             usage: turn.usage,

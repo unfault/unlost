@@ -100,6 +100,8 @@ pub(crate) struct RecordTurnEvent {
     pub user_text: String,
     /// Assistant's response text
     pub assistant_text: String,
+    /// Best-effort list of touched paths (workspace-relative). Optional.
+    pub touched_paths: Vec<String>,
     /// Which agent platform this came from
     pub agent_kind: AgentKind,
     /// Optional session ID for grouping conversations
@@ -463,6 +465,19 @@ impl Flow {
 
         // Build exchange text in the format expected by the chunker
         let mut exchange_text = String::new();
+
+        if !event.touched_paths.is_empty() {
+            exchange_text.push_str("Touched paths:\n");
+            for p in event.touched_paths.iter().take(32) {
+                let p = p.trim();
+                if p.is_empty() {
+                    continue;
+                }
+                exchange_text.push_str(p);
+                exchange_text.push('\n');
+            }
+            exchange_text.push('\n');
+        }
         if !event.user_text.trim().is_empty() {
             exchange_text.push_str("User:\n");
             exchange_text.push_str(event.user_text.trim());
