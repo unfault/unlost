@@ -7,12 +7,84 @@ use crate::storage::ensure_capsules_table;
 use bytes::Bytes;
 use kanal::AsyncReceiver;
 use lancedb::connection::Connection;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, warn};
+
+struct RecentJobDeduper {
+    ttl: std::time::Duration,
+    max_entries: usize,
+    seen: HashMap<String, std::time::Instant>,
+}
+
+impl RecentJobDeduper {
+    fn new(ttl: std::time::Duration, max_entries: usize) -> Self {
+        Self {
+            ttl,
+            max_entries,
+            seen: HashMap::new(),
+        }
+    }
+
+    fn should_skip_and_mark(&mut self, key: String) -> bool {
+        let now = std::time::Instant::now();
+        self.prune(now);
+
+        if let Some(prev) = self.seen.get(&key) {
+            if now.duration_since(*prev) <= self.ttl {
+                // Refresh the timestamp so rapid repeated duplicates remain suppressed.
+                self.seen.insert(key, now);
+                return true;
+            }
+        }
+
+        self.seen.insert(key, now);
+        false
+    }
+
+    fn prune(&mut self, now: std::time::Instant) {
+        self.seen
+            .retain(|_, t| now.duration_since(*t) <= self.ttl);
+        if self.seen.len() <= self.max_entries {
+            return;
+        }
+
+        // Keep the most recent max_entries.
+        let mut items = self.seen.iter().map(|(k, v)| (k.clone(), *v)).collect::<Vec<_>>();
+        items.sort_by(|a, b| b.1.cmp(&a.1));
+        items.truncate(self.max_entries);
+        self.seen = items.into_iter().collect();
+    }
+}
+
+fn flush_job_dedupe_key(job: &FlushJob) -> String {
+    // Goal: suppress *true duplicates* caused by multiple flush triggers for the same slice.
+    // We scope to a small TTL and include a hash of the actual slice content.
+    let mut h = Sha256::new();
+    h.update(job.workspace_id.as_bytes());
+    h.update(&[0u8]);
+    h.update(job.conn_id.to_le_bytes());
+    h.update(&[0u8]);
+    h.update(job.meta.upstream_host.as_bytes());
+    h.update(&[0u8]);
+    h.update(job.meta.request_path.as_bytes());
+    h.update(&[0u8]);
+    h.update(job.meta.agent_session_id.as_deref().unwrap_or("").as_bytes());
+    h.update(&[0u8]);
+    h.update(job.input.as_bytes());
+    format!(
+        "{}|{}|{}|{}|{}",
+        job.workspace_id,
+        job.conn_id,
+        job.meta.request_path,
+        job.meta.agent_session_id.as_deref().unwrap_or(""),
+        hex::encode(h.finalize())
+    )
+}
 
 fn append_capsule_jsonl(
     path: &std::path::Path,
@@ -376,11 +448,24 @@ Failure mode detection - set failure_mode to one of:\n\
 \n\
 Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
+    let mut deduper = RecentJobDeduper::new(std::time::Duration::from_secs(45), 2048);
+
     loop {
         let job = match rx.recv().await {
             Ok(j) => j,
             Err(_) => break,
         };
+
+        let dedupe_key = flush_job_dedupe_key(&job);
+        if deduper.should_skip_and_mark(dedupe_key) {
+            debug!(
+                workspace_id = %job.workspace_id,
+                conn_id = job.conn_id,
+                exchange_seq = job.exchange_seq,
+                "skipping duplicate flush job"
+            );
+            continue;
+        }
 
         let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
         let emotion_handle = state.emotion.clone();
@@ -503,11 +588,24 @@ Failure mode detection - set failure_mode to one of:\n\
 \n\
 Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
+    let mut deduper = RecentJobDeduper::new(std::time::Duration::from_secs(45), 2048);
+
     loop {
         let job = match rx.recv().await {
             Ok(j) => j,
             Err(_) => break,
         };
+
+        let dedupe_key = flush_job_dedupe_key(&job);
+        if deduper.should_skip_and_mark(dedupe_key) {
+            debug!(
+                workspace_id = %job.workspace_id,
+                conn_id = job.conn_id,
+                exchange_seq = job.exchange_seq,
+                "skipping duplicate flush job"
+            );
+            continue;
+        }
 
         let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
         let emotion_handle = emotion.clone();

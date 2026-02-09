@@ -174,7 +174,7 @@ pub(crate) enum Command {
         target: Vec<String>,
 
         /// Max capsules to use
-        #[arg(long, default_value_t = 24)]
+        #[arg(long, default_value_t = 40)]
         limit: usize,
 
         /// Filter by user emotion (joy, anger, frustration, sad, confused, neutral)

@@ -1,7 +1,123 @@
 use crate::cli::OutputFormat;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+
+fn fingerprint_tokens(s: &str, max_tokens: usize) -> String {
+    let mut out = String::with_capacity(s.len().min(96));
+    let mut cur = String::new();
+    let mut n = 0usize;
+
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            cur.push(ch.to_ascii_lowercase());
+            continue;
+        }
+
+        if cur.is_empty() {
+            continue;
+        }
+
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&cur);
+        n += 1;
+        if n >= max_tokens {
+            return out;
+        }
+        cur.clear();
+    }
+
+    if !cur.is_empty() && n < max_tokens {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&cur);
+    }
+    out
+}
+
+fn hit_fingerprint(h: &crate::CapsuleHit) -> String {
+    // Goal: collapse near-duplicates that differ only slightly in phrasing.
+    // We intentionally use only the first few tokens from each field.
+    let cap = &h.capsule;
+    let mut fp = String::with_capacity(256);
+    fp.push_str(&fingerprint_tokens(&cap.category, 6));
+    fp.push('|');
+    fp.push_str(&fingerprint_tokens(&cap.intent, 14));
+    fp.push('|');
+    fp.push_str(&fingerprint_tokens(&cap.decision, 12));
+
+    if !cap.symbols.is_empty() {
+        fp.push('|');
+        fp.push_str(&fingerprint_tokens(&cap.symbols.join(" "), 10));
+    }
+    fp
+}
+
+fn hit_session_key(h: &crate::CapsuleHit) -> String {
+    if let Some(s) = h.meta.agent_session_id.as_deref() {
+        if !s.trim().is_empty() {
+            return format!("ses:{s}");
+        }
+    }
+    format!("conn:{}", h.conn_id)
+}
+
+fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec<crate::CapsuleHit> {
+    if hits.len() <= limit {
+        return hits;
+    }
+
+    hits.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+
+    // Keep recency, but collapse repetitive capsules so we don't crowd out
+    // older-but-important decisions.
+    // Only de-dup within a session/connection. Cross-session repetition can still be useful
+    // evidence (e.g., the same decision reaffirmed later).
+    let mut seen_fp: HashSet<String> = HashSet::new();
+    let mut per_session: HashMap<String, usize> = HashMap::new();
+    let max_per_session = (limit / 3).clamp(2, 8);
+
+    let mut selected = Vec::with_capacity(limit);
+
+    // Always keep the most recent capsule as an anchor.
+    let mut it = hits.into_iter();
+    let Some(first) = it.next() else {
+        return Vec::new();
+    };
+    {
+        let sk = hit_session_key(&first);
+        let fp = hit_fingerprint(&first);
+        seen_fp.insert(format!("{sk}|{fp}"));
+        *per_session.entry(sk).or_insert(0) += 1;
+        selected.push(first);
+    }
+
+    for h in it {
+        if selected.len() >= limit {
+            break;
+        }
+
+        let sk = hit_session_key(&h);
+        let cnt = per_session.entry(sk.clone()).or_insert(0);
+        if *cnt >= max_per_session {
+            continue;
+        }
+
+        let fp = hit_fingerprint(&h);
+        let k = format!("{sk}|{fp}");
+        if seen_fp.contains(&k) {
+            continue;
+        }
+
+        seen_fp.insert(k);
+        *cnt += 1;
+        selected.push(h);
+    }
+    selected
+}
 
 pub(crate) async fn run(
     target: Vec<String>,
@@ -92,7 +208,7 @@ pub(crate) async fn run(
     .await
     {
         recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
-        hits.extend(recent.into_iter().take(limit.min(40)));
+        hits.extend(recent);
     }
 
     if let Some(scope) = scope_opt.as_deref() {
@@ -145,10 +261,8 @@ pub(crate) async fn run(
         }
     }
     let mut hits = by_id.into_values().collect::<Vec<_>>();
-    hits.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
-    if hits.len() > limit {
-        hits.truncate(limit);
-    }
+    let want = limit.min(40);
+    hits = select_hits_for_recall(hits, want);
 
     if hits.is_empty() {
         if let Some(pb) = spinner.as_ref() {
