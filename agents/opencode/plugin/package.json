@@ -1,9 +1,16 @@
 {
   "name": "@unfault/unlost-opencode",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Agent orientation for OpenCode that spots friction and keeps agents on track",
   "homepage": "https://unlost.unfault.dev/",
   "author": "Sylvain Hellegouarch <sylvain@unfault.dev> (http://unfault.dev/)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/unfault/unlost"
+  },
+  "bugs": {
+    "url": "https://github.com/unfault/unlost/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "index.js",
