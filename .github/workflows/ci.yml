@@ -2,7 +2,13 @@ name: ci
 
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - 'agents/**'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'agents/**'
 
 jobs:
   test:
