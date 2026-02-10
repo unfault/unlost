@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.2] - 2026-02-10
+
+### Added
+- `unlost shim replay claude` to backfill Claude transcript history (with best-effort de-dupe)
+- Stateless friction note for clearly frustrated first messages (no capsule history required)
+
+### Changed
+- Standardize naming on `claude` (CLI, shims, docs); keep `claudecode` as a compatibility alias
+- Claude transcript ingestion now records user-only turns and includes bounded `tool_result` text
+
+### Fixed
+- Claude shim cursor logic that could skip most new transcript lines after the first `Stop`
+
 ## [0.2.1] - 2026-02-10
 
 ### Changed
@@ -51,6 +64,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.2.2]: https://github.com/unfault/unlost/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/unfault/unlost/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/unfault/unlost/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/unfault/unlost/compare/v0.1.0...v0.1.1
