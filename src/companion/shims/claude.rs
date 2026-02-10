@@ -1,6 +1,6 @@
-//! Claude Code hooks shim.
+//! Claude hooks shim.
 //!
-//! Invoked by Claude Code hooks (UserPromptSubmit, Stop) via stdin JSON.
+//! Invoked by Claude hooks (UserPromptSubmit, Stop) via stdin JSON.
 //! Reads hook event, dispatches to Flow.check() or transcript ingestion.
 //!
 //! Cursor state is persisted per-session to avoid re-processing transcript lines.
@@ -94,6 +94,12 @@ struct CursorState {
 
 fn cursor_path(workspace_id: &str, session_id: &str) -> PathBuf {
     crate::workspace::unlost_workspace_dir(workspace_id)
+        .join("claude")
+        .join(format!("{}.cursor", session_id))
+}
+
+fn legacy_cursor_path(workspace_id: &str, session_id: &str) -> PathBuf {
+    crate::workspace::unlost_workspace_dir(workspace_id)
         .join("claudecode")
         .join(format!("{}.cursor", session_id))
 }
@@ -101,10 +107,14 @@ fn cursor_path(workspace_id: &str, session_id: &str) -> PathBuf {
 fn load_cursor(workspace_id: &str, session_id: &str) -> CursorState {
     let path = cursor_path(workspace_id, session_id);
     if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        CursorState::default()
+        return serde_json::from_str(&data).unwrap_or_default();
     }
+    // Legacy location (pre-claude rename).
+    let legacy = legacy_cursor_path(workspace_id, session_id);
+    if let Ok(data) = std::fs::read_to_string(&legacy) {
+        return serde_json::from_str(&data).unwrap_or_default();
+    }
+    CursorState::default()
 }
 
 fn save_cursor(workspace_id: &str, session_id: &str, cursor: &CursorState) {
@@ -114,6 +124,58 @@ fn save_cursor(workspace_id: &str, session_id: &str, cursor: &CursorState) {
     }
     if let Ok(data) = serde_json::to_string(cursor) {
         let _ = std::fs::write(&path, data);
+    }
+}
+
+fn turnkeys_path(workspace_id: &str, session_id: &str) -> PathBuf {
+    crate::workspace::unlost_workspace_dir(workspace_id)
+        .join("claude")
+        .join(format!("{}.turnkeys", session_id))
+}
+
+fn legacy_turnkeys_path(workspace_id: &str, session_id: &str) -> PathBuf {
+    crate::workspace::unlost_workspace_dir(workspace_id)
+        .join("claudecode")
+        .join(format!("{}.turnkeys", session_id))
+}
+
+fn load_turnkeys(workspace_id: &str, session_id: &str) -> HashSet<String> {
+    let path = turnkeys_path(workspace_id, session_id);
+    let data = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            // Legacy location (pre-claude rename).
+            let legacy = legacy_turnkeys_path(workspace_id, session_id);
+            match std::fs::read_to_string(&legacy) {
+                Ok(s) => s,
+                Err(_) => return HashSet::new(),
+            }
+        }
+    };
+    data.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect()
+}
+
+fn append_turnkeys(workspace_id: &str, session_id: &str, keys: &[String]) {
+    if keys.is_empty() {
+        return;
+    }
+    let path = turnkeys_path(workspace_id, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    for k in keys {
+        if k.trim().is_empty() {
+            continue;
+        }
+        let _ = writeln!(f, "{}", k.trim());
     }
 }
 
@@ -127,6 +189,105 @@ struct ParsedTurn {
     assistant_text: String,
     usage: Option<UsageEvent>,
     touched_paths: Vec<String>,
+    user_uuid: Option<String>,
+    assistant_uuid: Option<String>,
+}
+
+fn turn_key(turn: &ParsedTurn) -> Option<String> {
+    let u = turn.user_uuid.as_deref()?.trim();
+    if u.is_empty() {
+        return None;
+    }
+    let a = turn.assistant_uuid.as_deref().unwrap_or("").trim();
+    Some(format!("{u}:{a}"))
+}
+
+fn truncate_for_recording(mut s: String, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Best-effort truncation without worrying about UTF-8 boundaries too much;
+    // Claude transcripts are typically UTF-8 and mostly ASCII.
+    s.truncate(max_bytes);
+    s.push_str("\n...(truncated)");
+    s
+}
+
+fn value_to_compact_text(v: &serde_json::Value, max_bytes: usize) -> String {
+    match v {
+        serde_json::Value::String(s) => truncate_for_recording(s.clone(), max_bytes),
+        serde_json::Value::Array(a) => {
+            // Some tool results are arrays of text blocks.
+            let mut out = String::new();
+            for item in a {
+                if let Some(obj) = item.as_object() {
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(t) = obj.get("text").and_then(|t| t.as_str()) {
+                            if !out.is_empty() {
+                                out.push('\n');
+                            }
+                            out.push_str(t);
+                        }
+                    }
+                }
+            }
+            if out.trim().is_empty() {
+                truncate_for_recording(v.to_string(), max_bytes)
+            } else {
+                truncate_for_recording(out, max_bytes)
+            }
+        }
+        _ => truncate_for_recording(v.to_string(), max_bytes),
+    }
+}
+
+fn extract_tool_result_blocks_text(content: &serde_json::Value) -> Option<String> {
+    // Claude logs represent tool results as a `user` message whose content includes
+    // blocks of type `tool_result`.
+    let serde_json::Value::Array(blocks) = content else {
+        return None;
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    for block in blocks {
+        let Some(obj) = block.as_object() else {
+            continue;
+        };
+        if obj.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+            continue;
+        }
+
+        let is_error = obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+        let tool_use_id = obj
+            .get("tool_use_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let raw_content = obj.get("content").unwrap_or(&serde_json::Value::Null);
+        let text = value_to_compact_text(raw_content, 12 * 1024);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let mut s = String::new();
+        if is_error {
+            s.push_str("Tool result (error)");
+        } else {
+            s.push_str("Tool result");
+        }
+        if !tool_use_id.is_empty() {
+            s.push_str(" ");
+            s.push_str(tool_use_id);
+        }
+        s.push_str(":\n");
+        s.push_str(text.trim());
+        parts.push(s);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
 }
 
 fn normalize_touched_path(p: &str, cwd: &Path) -> Option<String> {
@@ -307,7 +468,9 @@ fn parse_transcript_from_cursor(
 
     let mut turns = Vec::new();
     let mut current_user_text: Option<String> = None;
+    let mut current_user_uuid: Option<String> = None;
     let mut current_assistant_text = String::new();
+    let mut current_last_assistant_uuid: Option<String> = None;
 
     // Best-effort: collect touched paths during a turn.
     let mut pending_touched: HashSet<String> = HashSet::new();
@@ -315,7 +478,9 @@ fn parse_transcript_from_cursor(
     let mut current_usage: Option<UsageEvent> = None;
     let mut last_uuid: Option<String> = cursor.last_uuid.clone();
     let mut new_offset = start_offset;
-    let mut seen_last_uuid = cursor.last_uuid.is_none();
+    // Cursor uses byte_offset as the primary mechanism. Only use last_uuid as a
+    // resync aid when we start from the beginning (e.g. file truncation/rotation).
+    let mut seen_last_uuid = start_offset > 0 || cursor.last_uuid.is_none();
 
     for line in reader.lines() {
         let line = line?;
@@ -329,6 +494,12 @@ fn parse_transcript_from_cursor(
             Ok(p) => p,
             Err(_) => continue,
         };
+
+        // Best-effort: some tool outputs include structured fields outside `message.content`
+        // (e.g. `toolUseResult.filePath`). Collect any path-like strings.
+        for (_k, v) in parsed.extra.iter() {
+            collect_touched_paths_from_value(v, cwd, &mut pending_touched);
+        }
 
         // Skip non-message lines (file-history-snapshot, etc.)
         let line_type = match &parsed.line_type {
@@ -382,8 +553,21 @@ fn parse_transcript_from_cursor(
 
         match (line_type, role) {
             ("user", "user") => {
-                // Skip tool_result messages
+                // Tool results are logged as `user` messages; keep them as part of the
+                // assistant-side context so we don't lose error details.
                 if is_tool_result_message(content) {
+                    if current_user_text.is_some() {
+                        if let Some(tool_text) = extract_tool_result_blocks_text(content) {
+                            if !current_assistant_text.is_empty() {
+                                current_assistant_text.push('\n');
+                                current_assistant_text.push('\n');
+                            }
+                            current_assistant_text.push_str(&tool_text);
+                        }
+                    }
+                    if let Some(uuid) = &parsed.uuid {
+                        last_uuid = Some(uuid.clone());
+                    }
                     continue;
                 }
 
@@ -394,18 +578,22 @@ fn parse_transcript_from_cursor(
 
                 // If we have a pending turn, save it
                 if let Some(user_text) = current_user_text.take() {
-                    if !current_assistant_text.trim().is_empty() {
-                        turns.push(ParsedTurn {
-                            user_text,
-                            assistant_text: std::mem::take(&mut current_assistant_text),
-                            usage: current_usage.take(),
-                            touched_paths: pending_touched.drain().collect(),
-                        });
-                    }
+                    // Record even if assistant text is empty; user-only turns are
+                    // valuable for friction detection and future context.
+                    turns.push(ParsedTurn {
+                        user_text,
+                        assistant_text: std::mem::take(&mut current_assistant_text),
+                        usage: current_usage.take(),
+                        touched_paths: pending_touched.drain().collect(),
+                        user_uuid: current_user_uuid.take(),
+                        assistant_uuid: current_last_assistant_uuid.take(),
+                    });
                 }
 
                 current_user_text = Some(text);
+                current_user_uuid = parsed.uuid.clone();
                 current_assistant_text.clear();
+                current_last_assistant_uuid = None;
                 current_usage = None;
             }
             ("assistant", "assistant") => {
@@ -415,6 +603,10 @@ fn parse_transcript_from_cursor(
                         current_assistant_text.push('\n');
                     }
                     current_assistant_text.push_str(&text);
+                }
+
+                if parsed.uuid.is_some() {
+                    current_last_assistant_uuid = parsed.uuid.clone();
                 }
 
                 // Capture usage from assistant messages
@@ -441,14 +633,14 @@ fn parse_transcript_from_cursor(
 
     // Don't forget the last pending turn
     if let Some(user_text) = current_user_text {
-        if !current_assistant_text.trim().is_empty() {
-            turns.push(ParsedTurn {
-                user_text,
-                assistant_text: current_assistant_text,
-                usage: current_usage,
-                touched_paths: pending_touched.drain().collect(),
-            });
-        }
+        turns.push(ParsedTurn {
+            user_text,
+            assistant_text: current_assistant_text,
+            usage: current_usage,
+            touched_paths: pending_touched.drain().collect(),
+            user_uuid: current_user_uuid,
+            assistant_uuid: current_last_assistant_uuid,
+        });
     }
 
     let new_cursor = CursorState {
@@ -477,7 +669,7 @@ pub(crate) async fn run(
         hook_event = %hook_input.hook_event_name,
         session_id = %hook_input.session_id,
         cwd = %hook_input.cwd,
-        "claudecode hook invoked"
+        "claude hook invoked"
     );
 
     let config = FlowConfig {
@@ -519,12 +711,12 @@ async fn handle_user_prompt_submit(flow: &mut Flow, input: &HookInput) -> anyhow
         }
     };
 
-    let event = CheckEvent {
-        directory: input.cwd.clone(),
-        text: prompt.clone(),
-        agent_kind: AgentKind::ClaudeCode,
-        agent_session_id: Some(input.session_id.clone()),
-    };
+        let event = CheckEvent {
+            directory: input.cwd.clone(),
+            text: prompt.clone(),
+            agent_kind: AgentKind::Claude,
+            agent_session_id: Some(input.session_id.clone()),
+        };
 
     let result = flow.check(event).await;
 
@@ -585,14 +777,24 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
         "parsed transcript"
     );
 
-    // Record each turn
+    // Record each turn (best-effort de-dupe by transcript UUID keys)
+    let mut seen = load_turnkeys(&ws.id, &input.session_id);
+    let mut new_keys: Vec<String> = Vec::new();
+
     for turn in turns {
+        if let Some(k) = turn_key(&turn) {
+            if seen.contains(&k) {
+                continue;
+            }
+            seen.insert(k.clone());
+            new_keys.push(k);
+        }
         let event = RecordTurnEvent {
             directory: input.cwd.clone(),
             user_text: turn.user_text,
             assistant_text: turn.assistant_text,
             touched_paths: turn.touched_paths,
-            agent_kind: AgentKind::ClaudeCode,
+            agent_kind: AgentKind::Claude,
             agent_session_id: Some(input.session_id.clone()),
             usage: turn.usage,
         };
@@ -603,8 +805,217 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
         }
     }
 
+    append_turnkeys(&ws.id, &input.session_id, &new_keys);
+
     // Save cursor
     save_cursor(&ws.id, &input.session_id, &new_cursor);
 
     Ok(())
+}
+
+pub(crate) async fn replay(
+    path: String,
+    transcript_path: String,
+    session_id: Option<String>,
+    from_start: bool,
+    dedupe: bool,
+    embed_model: String,
+    embed_cache_dir: Option<String>,
+) -> anyhow::Result<()> {
+    let transcript_path = PathBuf::from(transcript_path);
+    if !transcript_path.exists() {
+        anyhow::bail!("transcript file not found at {}", transcript_path.display());
+    }
+
+    let dir_path = Path::new(&path);
+    let ws = get_or_create_workspace_paths(dir_path)?;
+
+    let sid = if let Some(s) = session_id {
+        s
+    } else {
+        transcript_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("missing --session-id and could not infer from transcript filename"))?
+    };
+
+    let config = FlowConfig {
+        embed_model,
+        embed_cache_dir,
+    };
+    let mut flow = Flow::new(config);
+
+    let cursor = if from_start {
+        CursorState {
+            byte_offset: 0,
+            last_uuid: None,
+        }
+    } else {
+        load_cursor(&ws.id, &sid)
+    };
+
+    let (turns, new_cursor) = parse_transcript_from_cursor(&transcript_path, &cursor, dir_path)?;
+    let mut total = 0usize;
+    let mut skipped = 0usize;
+    let mut recorded = 0usize;
+
+    let mut seen = if dedupe {
+        load_turnkeys(&ws.id, &sid)
+    } else {
+        HashSet::new()
+    };
+    let mut new_keys: Vec<String> = Vec::new();
+
+    for turn in turns {
+        total += 1;
+        if dedupe {
+            if let Some(k) = turn_key(&turn) {
+                if seen.contains(&k) {
+                    skipped += 1;
+                    continue;
+                }
+                seen.insert(k.clone());
+                new_keys.push(k);
+            }
+        }
+
+        let event = RecordTurnEvent {
+            directory: path.clone(),
+            user_text: turn.user_text,
+            assistant_text: turn.assistant_text,
+            touched_paths: turn.touched_paths,
+            agent_kind: AgentKind::Claude,
+            agent_session_id: Some(sid.clone()),
+            usage: turn.usage,
+        };
+        let result = flow.record_turn(event).await;
+        if result.error.is_some() {
+            // still count it as processed
+        } else {
+            recorded += 1;
+        }
+    }
+
+    if dedupe {
+        append_turnkeys(&ws.id, &sid, &new_keys);
+    }
+    save_cursor(&ws.id, &sid, &new_cursor);
+
+    flow.drain().await;
+
+    println!(
+        "Replayed transcript {} (session={}). Parsed turns: {}. Recorded: {}. Skipped: {}.",
+        transcript_path.display(),
+        sid,
+        total,
+        recorded,
+        skipped
+    );
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn mk_user(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"user","isSidechain":false,"uuid":"{uuid}","message":{{"role":"user","content":[{{"type":"text","text":{text_json}}}]}}}}"#,
+            uuid = uuid,
+            text_json = serde_json::to_string(text).unwrap()
+        )
+    }
+
+    fn mk_assistant(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","isSidechain":false,"uuid":"{uuid}","message":{{"role":"assistant","model":"claude","content":[{{"type":"text","text":{text_json}}}]}}}}"#,
+            uuid = uuid,
+            text_json = serde_json::to_string(text).unwrap()
+        )
+    }
+
+    fn mk_tool_result(uuid: &str, tool_use_id: &str, content: &str, is_error: bool) -> String {
+        format!(
+            r#"{{"type":"user","isSidechain":false,"uuid":"{uuid}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":{tool_use_id_json},"content":{content_json},"is_error":{is_error}}}]}}}}"#,
+            uuid = uuid,
+            tool_use_id_json = serde_json::to_string(tool_use_id).unwrap(),
+            content_json = serde_json::to_string(content).unwrap(),
+            is_error = if is_error { "true" } else { "false" }
+        )
+    }
+
+    #[test]
+    fn test_parse_resumes_from_byte_offset_without_uuid_gate() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("t.jsonl");
+
+        {
+            let mut f = std::fs::File::create(&p).unwrap();
+            writeln!(f, "{}", mk_user("u1", "hello")).unwrap();
+            writeln!(f, "{}", mk_assistant("a1", "hi")).unwrap();
+        }
+
+        let cwd = td.path();
+        let (t1, c1) = parse_transcript_from_cursor(&p, &CursorState::default(), cwd).unwrap();
+        assert_eq!(t1.len(), 1);
+        assert_eq!(t1[0].user_text, "hello");
+        assert_eq!(t1[0].assistant_text, "hi");
+
+        {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+            writeln!(f, "{}", mk_user("u2", "next")).unwrap();
+            writeln!(f, "{}", mk_assistant("a2", "ok")).unwrap();
+        }
+
+        let (t2, _c2) = parse_transcript_from_cursor(&p, &c1, cwd).unwrap();
+        assert_eq!(t2.len(), 1);
+        assert_eq!(t2[0].user_text, "next");
+        assert_eq!(t2[0].assistant_text, "ok");
+    }
+
+    #[test]
+    fn test_tool_result_is_preserved_in_assistant_context() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("t.jsonl");
+
+        {
+            let mut f = std::fs::File::create(&p).unwrap();
+            writeln!(f, "{}", mk_user("u1", "run tests")).unwrap();
+            writeln!(
+                f,
+                "{}",
+                mk_tool_result("tr1", "toolu_1", "Exit code 127\\npython: not found", true)
+            )
+            .unwrap();
+            writeln!(f, "{}", mk_assistant("a1", "switch to python3")).unwrap();
+        }
+
+        let cwd = td.path();
+        let (t, _c) = parse_transcript_from_cursor(&p, &CursorState::default(), cwd).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].user_text, "run tests");
+        assert!(t[0].assistant_text.contains("Tool result (error)"));
+        assert!(t[0].assistant_text.contains("Exit code 127"));
+        assert!(t[0].assistant_text.contains("switch to python3"));
+    }
+
+    #[test]
+    fn test_user_only_turn_is_recorded() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("t.jsonl");
+
+        {
+            let mut f = std::fs::File::create(&p).unwrap();
+            writeln!(f, "{}", mk_user("u1", "i'm not happy")).unwrap();
+        }
+
+        let cwd = td.path();
+        let (t, _c) = parse_transcript_from_cursor(&p, &CursorState::default(), cwd).unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].user_text, "i'm not happy");
+        assert!(t[0].assistant_text.trim().is_empty());
+    }
 }

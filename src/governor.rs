@@ -84,6 +84,31 @@ const FRICTION_EMOTIONS: &[&str] = &[
     "sad",
 ];
 
+/// Stateless friction note for the very first user message (no history yet).
+///
+/// When history is empty, the main friction heuristics can't run (they rely on
+/// repetition and past emotion). However, we still want to inject a lightweight
+/// warning when the user is clearly upset so the assistant can acknowledge and
+/// re-align immediately.
+pub(crate) fn evaluate_stateless_friction(
+    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
+) -> Option<String> {
+    let e = current_user_emotion?;
+    if !FRICTION_EMOTIONS.contains(&e.label.as_str()) {
+        return None;
+    }
+
+    // Keep thresholds low-ish; we prefer a gentle nudge over missing obvious frustration.
+    if e.confidence < 0.45 || e.intensity < 0.35 {
+        return None;
+    }
+
+    Some(
+        "[SYSTEM NOTE: User frustration detected. Pause to acknowledge the concern and ask what they want to achieve next before continuing.]"
+            .to_string(),
+    )
+}
+
 /// Check whether we should inject a *friction warning* into the next LLM request.
 ///
 /// This is intentionally a small, cheap heuristic (no frameworks, no state machines).
@@ -600,7 +625,11 @@ fn jaccard(a: &[String], b: &[String]) -> f32 {
     let sb: std::collections::HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
     let inter = sa.intersection(&sb).count() as f32;
     let uni = sa.union(&sb).count() as f32;
-    if uni <= 0.0 { 0.0 } else { inter / uni }
+    if uni <= 0.0 {
+        0.0
+    } else {
+        inter / uni
+    }
 }
 
 fn build_hydration_packet(
@@ -896,6 +925,30 @@ mod tests {
                 usage: None,
             },
         }
+    }
+
+    #[test]
+    fn test_stateless_friction_note_emitted_for_frustration() {
+        let e = EmotionMeta {
+            label: "frustration".to_string(),
+            valence: -0.7,
+            intensity: 0.6,
+            confidence: 0.8,
+        };
+        let note = evaluate_stateless_friction(Some(&e));
+        assert!(note.is_some());
+        assert!(note.unwrap().contains("SYSTEM NOTE"));
+    }
+
+    #[test]
+    fn test_stateless_friction_note_not_emitted_for_neutral() {
+        let e = EmotionMeta {
+            label: "neutral".to_string(),
+            valence: 0.0,
+            intensity: 0.2,
+            confidence: 0.9,
+        };
+        assert!(evaluate_stateless_friction(Some(&e)).is_none());
     }
 
     #[test]

@@ -138,8 +138,8 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
             println!("configured ({scope}): {}", cfg_path.display());
         }
 
-        AgentCommand::Claudecode { path, global } => {
-            configure_claudecode(&path, global)?;
+        AgentCommand::Claude { path, global } => {
+            configure_claude(&path, global)?;
         }
     }
     Ok(())
@@ -159,7 +159,7 @@ fn opencode_global_config_path() -> anyhow::Result<std::path::PathBuf> {
     Ok(dir.join("opencode").join("opencode.json"))
 }
 
-fn configure_claudecode(path: &str, global: bool) -> anyhow::Result<()> {
+fn configure_claude(path: &str, global: bool) -> anyhow::Result<()> {
     let cfg_path = if global {
         // Global: ~/.claude/settings.json
         let home = std::env::var("HOME")
@@ -196,12 +196,12 @@ fn configure_claudecode(path: &str, global: bool) -> anyhow::Result<()> {
     // Build the hooks config
     let unlost_hook = serde_json::json!({
         "type": "command",
-        "command": "unlost shim claudecode"
+        "command": "unlost shim claude"
     });
 
     let unlost_hook_async = serde_json::json!({
         "type": "command",
-        "command": "unlost shim claudecode",
+        "command": "unlost shim claude",
         "async": true
     });
 
@@ -223,6 +223,14 @@ fn configure_claudecode(path: &str, global: bool) -> anyhow::Result<()> {
         .entry("Stop")
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));
     add_unlost_hook_if_missing(stop, unlost_hook_async);
+
+    // Migrate any legacy hook command strings in-place.
+    if let Some(v) = hooks_obj.get_mut("UserPromptSubmit") {
+        rewrite_unlost_hook_commands(v);
+    }
+    if let Some(v) = hooks_obj.get_mut("Stop") {
+        rewrite_unlost_hook_commands(v);
+    }
 
     // Write back
     let rendered = serde_json::to_string_pretty(&json)?;
@@ -246,7 +254,9 @@ fn add_unlost_hook_if_missing(hook_array: &mut serde_json::Value, hook: serde_js
             hooks.iter().any(|h| {
                 h.get("command")
                     .and_then(|c| c.as_str())
-                    .map(|c| c.contains("unlost shim claudecode"))
+                    .map(|c| {
+                        c.contains("unlost shim claude") || c.contains("unlost shim claudecode")
+                    })
                     .unwrap_or(false)
             })
         } else {
@@ -258,6 +268,28 @@ fn add_unlost_hook_if_missing(hook_array: &mut serde_json::Value, hook: serde_js
         arr.push(serde_json::json!({
             "hooks": [hook]
         }));
+    }
+}
+
+fn rewrite_unlost_hook_commands(hook_array: &mut serde_json::Value) {
+    let Some(arr) = hook_array.as_array_mut() else {
+        return;
+    };
+    for entry in arr.iter_mut() {
+        let Some(hooks) = entry.get_mut("hooks").and_then(|h| h.as_array_mut()) else {
+            continue;
+        };
+        for h in hooks.iter_mut() {
+            let Some(cmd) = h.get_mut("command") else {
+                continue;
+            };
+            let Some(s) = cmd.as_str() else {
+                continue;
+            };
+            if s.trim() == "unlost shim claudecode" {
+                *cmd = serde_json::Value::String("unlost shim claude".to_string());
+            }
+        }
     }
 }
 

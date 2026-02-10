@@ -6,9 +6,9 @@ This directory contains agent-specific shims that translate between each agent's
 
 ## Current targets
 
-### Claude Code (`agents/claudecode/`)
+### Claude (`agents/claude/`)
 
-Claude Code hooks integration. Configures `UserPromptSubmit` and `Stop` hooks that invoke `unlost shim claudecode` for friction detection and transcript ingestion.
+Claude hooks integration. Configures `UserPromptSubmit` and `Stop` hooks that invoke `unlost shim claude` for friction detection and transcript ingestion.
 
 ### OpenCode (`agents/opencode/`)
 

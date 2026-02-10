@@ -36,12 +36,12 @@ Unlost intercepts before you pay. It detects these failure modes and guides agen
 
 ## Use unlost with your favourite agent
 
-### Claude Code
+### Claude
 
 All your Claude Code projects, forever, with zero per-repo config:
 
 ```bash
-unlost config agent claudecode --global
+unlost config agent claude --global
 ```
 
 That's it. Unlost hooks into every Claude Code session, checks for friction before each prompt, injects guidance when something feels off, and quietly records what actually happened (intent, decision, rationale, next steps) into local capsules you can query anytime.

@@ -10,7 +10,10 @@
 use crate::IntentCapsule;
 use crate::embed::Embedder;
 use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
-use crate::governor::{evaluate_decision_conflict, evaluate_failure_modes, evaluate_friction};
+use crate::governor::{
+    evaluate_decision_conflict, evaluate_failure_modes, evaluate_friction,
+    evaluate_stateless_friction,
+};
 use crate::recording::{ChunkInput, FlushJob, WorkspaceChunker, looks_like_commit_or_pr};
 use crate::storage::{ensure_capsules_table, insert_capsule_row};
 use crate::types::UsageMeta;
@@ -27,14 +30,14 @@ static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentKind {
     OpenCode,
-    ClaudeCode,
+    Claude,
 }
 
 impl AgentKind {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             AgentKind::OpenCode => "opencode",
-            AgentKind::ClaudeCode => "claudecode",
+            AgentKind::Claude => "claude",
         }
     }
 }
@@ -358,14 +361,6 @@ impl Flow {
             }
         };
 
-        // If we have no history, nothing to check friction/failure-modes against
-        if history.is_empty() {
-            return CheckResult {
-                note: None,
-                error: None,
-            };
-        }
-
         // Extract symbols from the text
         let symbols = crate::net::extract_symbols_from_text(&event.text);
 
@@ -384,6 +379,15 @@ impl Flow {
         } else {
             None
         };
+
+        // If we have no history yet, we can't run repetition-based heuristics.
+        // Still inject a small stateless note when the user is clearly upset.
+        if history.is_empty() {
+            return CheckResult {
+                note: evaluate_stateless_friction(user_emotion.as_ref()),
+                error: None,
+            };
+        }
 
         // Create current capsule for friction evaluation
         let current = IntentCapsule {

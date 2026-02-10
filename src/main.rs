@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.command.is_none() {
         crate::cli::Cli::command().print_help()?;
         println!(
-            "\n\nTry:\n- unlost config agent opencode --path .\n- unlost config agent claudecode --global\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost init --path .\n- unlost recall\n- unlost query \"what are the routes available?\"\n"
+            "\n\nTry:\n- unlost config agent opencode --path .\n- unlost config agent claude --global\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost init --path .\n- unlost recall\n- unlost query \"what are the routes available?\"\n"
         );
         return Ok(());
     }
@@ -238,12 +238,34 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 crate::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir).await?;
             }
-            crate::cli::ShimCommand::Claudecode {
+            crate::cli::ShimCommand::Claude {
                 embed_model,
                 embed_cache_dir,
             } => {
-                crate::companion::shims::claudecode::run(embed_model, embed_cache_dir).await?;
+                crate::companion::shims::claude::run(embed_model, embed_cache_dir).await?;
             }
+            crate::cli::ShimCommand::Replay { command } => match command {
+                crate::cli::ReplayCommand::Claude {
+                    path,
+                    transcript_path,
+                    session_id,
+                    from_start,
+                    dedupe,
+                    embed_model,
+                    embed_cache_dir,
+                } => {
+                    crate::companion::shims::claude::replay(
+                        path,
+                        transcript_path,
+                        session_id,
+                        from_start,
+                        dedupe,
+                        embed_model,
+                        embed_cache_dir,
+                    )
+                    .await?;
+                }
+            },
         },
         crate::cli::Command::Where { path } => {
             crate::commands::where_cmd::run(path)?;

@@ -12,7 +12,7 @@
 //! - `shims`: Platform-specific adapters that translate external protocols into
 //!   flow events. Each shim is responsible only for I/O and mapping.
 //!   - `opencode_stdio`: JSON-RPC over stdin/stdout for OpenCode plugins.
-//!   - `claudecode`: Claude Code hook JSON + transcript parsing.
+//!   - `claude`: Claude hook JSON + transcript parsing.
 //!   - (future) `codex`: OpenAI Codex integration.
 
 pub(crate) mod flow;

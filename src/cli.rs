@@ -365,8 +365,50 @@ pub(crate) enum ShimCommand {
         embed_cache_dir: Option<String>,
     },
 
-    /// Run the Claude Code hooks shim (reads hook JSON from stdin)
-    Claudecode {
+    /// Run the Claude hooks shim (reads hook JSON from stdin)
+    #[command(alias = "claudecode")]
+    Claude {
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Replay/backfill agent transcripts into unlost
+    Replay {
+        #[command(subcommand)]
+        command: ReplayCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ReplayCommand {
+    /// Replay a Claude transcript file into the current workspace
+    #[command(alias = "claudecode")]
+    Claude {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Claude transcript .jsonl file path
+        #[arg(long)]
+        transcript_path: String,
+
+        /// Claude session id (defaults to transcript filename stem)
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Force replay from beginning and overwrite cursor to EOF
+        #[arg(long, default_value_t = true)]
+        from_start: bool,
+
+        /// Skip turns already replayed (best-effort)
+        #[arg(long, default_value_t = true)]
+        dedupe: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -409,8 +451,9 @@ pub(crate) enum AgentCommand {
         global: bool,
     },
 
-    /// Configure Claude Code hooks to use unlost
-    Claudecode {
+    /// Configure Claude hooks to use unlost
+    #[command(alias = "claudecode")]
+    Claude {
         /// Workspace path (defaults to current directory; uses git toplevel)
         #[arg(long, default_value = ".")]
         path: String,
