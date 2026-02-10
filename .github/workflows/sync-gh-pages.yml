@@ -1,0 +1,44 @@
+name: sync-gh-pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-install-sh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync install.sh into gh-pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch origin gh-pages:gh-pages
+          git worktree add gh-pages-wt gh-pages
+
+          install -m 0755 docs/install.sh gh-pages-wt/install.sh
+
+          if [ -z "$(git -C gh-pages-wt status --porcelain)" ]; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git -C gh-pages-wt add install.sh
+          git -C gh-pages-wt -c user.name='github-actions[bot]' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'docs: sync install.sh'
+          git -C gh-pages-wt push origin gh-pages
+
+      - name: Cleanup worktree
+        if: always()
+        shell: bash
+        run: |
+          git worktree remove gh-pages-wt --force || true
