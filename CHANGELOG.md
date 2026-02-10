@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3] - 2026-02-10
+
+### Changed
+- Conversational friction detection now triggers even when no symbols are extracted (e.g. "I'm confused")
+- Treat explicit confusion as friction for stateless first-message nudges
+
+### Fixed
+- Added "upset" as a frustration signal to improve heuristic detection when the emotion model under-classifies
+
 ## [0.2.2] - 2026-02-10
 
 ### Added
@@ -64,6 +73,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.2.3]: https://github.com/unfault/unlost/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/unfault/unlost/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/unfault/unlost/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/unfault/unlost/compare/v0.1.1...v0.2.0
