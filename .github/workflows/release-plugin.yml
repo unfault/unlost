@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'opencode-v*'
-    paths:
-      - 'agents/opencode/plugin/**'
 
 jobs:
   publish:
@@ -29,14 +27,17 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${TAG#opencode-}" >> $GITHUB_OUTPUT
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "VERSION=${TAG#opencode-v}" >> "$GITHUB_OUTPUT"
         env:
-          TAG: ${GITHUB_REF#refs/tags/}
+          TAG: ${{ github.ref_name }}
 
       - name: Update package.json version
         run: cd agents/opencode/plugin && npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
 
       - name: Publish to npm
-        run: cd agents/opencode/plugin && npm publish
+        run: cd agents/opencode/plugin && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
