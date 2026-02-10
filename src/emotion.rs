@@ -284,6 +284,7 @@ const FRUSTRATION_SIGNALS: &[&str] = &[
     "forget it",
     // Direct frustration
     "frustrated",
+    "upset",
     "annoyed",
     "annoying",
     "irritating",

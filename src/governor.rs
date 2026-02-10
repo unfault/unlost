@@ -82,6 +82,8 @@ const FRICTION_EMOTIONS: &[&str] = &[
     "disapproval",
     "doubt",
     "sad",
+    // In agent contexts, explicit confusion often indicates we're misaligned or moving too fast.
+    "confused",
 ];
 
 /// Stateless friction note for the very first user message (no history yet).
@@ -104,7 +106,7 @@ pub(crate) fn evaluate_stateless_friction(
     }
 
     Some(
-        "[SYSTEM NOTE: User frustration detected. Pause to acknowledge the concern and ask what they want to achieve next before continuing.]"
+        "[SYSTEM NOTE: User appears frustrated or confused. Pause to acknowledge the concern and ask what they want to achieve next before continuing.]"
             .to_string(),
     )
 }
@@ -160,7 +162,7 @@ pub(crate) fn evaluate_friction_with_weights(
     history: &[CapsuleHit],
     w: &FrictionWeights,
 ) -> Option<String> {
-    if history.is_empty() || current.symbols.is_empty() {
+    if history.is_empty() {
         return None;
     }
 
@@ -180,33 +182,41 @@ pub(crate) fn evaluate_friction_with_weights(
     });
     let frustrated = current_friction || recent_friction;
 
-    // Signal 2: Same symbols touched 2+ times recently
-    let symbol_repeats = recent
-        .iter()
-        .take(w.recent_window)
-        .filter(|h| {
-            h.capsule
-                .symbols
-                .iter()
-                .any(|s| current.symbols.contains(s))
-        })
-        .count();
+    // Signal 2: Same symbols touched 2+ times recently (only meaningful if we have symbols)
+    let symbol_repeats = if current.symbols.is_empty() {
+        0
+    } else {
+        recent
+            .iter()
+            .take(w.recent_window)
+            .filter(|h| {
+                h.capsule
+                    .symbols
+                    .iter()
+                    .any(|s| current.symbols.contains(s))
+            })
+            .count()
+    };
 
     // Amplifier: if we're burning tokens in the same area, be more forceful.
-    let effort_tokens: i64 = recent
-        .iter()
-        .take(w.recent_window)
-        .filter(|h| {
-            h.capsule
-                .symbols
-                .iter()
-                .any(|s| current.symbols.contains(s))
-        })
-        .filter_map(|h| h.meta.usage.as_ref().and_then(|u| u.tokens_total()))
-        .sum();
+    let effort_tokens: i64 = if current.symbols.is_empty() {
+        0
+    } else {
+        recent
+            .iter()
+            .take(w.recent_window)
+            .filter(|h| {
+                h.capsule
+                    .symbols
+                    .iter()
+                    .any(|s| current.symbols.contains(s))
+            })
+            .filter_map(|h| h.meta.usage.as_ref().and_then(|u| u.tokens_total()))
+            .sum()
+    };
 
     // Trigger: User is frustrated AND agent is stuck in the same code area
-    if frustrated && symbol_repeats >= w.symbol_repeat_threshold {
+    if !current.symbols.is_empty() && frustrated && symbol_repeats >= w.symbol_repeat_threshold {
         let packet = build_hydration_packet(current, current_user_emotion, &recent, w);
         let symbols_str = current.symbols.join(", ");
         let amplifier = if effort_tokens >= w.effort_tokens_warn_threshold {
@@ -243,30 +253,28 @@ pub(crate) fn evaluate_friction_with_weights(
 
     // If symbol-based friction didn't trigger, check for conversational friction
     // (symbol-less frustration detection)
-    evaluate_conversational_friction(history, w.recent_window)
+    evaluate_conversational_friction_with_current(current_user_emotion, history, w.recent_window)
 }
 
 /// Soft warning for 2 frustrated messages in window
 const SOFT_FRICTION_WARNING: &str =
-    "The user seems frustrated. Consider pausing to acknowledge their concern before continuing.";
+    "The user seems frustrated or confused. Consider pausing to acknowledge their concern before continuing.";
 
 /// Firm warning for 3+ frustrated messages in window  
-const FIRM_FRICTION_WARNING: &str = "The user has expressed repeated frustration. Stop and ask what's wrong or how you can help differently.";
+const FIRM_FRICTION_WARNING: &str = "The user has expressed repeated frustration or confusion. Stop and ask what's wrong or how you can help differently.";
 
-/// Evaluate conversational friction based on user emotion patterns alone.
+/// Evaluate conversational friction based on current + recent user emotion patterns.
 ///
 /// This catches cases where the user is frustrated with the conversation
 /// but no specific code symbols are involved.
 ///
-/// Returns:
-/// - None if fewer than 2 negative emotions in window
-/// - Soft warning if exactly 2 negative emotions
-/// - Firm warning if 3+ negative emotions
-pub(crate) fn evaluate_conversational_friction(
+/// Note: if `current_user_emotion` is present, we treat it as part of the window.
+pub(crate) fn evaluate_conversational_friction_with_current(
+    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
     history: &[CapsuleHit],
     window: usize,
 ) -> Option<String> {
-    if history.is_empty() {
+    if history.is_empty() && current_user_emotion.is_none() {
         return None;
     }
 
@@ -274,11 +282,16 @@ pub(crate) fn evaluate_conversational_friction(
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
 
-    // Filter to capsules that have user emotion (proxy for "has user message")
-    // and count negative emotions in the window
-    let frustrated_count = recent
+    let include_current = current_user_emotion.is_some();
+    let take_n = if include_current {
+        window.saturating_sub(1)
+    } else {
+        window
+    };
+
+    let history_negative_count = recent
         .iter()
-        .take(window)
+        .take(take_n)
         .filter(|h| h.user_emotion.is_some())
         .filter(|h| {
             h.user_emotion
@@ -288,10 +301,33 @@ pub(crate) fn evaluate_conversational_friction(
         })
         .count();
 
-    if frustrated_count >= 3 {
+    let current_negative = current_user_emotion
+        .map(|e| crate::emotion::is_negative_emotion(&e.label))
+        .unwrap_or(false);
+    let total_negative = history_negative_count + (current_negative as usize);
+
+    // If the current message is clearly negative, inject a gentle nudge even if this is
+    // the first negative signal in the window (helps acknowledge confusion/frustration early).
+    if total_negative == 1 && current_negative {
+        if let Some(e) = current_user_emotion {
+            if e.confidence >= 0.60 && e.intensity >= 0.45 {
+                tracing::info!(
+                    friction = "conversational",
+                    total_negative = total_negative,
+                    window = window,
+                    severity = "soft",
+                    reason = "current_strong",
+                    "conversational friction warning will be injected"
+                );
+                return Some(SOFT_FRICTION_WARNING.to_string());
+            }
+        }
+    }
+
+    if total_negative >= 3 {
         tracing::info!(
             friction = "conversational",
-            frustrated_count = frustrated_count,
+            total_negative = total_negative,
             window = window,
             severity = "firm",
             "conversational friction warning will be injected"
@@ -299,10 +335,10 @@ pub(crate) fn evaluate_conversational_friction(
         return Some(FIRM_FRICTION_WARNING.to_string());
     }
 
-    if frustrated_count >= 2 {
+    if total_negative >= 2 {
         tracing::info!(
             friction = "conversational",
-            frustrated_count = frustrated_count,
+            total_negative = total_negative,
             window = window,
             severity = "soft",
             "conversational friction warning will be injected"
@@ -952,6 +988,18 @@ mod tests {
     }
 
     #[test]
+    fn test_stateless_friction_note_emitted_for_confused() {
+        let e = EmotionMeta {
+            label: "confused".to_string(),
+            valence: -0.1,
+            intensity: 0.55,
+            confidence: 0.8,
+        };
+        let note = evaluate_stateless_friction(Some(&e));
+        assert!(note.is_some());
+    }
+
+    #[test]
     fn test_no_friction_empty_history() {
         let current = IntentCapsule {
             category: "".to_string(),
@@ -980,6 +1028,49 @@ mod tests {
         };
         let history = vec![make_hit(vec!["auth.ts"], Some("frustration"))];
         assert!(evaluate_friction(&current, None, &history).is_none());
+    }
+
+    #[test]
+    fn test_conversational_friction_triggers_without_symbols() {
+        let current = IntentCapsule {
+            category: "".to_string(),
+            intent: "".to_string(),
+            decision: "".to_string(),
+            rationale: "".to_string(),
+            next_steps: vec![],
+            symbols: vec![],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
+        };
+        let history = vec![
+            make_hit(vec!["auth.ts"], Some("frustration")),
+            make_hit(vec!["db.rs"], Some("disapproval")),
+        ];
+        let result = evaluate_friction(&current, None, &history);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_conversational_friction_current_strong_negative_triggers_without_symbols() {
+        let current = IntentCapsule {
+            category: "".to_string(),
+            intent: "".to_string(),
+            decision: "".to_string(),
+            rationale: "".to_string(),
+            next_steps: vec![],
+            symbols: vec![],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
+        };
+        let history = vec![make_hit(vec!["auth.ts"], Some("joy"))];
+        let cur_emotion = EmotionMeta {
+            label: "confused".to_string(),
+            valence: -0.1,
+            intensity: 0.6,
+            confidence: 0.9,
+        };
+        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
+        assert!(result.is_some());
     }
 
     #[test]
