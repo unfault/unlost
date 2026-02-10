@@ -17,14 +17,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: cd agents/opencode/plugin && npm ci
 
       - name: Build
-        run: cd agents/opencode/plugin && npm run build
+        run: cd agents/opencode/plugin && npm run build --if-present
 
       - name: Extract version from tag
         id: version
@@ -50,5 +50,3 @@ jobs:
 
       - name: Publish to npm
         run: cd agents/opencode/plugin && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
