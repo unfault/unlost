@@ -156,12 +156,65 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
 
+      - name: Build release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          VER="${TAG#v}"
+          export VER
+          python3 - <<'PY' > release_notes.md
+          import os
+
+          ver = os.environ["VER"]
+          path = 'CHANGELOG.md'
+
+          with open(path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+
+          header = f"## [{ver}]"
+          start = None
+          for i, line in enumerate(lines):
+            if line.startswith(header):
+              start = i
+              break
+          if start is None:
+            raise SystemExit(f"Could not find changelog section for {header}")
+
+          out = []
+          for line in lines[start:]:
+            if line.startswith('## [') and not line.startswith(header):
+              break
+            out.append(line)
+
+          # Drop the header line itself (we'll use a nicer title in the GH release)
+          out = out[1:]
+          while out and out[0].strip() == '':
+            out.pop(0)
+
+          print(f"## What's changed\n")
+          print("\n".join(out).rstrip() + "\n")
+          PY
+
+          {
+            echo 'body<<EOF'
+            cat release_notes.md
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: unlost ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.body }}
           files: dist/**
