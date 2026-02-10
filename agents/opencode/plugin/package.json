@@ -1,6 +1,6 @@
 {
   "name": "@unfault/unlost-opencode",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agent orientation for OpenCode that spots friction and keeps agents on track",
   "license": "MIT",
   "type": "module",
