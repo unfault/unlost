@@ -35,7 +35,17 @@ jobs:
           TAG: ${{ github.ref_name }}
 
       - name: Update package.json version
-        run: cd agents/opencode/plugin && npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd agents/opencode/plugin
+          current=$(node -p "require('./package.json').version")
+          target='${{ steps.version.outputs.VERSION }}'
+          if [ "$current" = "$target" ]; then
+            echo "package.json already at version $target"
+            exit 0
+          fi
+          npm version "$target" --no-git-tag-version
 
       - name: Publish to npm
         run: cd agents/opencode/plugin && npm publish --access public
