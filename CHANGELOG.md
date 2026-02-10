@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.0] - 2026-02-10
+
+Version alignment release - CLI and OpenCode plugin now share the same version number.
+
 ## [0.1.1] - 2026-02-09
 
 ### Added
@@ -42,5 +46,6 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.2.0]: https://github.com/unfault/unlost/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/unfault/unlost/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/unfault/unlost/releases/tag/v0.1.0
