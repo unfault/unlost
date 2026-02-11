@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4] - 2026-02-11
+
+### Fixed
+- Recall narrative now weights recency: emphasizes latest capsules when describing "recent work"
+- Friction detection skips warnings when current user emotion is neutral/positive
+- Friendly error message when OPENAI_API_KEY is missing instead of panic
+
 ## [0.2.3] - 2026-02-10
 
 ### Changed
