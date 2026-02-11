@@ -1,6 +1,6 @@
 use crate::config::LlmConfig;
 use anyhow::Context;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::CompletionClient;
 use rig::providers::{anthropic, openai};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -150,8 +150,26 @@ where
         }
         None => {
             // Default: OpenAI from env.
+            // NOTE: rig's `openai::Client::from_env()` panics if OPENAI_API_KEY is missing.
+            // Return a friendly error instead.
             let model = model_override.unwrap_or("gpt-4o-mini");
-            let client = openai::Client::from_env();
+            let api_key = std::env::var("OPENAI_API_KEY").ok();
+            let Some(api_key) = api_key else {
+                anyhow::bail!(
+                    "OPENAI_API_KEY not set. Either:\n\
+  - export OPENAI_API_KEY=...\n\
+  - or run: unlost config llm openai --api-key ... --model {model}\n\
+  - or configure another provider: unlost config llm anthropic|ollama|custom"
+                );
+            };
+
+            // Avoid accidentally routing extractor traffic through unlost itself if the user set
+            // OPENAI_BASE_URL/OPENAI_API_BASE in their shell for other tools.
+            let mut builder: openai::ClientBuilder<reqwest::Client> =
+                openai::Client::builder().api_key(&api_key);
+            builder = builder.base_url("https://api.openai.com/v1");
+            let client = builder.build().context("failed to build OpenAI client")?;
+
             Ok(client
                 .extractor::<T>(model)
                 .preamble(preamble)
@@ -320,5 +338,25 @@ mod tests {
             }
             _ => panic!("Expected Custom config"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_llm_extract_missing_openai_key_is_error() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let _g = EnvVarGuard::set("XDG_CONFIG_HOME", temp_dir.path().as_os_str());
+        let _no_key = EnvVarGuard::set("OPENAI_API_KEY", std::ffi::OsStr::new(""));
+        unsafe { std::env::remove_var("OPENAI_API_KEY") };
+
+        #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+        struct Dummy {
+            ok: bool,
+        }
+
+        let err = llm_extract::<Dummy>(None, "preamble", "input")
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("OPENAI_API_KEY"));
     }
 }

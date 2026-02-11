@@ -282,6 +282,17 @@ pub(crate) fn evaluate_conversational_friction_with_current(
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
 
+    let current_negative = current_user_emotion
+        .map(|e| crate::emotion::is_negative_emotion(&e.label))
+        .unwrap_or(false);
+
+    // If we were able to classify the current user message and it's not negative,
+    // don't inject a conversational friction warning. Friction nudges should react
+    // to the user's *current* state, not linger after the user is happy/neutral.
+    if current_user_emotion.is_some() && !current_negative {
+        return None;
+    }
+
     let include_current = current_user_emotion.is_some();
     let take_n = if include_current {
         window.saturating_sub(1)
@@ -301,9 +312,6 @@ pub(crate) fn evaluate_conversational_friction_with_current(
         })
         .count();
 
-    let current_negative = current_user_emotion
-        .map(|e| crate::emotion::is_negative_emotion(&e.label))
-        .unwrap_or(false);
     let total_negative = history_negative_count + (current_negative as usize);
 
     // If the current message is clearly negative, inject a gentle nudge even if this is
@@ -1071,6 +1079,33 @@ mod tests {
         };
         let result = evaluate_friction(&current, Some(&cur_emotion), &history);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_no_conversational_friction_when_current_neutral() {
+        let current = IntentCapsule {
+            category: "".to_string(),
+            intent: "".to_string(),
+            decision: "".to_string(),
+            rationale: "".to_string(),
+            next_steps: vec![],
+            symbols: vec![],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
+        };
+        let history = vec![
+            make_hit(vec!["auth.ts"], Some("frustration")),
+            make_hit(vec!["db.rs"], Some("disapproval")),
+            make_hit(vec!["models.rs"], Some("joy")),
+        ];
+        let cur_emotion = EmotionMeta {
+            label: "joy".to_string(),
+            valence: 0.8,
+            intensity: 0.4,
+            confidence: 0.9,
+        };
+        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
+        assert!(result.is_none());
     }
 
     #[test]
