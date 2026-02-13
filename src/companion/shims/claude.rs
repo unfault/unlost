@@ -10,7 +10,7 @@ use crate::companion::flow::{
 };
 use crate::workspace::get_or_create_workspace_paths;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
@@ -813,6 +813,121 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// Cost warning helper
+// ============================================================================
+
+/// Models known to be expensive (reasoning models, large frontier models).
+fn is_expensive_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // OpenAI expensive models
+    if m.contains("o1") || m.contains("o3") || m.contains("gpt-4o") && !m.contains("mini") {
+        return true;
+    }
+    // Anthropic expensive models  
+    if m.contains("opus") || (m.contains("sonnet") && !m.contains("3-5") && !m.contains("3.5")) {
+        return true;
+    }
+    false
+}
+
+/// Suggest a cheaper alternative model for the same provider.
+fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'static str, &'static str)> {
+    let m = current_model.to_lowercase();
+    
+    match provider {
+        "openai" => {
+            if m.contains("o1") || m.contains("o3") || (m.contains("gpt-4") && !m.contains("mini")) {
+                return Some(("gpt-4o-mini", "unlost config llm openai --model gpt-4o-mini"));
+            }
+        }
+        "anthropic" => {
+            if m.contains("opus") || (m.contains("sonnet") && !m.contains("haiku")) {
+                return Some(("claude-3-5-haiku-20241022", "unlost config llm anthropic --model claude-3-5-haiku-20241022"));
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Print a cost warning before replay starts.
+fn print_cost_warning(turn_count: usize, use_color: bool) {
+    use crate::config::LlmConfig;
+    use crate::workspace::load_workspace_config;
+    
+    let cfg = load_workspace_config();
+    
+    let (provider, model) = match &cfg.llm {
+        Some(LlmConfig::Openai { model, .. }) => ("openai", model.as_str()),
+        Some(LlmConfig::Anthropic { model, .. }) => ("anthropic", model.as_str()),
+        Some(LlmConfig::Ollama { model, .. }) => ("ollama", model.as_str()),
+        Some(LlmConfig::Custom { model, .. }) => ("custom", model.as_str()),
+        None => {
+            if use_color {
+                println!("\x1b[33m!\x1b[0m No LLM configured. Run: unlost config llm --help");
+            } else {
+                println!("! No LLM configured. Run: unlost config llm --help");
+            }
+            return;
+        }
+    };
+    
+    // Always show what we're about to do
+    if use_color {
+        println!(
+            "\x1b[36mi\x1b[0m Replay will process ~{} turns using \x1b[1m{}/{}\x1b[0m",
+            turn_count, provider, model
+        );
+    } else {
+        println!("Replay will process ~{} turns using {}/{}", turn_count, provider, model);
+    }
+    
+    // Warn about expensive models and suggest alternatives
+    if is_expensive_model(model) {
+        if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
+            if use_color {
+                println!(
+                    "\x1b[33m!\x1b[0m This model may be expensive for bulk replay. Consider using \x1b[1m{}\x1b[0m:",
+                    suggested
+                );
+                println!("  {}", cmd);
+            } else {
+                println!("! This model may be expensive for bulk replay. Consider using {}:", suggested);
+                println!("  {}", cmd);
+            }
+        }
+    }
+    
+    println!();
+}
+
+/// Quick turn count from a transcript file (without full parsing).
+fn count_turns_in_transcript(path: &Path) -> usize {
+    use std::io::BufRead;
+    
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    
+    let reader = std::io::BufReader::new(file);
+    let mut user_count = 0;
+    
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        // Quick heuristic: count lines with "type":"user" and "role":"user"
+        if line.contains("\"type\":\"user\"") && line.contains("\"role\":\"user\"") {
+            user_count += 1;
+        }
+    }
+    
+    user_count
+}
+
 pub(crate) async fn replay(
     path: String,
     transcript_path: String,
@@ -824,94 +939,235 @@ pub(crate) async fn replay(
 ) -> anyhow::Result<()> {
     let transcript_path = PathBuf::from(transcript_path);
     if !transcript_path.exists() {
-        anyhow::bail!("transcript file not found at {}", transcript_path.display());
+        anyhow::bail!("transcript path not found at {}", transcript_path.display());
     }
 
     let dir_path = Path::new(&path);
     let ws = get_or_create_workspace_paths(dir_path)?;
 
-    let sid = if let Some(s) = session_id {
-        s
+    // Collect transcript files to process
+    let transcript_files: Vec<PathBuf> = if transcript_path.is_file() {
+        vec![transcript_path.clone()]
     } else {
-        transcript_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("missing --session-id and could not infer from transcript filename"))?
-    };
-
-    let config = FlowConfig {
-        embed_model,
-        embed_cache_dir,
-    };
-    let mut flow = Flow::new(config);
-
-    let cursor = if from_start {
-        CursorState {
-            byte_offset: 0,
-            last_uuid: None,
+        // Directory: collect all .jsonl files
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&transcript_path)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.path().extension()
+                    .map(|ext| ext == "jsonl")
+                    .unwrap_or(false)
+            })
+            .map(|entry| entry.path())
+            .collect();
+        files.sort();
+        if files.is_empty() {
+            anyhow::bail!("No .jsonl files found in directory {}", transcript_path.display());
         }
-    } else {
-        load_cursor(&ws.id, &sid)
+        files
     };
 
-    let (turns, new_cursor) = parse_transcript_from_cursor(&transcript_path, &cursor, dir_path)?;
-    let mut total = 0usize;
-    let mut skipped = 0usize;
-    let mut recorded = 0usize;
+    // If directory provided without explicit session_id, we need to process each file with its own session
+    let multiple_sessions = transcript_path.is_dir() && session_id.is_none();
 
-    let mut seen = if dedupe {
-        load_turnkeys(&ws.id, &sid)
+    let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+
+    // Count total turns across all files for cost warning
+    let total_turns: usize = transcript_files.iter().map(|f| count_turns_in_transcript(f)).sum();
+    if total_turns > 0 {
+        print_cost_warning(total_turns, use_color);
+    }
+
+    // Spinner + progress
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    let files_done = Arc::new(AtomicU64::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+
+    let spinner = if use_color {
+        use indicatif::{ProgressBar, ProgressStyle};
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        );
+        Some(pb)
     } else {
-        HashSet::new()
+        None
     };
-    let mut new_keys: Vec<String> = Vec::new();
 
-    for turn in turns {
-        total += 1;
-        if dedupe {
-            if let Some(k) = turn_key(&turn) {
-                if seen.contains(&k) {
-                    skipped += 1;
-                    continue;
+    let total_files = transcript_files.len() as u64;
+    let spinner_task = if let Some(ref pb) = spinner {
+        let pb = pb.clone();
+        let files_done = files_done.clone();
+        let done = done.clone();
+        Some(tokio::spawn(async move {
+            while !done.load(Ordering::Relaxed) {
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                let done_count = files_done.load(Ordering::Relaxed);
+                pb.set_message(format!("Replaying {} sessions ({} done)", total_files, done_count));
+                pb.tick();
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Process files in parallel (bounded concurrency)
+    use futures_util::future::join_all;
+
+    let max_concurrency = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrency));
+
+    let mut handles = Vec::new();
+    
+    for file_path in transcript_files.clone() {
+        let ws_id = ws.id.clone();
+        let dir_path = dir_path.to_path_buf();
+        let path = path.clone();
+        let session_id = session_id.clone();
+        let transcript_path = transcript_path.clone();
+        let embed_model = embed_model.clone();
+        let embed_cache_dir = embed_cache_dir.clone();
+        let files_done = files_done.clone();
+        let semaphore = semaphore.clone();
+        
+        let handle = tokio::spawn(async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| anyhow::anyhow!("replay semaphore closed"))?;
+
+            let config = FlowConfig {
+                embed_model,
+                embed_cache_dir,
+            };
+            let mut flow = Flow::new(config);
+
+            let sid = if multiple_sessions {
+                // Derive session_id from filename for directory mode
+                file_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| anyhow::anyhow!("could not infer session_id from filename: {}", file_path.display()))?
+            } else if let Some(ref s) = session_id {
+                s.clone()
+            } else {
+                transcript_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| anyhow::anyhow!("missing --session-id and could not infer from transcript filename"))?
+            };
+
+            let cursor = if from_start {
+                CursorState {
+                    byte_offset: 0,
+                    last_uuid: None,
                 }
-                seen.insert(k.clone());
-                new_keys.push(k);
+            } else {
+                load_cursor(&ws_id, &sid)
+            };
+
+            let (turns, new_cursor) = parse_transcript_from_cursor(&file_path, &cursor, &dir_path)?;
+            let mut recorded = 0usize;
+
+            let mut seen = if dedupe {
+                load_turnkeys(&ws_id, &sid)
+            } else {
+                HashSet::new()
+            };
+            let mut new_keys: Vec<String> = Vec::new();
+
+            for turn in turns {
+                if dedupe {
+                    if let Some(k) = turn_key(&turn) {
+                        if seen.contains(&k) {
+                            continue;
+                        }
+                        seen.insert(k.clone());
+                        new_keys.push(k);
+                    }
+                }
+
+                let event = RecordTurnEvent {
+                    directory: path.clone(),
+                    user_text: turn.user_text,
+                    assistant_text: turn.assistant_text,
+                    touched_paths: turn.touched_paths,
+                    agent_kind: AgentKind::Claude,
+                    agent_session_id: Some(sid.clone()),
+                    usage: turn.usage,
+                };
+                let result = flow.record_turn(event).await;
+                if result.error.is_none() {
+                    recorded += 1;
+                }
+            }
+            
+            // Wait for background flush jobs before marking session done
+            flow.drain().await;
+
+            if dedupe {
+                append_turnkeys(&ws_id, &sid, &new_keys);
+            }
+            save_cursor(&ws_id, &sid, &new_cursor);
+
+            files_done.fetch_add(1, Ordering::Relaxed);
+
+            Ok::<_, anyhow::Error>((file_path, recorded))
+        });
+        
+        handles.push(handle);
+    }
+
+    // Wait for all tasks to complete
+    let results = join_all(handles).await;
+    
+    done.store(true, Ordering::Relaxed);
+
+    if let Some(task) = spinner_task {
+        let _ = task.await;
+    }
+    if let Some(pb) = spinner {
+        pb.finish_and_clear();
+    }
+
+    // Aggregate results
+    let mut grand_recorded = 0usize;
+    let mut files_processed = 0usize;
+
+    for result in results {
+        match result {
+            Ok(Ok((_file_path, recorded))) => {
+                grand_recorded += recorded;
+                files_processed += 1;
+            }
+            Ok(Err(e)) => {
+                eprintln!("✗ Error processing file: {}", e);
+            }
+            Err(e) => {
+                eprintln!("✗ Task panicked: {}", e);
             }
         }
-
-        let event = RecordTurnEvent {
-            directory: path.clone(),
-            user_text: turn.user_text,
-            assistant_text: turn.assistant_text,
-            touched_paths: turn.touched_paths,
-            agent_kind: AgentKind::Claude,
-            agent_session_id: Some(sid.clone()),
-            usage: turn.usage,
-        };
-        let result = flow.record_turn(event).await;
-        if result.error.is_some() {
-            // still count it as processed
-        } else {
-            recorded += 1;
-        }
     }
 
-    if dedupe {
-        append_turnkeys(&ws.id, &sid, &new_keys);
+    println!();
+    if use_color {
+        println!(
+            "\x1b[1;32m✓\x1b[0m Replay complete: \x1b[1;36m{}\x1b[0m sessions, \x1b[1;32m{}\x1b[0m capsules recorded",
+            files_processed, grand_recorded
+        );
+    } else {
+        println!(
+            "Replay complete: {} sessions, {} capsules recorded",
+            files_processed, grand_recorded
+        );
     }
-    save_cursor(&ws.id, &sid, &new_cursor);
-
-    flow.drain().await;
-
-    println!(
-        "Replayed transcript {} (session={}). Parsed turns: {}. Recorded: {}. Skipped: {}.",
-        transcript_path.display(),
-        sid,
-        total,
-        recorded,
-        skipped
-    );
 
     Ok(())
 }

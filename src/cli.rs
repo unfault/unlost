@@ -393,7 +393,7 @@ pub(crate) enum ReplayCommand {
         #[arg(long, default_value = ".")]
         path: String,
 
-        /// Claude transcript .jsonl file path
+        /// Claude transcript .jsonl file or directory path
         #[arg(long)]
         transcript_path: String,
 
@@ -406,6 +406,25 @@ pub(crate) enum ReplayCommand {
         from_start: bool,
 
         /// Skip turns already replayed (best-effort)
+        #[arg(long, default_value_t = true)]
+        dedupe: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Replay OpenCode messages from disk storage into the current workspace
+    Opencode {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Skip messages already replayed (best-effort)
         #[arg(long, default_value_t = true)]
         dedupe: bool,
 

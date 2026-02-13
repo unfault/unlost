@@ -265,6 +265,20 @@ async fn main() -> anyhow::Result<()> {
                     )
                     .await?;
                 }
+                crate::cli::ReplayCommand::Opencode {
+                    path,
+                    dedupe,
+                    embed_model,
+                    embed_cache_dir,
+                } => {
+                    crate::companion::shims::opencode::replay(
+                        path,
+                        dedupe,
+                        embed_model,
+                        embed_cache_dir,
+                    )
+                    .await?;
+                }
             },
         },
         crate::cli::Command::Where { path } => {

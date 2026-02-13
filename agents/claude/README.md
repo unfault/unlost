@@ -47,8 +47,18 @@ This allows incremental ingestion - only new transcript lines are processed on e
 If you need to re-ingest a transcript file (e.g. after upgrading unlost), use:
 
 ```bash
+# Replay a single transcript file
 unlost shim replay claude --path . --transcript-path ~/.claude/projects/<project>/<session_id>.jsonl
+
+# Replay all transcripts in a directory (one session per file)
+unlost shim replay claude --path . --transcript-path ~/.claude/projects/<project>/
 ```
+
+When given a directory, unlost will:
+- Find all `.jsonl` files in the directory
+- Process each file as a separate session (session ID inferred from filename)
+- Show a progress spinner with line count as files are processed
+- Display per-file statistics after completion
 
 ## Friction detection
 
