@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.7] - 2026-02-13
+
+### Added
+- `unlost shim replay opencode` to backfill OpenCode message history into capsules
+  - Discovers sessions for workspace from `~/.local/share/opencode/storage/`
+  - Extracts user/assistant turn pairs with usage metadata
+  - Parallel processing with spinner progress
+- Cost warning before replay (both Claude and OpenCode) showing turn count and LLM model
+  - Suggests cheaper alternatives for expensive models (gpt-4o-mini for OpenAI, claude-3-5-haiku for Anthropic)
+
 ## [0.2.6] - 2026-02-13
 
 ### Changed
