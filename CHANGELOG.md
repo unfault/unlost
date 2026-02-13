@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6] - 2026-02-13
+
+### Changed
+- Enhanced documentation with real command output examples
+- Updated `unlost recall` example showing file-specific narrative summaries
+- Updated `unlost query` example demonstrating semantic search results
+
 ## [0.2.5] - 2026-02-13
 
 ### Fixed
@@ -87,6 +94,9 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.2.6]: https://github.com/unfault/unlost/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/unfault/unlost/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/unfault/unlost/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/unfault/unlost/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/unfault/unlost/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/unfault/unlost/compare/v0.2.0...v0.2.1
