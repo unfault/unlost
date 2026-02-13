@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5] - 2026-02-13
+
+### Fixed
+- `unlost where` now shows the correct workspace ID from config instead of recomputing it
+  - Fixes cases where manifest files (pyproject.toml, package.json, etc.) were added/removed after initial workspace registration
+  - Ensures `where` output matches the actual data location used by other commands
+
 ## [0.2.4] - 2026-02-11
 
 ### Fixed
