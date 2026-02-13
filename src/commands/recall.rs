@@ -195,6 +195,10 @@ pub(crate) async fn run(
     )
     .await?;
 
+    if let Some(pb) = spinner.as_ref() {
+        pb.set_message("Browsing our memory...");
+    }
+
     let mut hits: Vec<crate::CapsuleHit> = Vec::new();
     let want = limit.min(40);
 
@@ -300,8 +304,22 @@ pub(crate) async fn run(
         return Ok(());
     }
 
+    // Determine which model will be used for the narrative
+    let model_name = if let Some(ref m) = llm_model {
+        m.clone()
+    } else if let Some(cfg) = crate::llm::get_llm_config() {
+        match cfg {
+            crate::config::LlmConfig::Openai { model, .. } => model,
+            crate::config::LlmConfig::Anthropic { model, .. } => model,
+            crate::config::LlmConfig::Ollama { model, .. } => model,
+            crate::config::LlmConfig::Custom { model, .. } => model,
+        }
+    } else {
+        "gpt-4o-mini".to_string()
+    };
+
     if let Some(pb) = spinner.as_ref() {
-        pb.set_message("Weaving threads...");
+        pb.set_message(format!("Weaving threads with {}...", model_name));
     }
     let narrative = crate::narrative::llm_recall_narrative(
         llm_model.as_deref(),
