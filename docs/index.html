@@ -446,6 +446,166 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
     </div>
   </section>
 
+  <!-- Components of Unlost -->
+  <section id="components" class="section">
+    <div class="container-narrow">
+      <h2 class="text-3xl font-medium mb-12 flex items-baseline">The Components of Unlost <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+
+      <div class="space-y-16">
+        <!-- Capsule Memory -->
+        <div>
+          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Capsule Memory</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Structured, searchable records of agent conversations. Each capsule captures intent, decisions, rationale, and next steps—building a persistent memory layer for your codebase.
+          </p>
+          <div class="terminal">
+            <div class="text-white/40 mb-1"># Example capsule</div>
+            <div class="text-white/80">chunked_at: 2026-02-13T14:47:31Z</div>
+            <div class="text-white/80">session: ses_3a887ec6effeHddMqe9691wY6V</div>
+            <div class="text-white/80">conn: 5 seq: 1 status: 200</div>
+            <div class="text-white/80">category: repo_exploration</div>
+            <div class="text-white/80">intent: Thoroughly explore the codebase to learn what Unlost does...</div>
+            <div class="text-white/80">decision: Proceed to review README, main configuration files...</div>
+            <div class="text-white/80">rationale: The user explicitly requested a deep codebase review...</div>
+            <div class="text-white/80">next: ["Open README and main configuration files...", ...]</div>
+            <div class="text-white/80">symbols: ["README", "Claude"]</div>
+          </div>
+        </div>
+
+        <!-- Facts & Metadata -->
+        <div>
+          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Facts and Metadata We Store</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Beyond raw text, we extract and index key entities that enable precise semantic search and context-aware recall:
+          </p>
+          <ul class="list-disc pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
+            <li><strong>Symbols:</strong> Functions, classes, variables, and code identifiers mentioned in conversations</li>
+            <li><strong>Files:</strong> File paths and references to help locate where changes occurred</li>
+            <li><strong>Technologies:</strong> Frameworks, libraries, and tools being used or discussed</li>
+            <li><strong>People:</strong> User mentions and agent identities for accountability tracking</li>
+            <li><strong>Relationships:</strong> Links between entities (e.g., which function belongs to which file)</li>
+            <li><strong>Session context:</strong> Connection IDs, sequence numbers, and temporal metadata</li>
+          </ul>
+          <p class="text-midnight-violet-950/60 leading-relaxed">
+            Unlost uses this metadata to build a knowledge graph that powers targeted queries. When you search for "auth flow", we don't just match text—we understand which files and symbols are involved, enabling you to ask precise questions like "what changed in the auth middleware last week?"
+          </p>
+        </div>
+
+        <!-- Emotions -->
+        <div>
+          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Emotions</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            We analyze conversation patterns to detect emotional signals that indicate when interactions may be deteriorating:
+          </p>
+          <ul class="list-disc pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
+            <li><strong>Valence:</strong> Positive vs negative sentiment (-1.0 to +1.0)</li>
+            <li><strong>Intensity:</strong> Strength of the emotional response (0.0 to 1.0)</li>
+            <li><strong>Confidence:</strong> Certainty in the emotional classification (0.0 to 1.0)</li>
+          </ul>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            The purpose is early detection of friction before it escalates. When emotion signals cross thresholds, Unlost can intervene with guidance or escalate to the user.
+          </p>
+          <div class="terminal">
+            <div class="text-white/40 mb-1"># Emotion detection example</div>
+            <div class="text-white/80">user_mood: frustration (conf=0.55 val=-0.50 int=0.45)</div>
+            <div class="text-white/40 mt-2"># Detected from patterns like:</div>
+            <div class="text-white/60">- "That didn't work" followed by multiple retries</div>
+            <div class="text-white/60">- Increased negative language density</div>
+            <div class="text-white/60">- Repeated similar prompts with escalating tone</div>
+          </div>
+        </div>
+
+        <!-- Frictions -->
+        <div>
+          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Frictions We Compute</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Real-time detection of failure patterns computed locally to identify when agents are about to go off track:
+          </p>
+          <div class="space-y-6 text-midnight-violet-950/60">
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">1. Drift Detection</h4>
+              <p class="leading-relaxed">
+                Measures semantic divergence between the original intent and current conversation trajectory. When the agent's focus shifts away from the stated goal beyond a threshold, we flag potential drift.
+              </p>
+            </div>
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">2. Retry Spiral</h4>
+              <p class="leading-relaxed">
+                Detects repeated attempts to solve the same problem with similar approaches. Algorithm: track consecutive failures on the same task, increment counter on each retry, flag when exceeding threshold (typically 3+ attempts).
+              </p>
+            </div>
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">3. False Progress</h4>
+              <p class="leading-relaxed">
+                Identifies when the agent reports success but metrics don't improve. We compare claimed outcomes against actual test results, build status, or lint errors to detect phantom progress.
+              </p>
+            </div>
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">4. Unbounded Horizon</h4>
+              <p class="leading-relaxed">
+                Flags when the scope of work expands uncontrollably. Algorithm: monitor the number of files touched, new dependencies introduced, or architectural changes—trigger when growth exceeds 2x the original scope estimate.
+              </p>
+            </div>
+          </div>
+          <div class="terminal mt-6">
+            <div class="text-white/40 mb-1"># Friction detection in action</div>
+            <div class="text-fiery-terracotta">retry spiral detected: 4 consecutive failures on auth fix</div>
+            <div class="text-white/80">confidence: 0.87 | pattern: "The Apology Loop"</div>
+            <div class="text-white/60 mt-2">→ Injecting guidance: "Consider reviewing the middleware order"</div>
+          </div>
+        </div>
+
+        <!-- Recall & Query -->
+        <div>
+          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Recall & Query</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Semantic search across your workspace memory to retrieve relevant context and answer questions about past work.
+          </p>
+          
+          <div class="space-y-6 text-midnight-violet-950/60">
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">How Recall Works</h4>
+              <p class="leading-relaxed mb-3">
+                Recall generates a proactive overview by aggregating recent capsules relevant to a specific file or directory.
+              </p>
+              <ul class="list-disc pl-5 space-y-1">
+                <li>Path matching: Filter capsules by file/directory path</li>
+                <li>Recency weighting: Prioritize more recent interactions</li>
+                <li>Depth control: Limit how many capsule layers to traverse</li>
+                <li>Summarization: LLM synthesizes filtered capsules into coherent context</li>
+              </ul>
+            </div>
+            
+            <div>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2">How Query Works</h4>
+              <p class="leading-relaxed mb-3">
+                Natural language search converts your question into embeddings and performs semantic similarity matching.
+              </p>
+              <ul class="list-disc pl-5 space-y-1">
+                <li>Embedding: Your query is converted to a vector using the same model that indexed the capsules</li>
+                <li>Vector search: LanceDB performs approximate nearest neighbor (ANN) search across all capsule embeddings</li>
+                <li>Hybrid scoring: Combines semantic similarity with metadata filters (time range, symbols, files)</li>
+                <li>Relevance ranking: Results sorted by similarity score, with option to limit count</li>
+                <li>Context assembly: Top-k capsules are returned with their full metadata for LLM context injection</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="terminal mt-6">
+            <div class="text-white/40 mb-1"># Recall operation</div>
+            <div class="text-white/80">$ unlost recall src/auth.rs --depth 3</div>
+            <div class="text-white/60">→ Found 12 capsules | Generating summary...</div>
+            <div class="text-white/60">→ Last modified: JWT middleware, token validation, error handling</div>
+            <div class="text-white/40 mt-2"># Query operation</div>
+            <div class="text-white/80">$ unlost query "why did we add rate limiting?"</div>
+            <div class="text-white/60">→ ANN search: 0.023s | 47 capsules scanned</div>
+            <div class="text-white/60">→ Top match: "Prevent API abuse" (score: 0.89)</div>
+            <div class="text-white/60">→ Related: auth middleware, redis cache, 429 responses</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- Who's Behind This -->
   <section class="section">
