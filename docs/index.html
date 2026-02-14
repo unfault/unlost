@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
   <title>Unlost - Agent memory & orientation for OpenCode that spots friction and keeps agents on track</title>
 
   <meta name="description" content="Unlost keeps your agents oriented. It detects friction, records decisions, and lets you recall and query what happened in a codebase.">
@@ -39,10 +39,12 @@
     @layer base {
       html {
         scroll-behavior: smooth;
+        -webkit-text-size-adjust: 100%;
       }
       body {
         @apply bg-white text-midnight-violet-950 font-sans antialiased;
         font-feature-settings: 'liga' 1, 'calt' 1;
+        overflow-x: hidden;
       }
       h1, h2, h3, h4, h5, h6 {
         @apply font-medium tracking-tight;
@@ -50,24 +52,29 @@
       }
       code {
         @apply bg-midnight-violet-950/5 px-1.5 py-0.5 rounded text-sm font-mono;
+        word-break: break-word;
       }
       pre {
-        @apply bg-midnight-violet-950 text-white p-5 rounded-lg overflow-x-auto font-mono text-sm leading-relaxed;
+        @apply bg-midnight-violet-950 text-white p-4 sm:p-5 rounded-lg overflow-x-auto font-mono text-xs sm:text-sm leading-relaxed;
+        -webkit-overflow-scrolling: touch;
       }
       pre code {
         @apply bg-transparent p-0;
+        word-break: normal;
+        white-space: pre;
       }
     }
 
     @layer components {
       .section {
-        @apply py-20 px-4 sm:px-6 lg:px-8;
+        @apply py-12 sm:py-16 lg:py-20 px-4 sm:px-6 lg:px-8;
       }
       .container-narrow {
-        @apply max-w-2xl mx-auto;
+        @apply max-w-2xl mx-auto px-4 sm:px-0;
       }
       .terminal {
-        @apply bg-midnight-violet-950 rounded-lg p-5 font-mono text-sm;
+        @apply bg-midnight-violet-950 rounded-lg p-4 sm:p-5 font-mono text-xs sm:text-sm;
+        -webkit-overflow-scrolling: touch;
       }
     }
   </style>
@@ -75,16 +82,16 @@
 <body>
   <!-- Navigation -->
   <nav id="navbar" class="fixed top-0 left-0 right-0 z-50 bg-white transition-all duration-300">
-    <div class="container-narrow px-4 py-4 flex items-center justify-between">
-      <a href="#" class="text-midnight-violet-950 font-medium">unlost</a>
-      <div class="flex items-center gap-4">
+    <div class="max-w-2xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
+      <a href="#" class="text-midnight-violet-950 font-medium text-lg">unlost</a>
+      <div class="flex items-center gap-2 sm:gap-4">
         <div class="hidden md:flex items-center gap-6 text-sm">
           <a href="#problem" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Problem</a>
           <a href="#solution" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Solution</a>
           <a href="#install" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Install</a>
           <a href="#commands" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Commands</a>
         </div>
-        <a href="https://github.com/unfault/unlost" class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-midnight-violet-950 rounded-lg hover:bg-midnight-violet-800 transition-colors">GitHub</a>
+        <a href="https://github.com/unfault/unlost" class="inline-flex items-center px-3 py-1.5 sm:px-4 sm:py-2 text-sm font-medium text-white bg-midnight-violet-950 rounded-lg hover:bg-midnight-violet-800 transition-colors">GitHub</a>
       </div>
     </div>
   </nav>
@@ -101,34 +108,34 @@
   </script>
 
   <!-- Hero -->
-  <section class="section pt-32">
+  <section class="section pt-24 sm:pt-28 lg:pt-32">
     <div class="container-narrow">
-      <h1 class="text-5xl sm:text-6xl mb-6 leading-tight font-medium">
+      <h1 class="text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-4 sm:mb-6 leading-tight font-medium">
         Keep your agents from going off track
       </h1>
       
-      <p class="text-xl text-midnight-violet-950/60 mb-8 leading-relaxed">
+      <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-6 sm:mb-8 leading-relaxed">
         Unlost intercepts before your agents drift. It spots friction, 
         injects guidance, and records what actually happened.
       </p>
 
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-16">
-        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
-          <div class="text-lg font-semibold mb-2" font-['Lexend']>Privacy First</div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-12 sm:mb-16">
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-4 sm:p-5">
+          <div class="text-base sm:text-lg font-semibold mb-2" font-['Lexend']>Privacy First</div>
           <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
             Capsules and indexes stay on your machine.
           </p>
         </div>
 
-        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
-          <div class="text-lg font-semibold mb-2" font-['Lexend']>Open-Source</div>
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-4 sm:p-5">
+          <div class="text-base sm:text-lg font-semibold mb-2" font-['Lexend']>Open-Source</div>
           <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
             Built in the open under a MIT license.
           </p>
         </div>
 
-        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-5">
-          <div class="text-lg font-semibold mb-2" font-['Lexend']>Non-Blocking</div>
+        <div class="rounded-xl border-l-2 border-[#E74F26]/50 p-4 sm:p-5">
+          <div class="text-base sm:text-lg font-semibold mb-2" font-['Lexend']>Non-Blocking</div>
           <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
             Journaling returns immediately; heavy work runs async.
           </p>
@@ -136,21 +143,21 @@
       </div>
     </div>
     <div class="container-narrow">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
         <div class="text-center">
-          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+          <div class="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 flex items-center justify-center">
             <img src="public/claude-3.svg" alt="Claude Code" class="w-full h-full object-contain">
           </div>
         </div>
 
         <div class="text-center">
-          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+          <div class="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 flex items-center justify-center">
             <img src="public/opencode-wordmark-simple-light.svg" alt="OpenCode" class="w-full h-full object-contain">
           </div>
         </div>
 
         <div class="text-center">
-          <div class="w-24 h-24 mx-auto mb-4 flex items-center justify-center opacity-40">
+          <div class="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 flex items-center justify-center opacity-40">
             <img src="public/openai-wordmark.svg" alt="Codex" class="w-full h-full object-contain">
           </div>
           <p class="text-sm text-midnight-violet-950/40">Coming soon</p>
@@ -162,15 +169,18 @@
   <!-- The Problem -->
   <section id="problem" class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">The Babysitting Tax <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
-      <p class="text-xl text-midnight-violet-950/60 mb-12 leading-relaxed">
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        The Babysitting Tax 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
+      <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-8 sm:mb-12 leading-relaxed">
         Agents are wonderful until they are not. They are as frustrating as they are exhilarating. Unlost is here to fix that (well try anyway).
       </p>
-      <div class="space-y-8">
+      <div class="space-y-8 sm:space-y-10">
         <div>
-          <div class="flex justify-between items-baseline mb-2">
-            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Drift</div>
-            <h3 class="text-lg font-semibold text-fiery-terracotta">The Apology Loop</h3>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Drift</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">The Apology Loop</h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
             "I'm sorry, you're right. Let me fix that." 
@@ -179,9 +189,9 @@
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-2">
-            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Re-discovery</div>
-            <h3 class="text-lg font-semibold text-fiery-terracotta">Context Gaslighting</h3>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Re-discovery</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">Context Gaslighting</h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
             The agent is convinced it fixed the bug. The terminal is a sea of red. 
@@ -190,9 +200,9 @@
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-2">
-            <div class="text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">False Progress</div>
-            <h3 class="text-lg font-semibold text-fiery-terracotta">The $50 Side-Quest</h3>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">False Progress</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">The $50 Side-Quest</h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
             You asked for a CSS tweak; you come back 10 minutes later and it's 
@@ -206,17 +216,20 @@
   <!-- Install -->
   <section id="install" class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Install <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        Install 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
 
       <div class="space-y-8">
         <div>
-          <h3 class="text-lg font-semibold mb-4">Get Unlost</h3>
-          <pre><code>curl -fsSL https://unlost.unfault.dev/install.sh | bash</code></pre>
-          <small class="text-midnight-violet-950/60">For Windows, please download the binary from our <a href="https://github.com/unfault/unlost/releases" class="text-fiery-terracotta hover:underline">releases</a> page.</small>
+          <h3 class="text-base sm:text-lg font-semibold mb-4">Get Unlost</h3>
+          <pre class="text-xs sm:text-sm"><code>curl -fsSL https://unlost.unfault.dev/install.sh | bash</code></pre>
+          <small class="text-midnight-violet-950/60 block mt-2 text-sm">For Windows, please download the binary from our <a href="https://github.com/unfault/unlost/releases" class="text-fiery-terracotta hover:underline">releases</a> page.</small>
         </div>
 
         <div>
-          <h3 class="text-lg font-semibold mb-4">Agent Integration</h3>
+          <h3 class="text-base sm:text-lg font-semibold mb-4">Agent Integration</h3>
           <p class="text-midnight-violet-950/60 mb-4">
             Hook unlost into your agent. Choose global for system-wide coverage, or per-project for opt-in control.
           </p>
@@ -226,11 +239,11 @@ unlost config agent claudecode --global
 # OpenCode - opt-in per repository
 cd your-project
 unlost config agent opencode --path .</code></pre>
-          <small class="text-midnight-violet-950/60">If you want to use Unlost with your favourite agent, please <a href="https://github.com/unfault/unlost/issues" class="text-fiery-terracotta hover:underline">drop us a note</a>.</small>
+          <small class="text-midnight-violet-950/60 block mt-2 text-sm">If you want to use Unlost with your favourite agent, please <a href="https://github.com/unfault/unlost/issues" class="text-fiery-terracotta hover:underline">drop us a note</a>.</small>
         </div>
 
         <div>
-          <h3 class="text-lg font-semibold mb-4">Configure Your LLM</h3>
+          <h3 class="text-base sm:text-lg font-semibold mb-4">Configure Your LLM</h3>
           <p class="text-midnight-violet-950/60 mb-4">
             Unlost requires an LLM for capsule extraction and summarization. While friction detection 
             works locally, a dedicated extraction model dramatically improves capsule quality. 
@@ -238,14 +251,14 @@ unlost config agent opencode --path .</code></pre>
           </p>
           <pre><code>unlost config llm anthropic --model claude-sonnet-4-5-20250929
 unlost config llm openai --model gpt-4o-mini</code></pre>
-          <small class="text-midnight-violet-950/60">
+          <small class="text-midnight-violet-950/60 block mt-2 text-sm">
             <strong>Recommendation:</strong> Use a fast, cheap model like GPT-4o-mini or Claude 3.5 Haiku. 
             Extraction doesn't need reasoning; just structured output. You'll process thousands of 
             messages; speed and cost matter more than intelligence.
           </small>
         </div>
 
-        <div class="pl-4 border-l-4 border-fiery-terracotta">
+        <div class="pl-3 sm:pl-4 border-l-4 border-fiery-terracotta">
           <p class="text-midnight-violet-950/70">
             That's it. Next time you start your agent, unlost will automatically work alongside it.
             <span class="text-midnight-violet-950/50">Happy coding!</span>
@@ -258,175 +271,178 @@ unlost config llm openai --model gpt-4o-mini</code></pre>
   <!-- Commands -->
   <section id="commands" class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Commands <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        Commands 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
 
-      <div class="space-y-10">
+      <div class="space-y-10 sm:space-y-12">
         <!-- Memory -->
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost recall</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea]">Memory</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost recall</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Recall the story so far (proactive overview) from a specific file or directory.</p>
           <pre><code>unlost recall src/http_proxy.rs
 unlost recall src/</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80">Overall state for src/http_proxy.rs:</div>
-            <div class="text-white/80">The project has explicitly removed/deprecated the proxy-based opencode command</div>
-            <div class="text-white/80">in favor of the plugin/companion workflow, making src/http_proxy.rs likely</div>
-            <div class="text-white/80">unreachable and non-critical. Current focus should be to confirm its</div>
-            <div class="text-white/80">reachability and either retire or gate it to reduce complexity.</div>
-            <div class="text-white/60 mt-2">Key decisions:</div>
-            <div class="text-white/80">- Consolidate CLI to a single `opencode` using `plugin/companion`.</div>
-            <div class="text-white/80">- Drop proxy-dependent command/wiring (`proxy`, `deprecated`).</div>
-            <div class="text-white/80">- Treat recall for this file as partially relevant.</div>
-            <div class="text-white/60 mt-2">Suggested next steps:</div>
-            <div class="text-white/80">- Trace call sites to confirm whether src/http_proxy.rs is still referenced.</div>
-            <div class="text-white/80">- If unreachable, remove the file and associated proxy dependencies.</div>
+            <div class="text-white/80 whitespace-nowrap">Overall state for src/http_proxy.rs:</div>
+            <div class="text-white/80 whitespace-nowrap">The project has explicitly removed/deprecated the proxy-based opencode command</div>
+            <div class="text-white/80 whitespace-nowrap">in favor of the plugin/companion workflow, making src/http_proxy.rs likely</div>
+            <div class="text-white/80 whitespace-nowrap">unreachable and non-critical. Current focus should be to confirm its</div>
+            <div class="text-white/80 whitespace-nowrap">reachability and either retire or gate it to reduce complexity.</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">Key decisions:</div>
+            <div class="text-white/80 whitespace-nowrap">- Consolidate CLI to a single `opencode` using `plugin/companion`.</div>
+            <div class="text-white/80 whitespace-nowrap">- Drop proxy-dependent command/wiring (`proxy`, `deprecated`).</div>
+            <div class="text-white/80 whitespace-nowrap">- Treat recall for this file as partially relevant.</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">Suggested next steps:</div>
+            <div class="text-white/80 whitespace-nowrap">- Trace call sites to confirm whether src/http_proxy.rs is still referenced.</div>
+            <div class="text-white/80 whitespace-nowrap">- If unreachable, remove the file and associated proxy dependencies.</div>
           </div>
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost query</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea]">Memory</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost query</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Semantic search across recorded capsules with natural language.</p>
           <pre><code>unlost query "why did we rename the capsules table?"
 unlost query "auth flow changes"</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example: unlost query "proxy"</div>
-            <div class="text-white/80">Across multiple records tied to `/opencode/record`, the user rejects discussion</div>
-            <div class="text-white/80">of a proxy and asks to realign with the actual `opencode plugin` architecture</div>
-            <div class="text-white/80">and behavior. Each entry's decision instructs to stop discussing proxy and</div>
-            <div class="text-white/80">instead focus on the plugin's true execution path, including its</div>
-            <div class="text-white/80">networking/auth path and integration points.</div>
-            <div class="text-white/60 mt-2">----------------------------------------</div>
-            <div class="text-white/60">Meta: matches 5 | sessions 1 | sources 1 | providers 1</div>
-            <div class="text-white/60">Time (UTC): 2026-02-09T15:11:31Z -> 2026-02-09T15:12:32Z</div>
-            <div class="text-white/60">Usage: 5/5 hits</div>
+            <div class="text-white/80 whitespace-nowrap">Across multiple records tied to `/opencode/record`, the user rejects discussion</div>
+            <div class="text-white/80 whitespace-nowrap">of a proxy and asks to realign with the actual `opencode plugin` architecture</div>
+            <div class="text-white/80 whitespace-nowrap">and behavior. Each entry's decision instructs to stop discussing proxy and</div>
+            <div class="text-white/80 whitespace-nowrap">instead focus on the plugin's true execution path, including its</div>
+            <div class="text-white/80 whitespace-nowrap">networking/auth path and integration points.</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">----------------------------------------</div>
+            <div class="text-white/60 whitespace-nowrap">Meta: matches 5 | sessions 1 | sources 1 | providers 1</div>
+            <div class="text-white/60 whitespace-nowrap">Time (UTC): 2026-02-09T15:11:31Z -> 2026-02-09T15:12:32Z</div>
+            <div class="text-white/60 whitespace-nowrap">Usage: 5/5 hits</div>
           </div>
         </div>
 
         <!-- Monitor -->
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483]">Monitor</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Show workspace metrics (local, derived from metrics.jsonl).</p>
           <pre><code>unlost metrics</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80">workspace: wks_83ae697ac0204117</div>
-            <div class="text-white/80">metrics: /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117/metrics.jsonl</div>
-            <div class="text-white/60 mt-2">=== Overview ===</div>
-            <div class="text-white/80">capsules: 1138</div>
-            <div class="text-white/80">tokens: 1049826</div>
-            <div class="text-white/80">cost: $8.3937</div>
-            <div class="text-white/60 mt-2">=== Failure Modes (LLM-detected) ===</div>
-            <div class="text-white/80">total: 56/1138 capsules (4.9%)</div>
-            <div class="text-white/80">drift: 15 | rediscovery: 1 | retry_spiral: 9</div>
-            <div class="text-white/80">false_progress: 15 | unbounded_horizon: 15</div>
-            <div class="text-white/60 mt-2">=== User Engagement ===</div>
-            <div class="text-white/80">recall commands: 32 | query commands: 7</div>
+            <div class="text-white/80 whitespace-nowrap">workspace: wks_83ae697ac0204117</div>
+            <div class="text-white/80 whitespace-nowrap">metrics: /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117/metrics.jsonl</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">=== Overview ===</div>
+            <div class="text-white/80 whitespace-nowrap">capsules: 1138</div>
+            <div class="text-white/80 whitespace-nowrap">tokens: 1049826</div>
+            <div class="text-white/80 whitespace-nowrap">cost: $8.3937</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">=== Failure Modes (LLM-detected) ===</div>
+            <div class="text-white/80 whitespace-nowrap">total: 56/1138 capsules (4.9%)</div>
+            <div class="text-white/80 whitespace-nowrap">drift: 15 | rediscovery: 1 | retry_spiral: 9</div>
+            <div class="text-white/80 whitespace-nowrap">false_progress: 15 | unbounded_horizon: 15</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">=== User Engagement ===</div>
+            <div class="text-white/80 whitespace-nowrap">recall commands: 32 | query commands: 7</div>
           </div>
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost inspect</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483]">Monitor</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost inspect</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Inspect stored capsules for this workspace.</p>
           <pre><code>unlost inspect</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example: first few capsules</div>
-            <div class="text-white/80">workspace: wks_83ae697ac0204117</div>
-            <div class="text-white/80">---</div>
-            <div class="text-white/80">chunked_at: 2026-02-13T19:27:34Z</div>
-            <div class="text-white/80">session: ses_3a7964f37ffeQTc62ugRjgTIB1</div>
-            <div class="text-white/80">conn: 15 seq: 1 status: 200</div>
-            <div class="text-white/80">user_mood: confused (conf=0.68 val=0.00 int=0.55)</div>
-            <div class="text-white/80">category: documentation</div>
-            <div class="text-white/80">intent: Update the gh-pages branch to publish the latest documentation</div>
-            <div class="text-white/80">decision: Proceed to update gh-pages with the latest built docs</div>
-            <div class="text-white/80">symbols: ["gh-pages", "docs/index.html"]</div>
-            <div class="text-white/80">---</div>
-            <div class="text-white/60">... (more capsules follow)</div>
+            <div class="text-white/80 whitespace-nowrap">workspace: wks_83ae697ac0204117</div>
+            <div class="text-white/80 whitespace-nowrap">---</div>
+            <div class="text-white/80 whitespace-nowrap">chunked_at: 2026-02-13T19:27:34Z</div>
+            <div class="text-white/80 whitespace-nowrap">session: ses_3a7964f37ffeQTc62ugRjgTIB1</div>
+            <div class="text-white/80 whitespace-nowrap">conn: 15 seq: 1 status: 200</div>
+            <div class="text-white/80 whitespace-nowrap">user_mood: confused (conf=0.68 val=0.00 int=0.55)</div>
+            <div class="text-white/80 whitespace-nowrap">category: documentation</div>
+            <div class="text-white/80 whitespace-nowrap">intent: Update the gh-pages branch to publish the latest documentation</div>
+            <div class="text-white/80 whitespace-nowrap">decision: Proceed to update gh-pages with the latest built docs</div>
+            <div class="text-white/80 whitespace-nowrap">symbols: ["gh-pages", "docs/index.html"]</div>
+            <div class="text-white/80 whitespace-nowrap">---</div>
+            <div class="text-white/60 whitespace-nowrap">... (more capsules follow)</div>
           </div>
         </div>
 
         <!-- Manage -->
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost reindex</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost reindex</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Rebuild LanceDB index from capsules.jsonl.</p>
           <pre><code>unlost reindex</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80">Found 1758 capsules in /home/mcfly/.local/share/unlost/workspaces/</div>
-            <div class="text-white/80">wks_83ae697ac0204117/capsules.jsonl</div>
-            <div class="text-white/60 mt-2">Reindex will delete LanceDB and rebuild from JSONL. Continue? [y/N]</div>
-            <div class="text-white/80">Rebuilding index...</div>
-            <div class="text-white/80">✓ Indexed 1758 capsules in 2.34s</div>
+            <div class="text-white/80 whitespace-nowrap">Found 1758 capsules in /home/mcfly/.local/share/unlost/workspaces/</div>
+            <div class="text-white/80 whitespace-nowrap">wks_83ae697ac0204117/capsules.jsonl</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">Reindex will delete LanceDB and rebuild from JSONL. Continue? [y/N]</div>
+            <div class="text-white/80 whitespace-nowrap">Rebuilding index...</div>
+            <div class="text-white/80 whitespace-nowrap">✓ Indexed 1758 capsules in 2.34s</div>
           </div>
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost clear</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost clear</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Delete all generated data for the current workspace.</p>
           <pre><code>unlost clear</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80">This will delete ALL unlost data for workspace wks_83ae697ac0204117:</div>
-            <div class="text-white/80">- /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117</div>
-            <div class="text-white/60 mt-2">Are you sure? Type 'yes' to confirm: yes</div>
-            <div class="text-white/80 mt-2">✓ Deleted 1138 capsules, LanceDB index, and metrics</div>
-            <div class="text-white/60">Workspace data cleared. Capsules will be rebuilt from journal on next run.</div>
+            <div class="text-white/80 whitespace-nowrap">This will delete ALL unlost data for workspace wks_83ae697ac0204117:</div>
+            <div class="text-white/80 whitespace-nowrap">- /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">Are you sure? Type 'yes' to confirm: yes</div>
+            <div class="text-white/80 mt-2 whitespace-nowrap">✓ Deleted 1138 capsules, LanceDB index, and metrics</div>
+            <div class="text-white/60 whitespace-nowrap">Workspace data cleared. Capsules will be rebuilt from journal on next run.</div>
           </div>
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost where</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost where</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Show where the workspace's files are stored.</p>
           <pre><code>unlost where</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80">Workspace ID: wks_83ae697ac0204117</div>
-            <div class="text-white/80">Source: git</div>
-            <div class="text-white/80">Root: /home/mcfly/my-project</div>
-            <div class="text-white/80">Storage: /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117</div>
+            <div class="text-white/80 whitespace-nowrap">Workspace ID: wks_83ae697ac0204117</div>
+            <div class="text-white/80 whitespace-nowrap">Source: git</div>
+            <div class="text-white/80 whitespace-nowrap">Root: /home/mcfly/my-project</div>
+            <div class="text-white/80 whitespace-nowrap">Storage: /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117</div>
           </div>
         </div>
 
         <div>
-          <div class="flex justify-between items-baseline mb-3">
-            <h3 class="text-lg font-semibold text-fiery-terracotta">unlost config</h3>
-            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca]">Manage</span>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost config</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Manage configuration (LLM provider, agent integrations, etc.).</p>
           <pre><code>unlost config
 unlost config agent claudecode --global
 unlost config agent opencode --path .
 unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
-          <div class="terminal mt-4">
+          <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># unlost config (shows help)</div>
-            <div class="text-white/80">Manage configuration (LLM provider, etc.)</div>
-            <div class="text-white/60 mt-2">Usage: unlost config [OPTIONS] &lt;COMMAND&gt;</div>
-            <div class="text-white/80 mt-2">Commands:</div>
-            <div class="text-white/80">  llm    Manage LLM configuration for init/query narratives</div>
-            <div class="text-white/80">  agent  Configure an agent workspace to talk to unlost</div>
-            <div class="text-white/80">  help   Print this message or the help of the given subcommand(s)</div>
+            <div class="text-white/80 whitespace-nowrap">Manage configuration (LLM provider, etc.)</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">Usage: unlost config [OPTIONS] &lt;COMMAND&gt;</div>
+            <div class="text-white/80 mt-2 whitespace-nowrap">Commands:</div>
+            <div class="text-white/80 whitespace-nowrap">  llm    Manage LLM configuration for init/query narratives</div>
+            <div class="text-white/80 whitespace-nowrap">  agent  Configure an agent workspace to talk to unlost</div>
+            <div class="text-white/80 whitespace-nowrap">  help   Print this message or the help of the given subcommand(s)</div>
           </div>
         </div>
       </div>
@@ -436,16 +452,19 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
   <!-- How It Works -->
   <section id="solution" class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">How It Works <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        How It Works 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
       
-       <div class="space-y-16">
+       <div class="space-y-12 sm:space-y-16">
          <!-- Step 1 -->
-         <div class="grid grid-cols-12 gap-8 items-start">
-           <div class="col-span-2">
-              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
+         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+           <div class="sm:col-span-2">
+              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
            </div>
-           <div class="col-span-10">
-             <h3 class="text-xl font-semibold mb-3">Intercept & Record</h3>
+           <div class="sm:col-span-10">
+             <h3 class="text-lg sm:text-xl font-semibold mb-3">Intercept & Record</h3>
              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
                Hooks into agent events and writes everything to an append-only JSONL journal. 
                Non-blocking; returns immediately while processing continues in the background.
@@ -458,12 +477,12 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
          </div>
  
          <!-- Step 2 -->
-         <div class="grid grid-cols-12 gap-8 items-start">
-           <div class="col-span-2">
-              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
+         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+           <div class="sm:col-span-2">
+              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
            </div>
-           <div class="col-span-10">
-             <h3 class="text-xl font-semibold mb-3">Summarize & Store</h3>
+           <div class="sm:col-span-10">
+             <h3 class="text-lg sm:text-xl font-semibold mb-3">Summarize & Store</h3>
              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
                LLM extracts structured capsules (intent, decision, rationale, next_steps). 
                FastEmbed generates local embeddings. Everything stored in LanceDB; no data leaves your machine.
@@ -476,12 +495,12 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
          </div>
  
          <!-- Step 3 -->
-         <div class="grid grid-cols-12 gap-8 items-start">
-           <div class="col-span-2">
-              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
+         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+           <div class="sm:col-span-2">
+              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
            </div>
-           <div class="col-span-10">
-             <h3 class="text-xl font-semibold mb-3">Friction & Failure Mode Detection</h3>
+           <div class="sm:col-span-10">
+             <h3 class="text-lg sm:text-xl font-semibold mb-3">Friction & Failure Mode Detection</h3>
              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
                Analyzes conversation patterns in real-time: drift, retry spirals, false progress, 
                unbounded horizons. Detects when the agent is about to go off the rails.
@@ -495,12 +514,12 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
          </div>
  
          <!-- Step 4 -->
-         <div class="grid grid-cols-12 gap-8 items-start">
-           <div class="col-span-2">
-              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
+         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+           <div class="sm:col-span-2">
+              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
            </div>
-           <div class="col-span-10">
-             <h3 class="text-xl font-semibold mb-3">Injection Decision</h3>
+           <div class="sm:col-span-10">
+             <h3 class="text-lg sm:text-xl font-semibold mb-3">Injection Decision</h3>
              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
                Automatic intervention when friction is detected. Injects contextual guidance 
                into the conversation before the agent sends its next prompt. No manual intervention.
@@ -513,12 +532,12 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
          </div>
  
          <!-- Step 5 -->
-         <div class="grid grid-cols-12 gap-8 items-start">
-           <div class="col-span-2">
-              <div class="text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
+         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+           <div class="sm:col-span-2">
+              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
            </div>
-           <div class="col-span-10">
-             <h3 class="text-xl font-semibold mb-3">Recall & Query</h3>
+           <div class="sm:col-span-10">
+             <h3 class="text-lg sm:text-xl font-semibold mb-3">Recall & Query</h3>
              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
                Async semantic search across your workspace memory. Query by natural language, 
                symbols, or file paths. Returns relevant capsules with context; why did we do X?
@@ -539,36 +558,39 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
   <!-- Components of Unlost -->
   <section id="components" class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">The Components of Unlost <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        The Components of Unlost 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
 
-      <div class="space-y-16">
+      <div class="space-y-12 sm:space-y-16">
         <!-- Capsule Memory -->
         <div>
-          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Capsule Memory</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Capsule Memory</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             Structured, searchable records of agent conversations. Each capsule captures intent, decisions, rationale, and next steps—building a persistent memory layer for your codebase.
           </p>
-          <div class="terminal">
+          <div class="terminal overflow-x-auto">
             <div class="text-white/40 mb-1"># Example capsule</div>
-            <div class="text-white/80">chunked_at: 2026-02-13T14:47:31Z</div>
-            <div class="text-white/80">session: ses_3a887ec6effeHddMqe9691wY6V</div>
-            <div class="text-white/80">conn: 5 seq: 1 status: 200</div>
-            <div class="text-white/80">category: repo_exploration</div>
-            <div class="text-white/80">intent: Thoroughly explore the codebase to learn what Unlost does...</div>
-            <div class="text-white/80">decision: Proceed to review README, main configuration files...</div>
-            <div class="text-white/80">rationale: The user explicitly requested a deep codebase review...</div>
-            <div class="text-white/80">next: ["Open README and main configuration files...", ...]</div>
-            <div class="text-white/80">symbols: ["README", "Claude"]</div>
+            <div class="text-white/80 whitespace-nowrap">chunked_at: 2026-02-13T14:47:31Z</div>
+            <div class="text-white/80 whitespace-nowrap">session: ses_3a887ec6effeHddMqe9691wY6V</div>
+            <div class="text-white/80 whitespace-nowrap">conn: 5 seq: 1 status: 200</div>
+            <div class="text-white/80 whitespace-nowrap">category: repo_exploration</div>
+            <div class="text-white/80 whitespace-nowrap">intent: Thoroughly explore the codebase to learn what Unlost does...</div>
+            <div class="text-white/80 whitespace-nowrap">decision: Proceed to review README, main configuration files...</div>
+            <div class="text-white/80 whitespace-nowrap">rationale: The user explicitly requested a deep codebase review...</div>
+            <div class="text-white/80 whitespace-nowrap">next: ["Open README and main configuration files...", ...]</div>
+            <div class="text-white/80 whitespace-nowrap">symbols: ["README", "Claude"]</div>
           </div>
         </div>
 
         <!-- Facts & Metadata -->
         <div>
-          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Facts and Metadata We Store</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Facts and Metadata We Store</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             Beyond raw text, we extract and index key entities that enable precise semantic search and context-aware recall:
           </p>
-          <ul class="list-disc pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
+          <ul class="list-disc pl-4 sm:pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
             <li><strong>Symbols:</strong> Functions, classes, variables, and code identifiers mentioned in conversations</li>
             <li><strong>Files:</strong> File paths and references to help locate where changes occurred</li>
             <li><strong>Technologies:</strong> Frameworks, libraries, and tools being used or discussed</li>
@@ -583,11 +605,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
 
         <!-- Emotions -->
         <div>
-          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Emotions</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Emotions</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             We analyze conversation patterns to detect emotional signals that indicate when interactions may be deteriorating:
           </p>
-          <ul class="list-disc pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
+          <ul class="list-disc pl-4 sm:pl-5 space-y-2 text-midnight-violet-950/60 mb-4">
             <li><strong>Valence:</strong> Positive vs negative sentiment (-1.0 to +1.0)</li>
             <li><strong>Intensity:</strong> Strength of the emotional response (0.0 to 1.0)</li>
             <li><strong>Confidence:</strong> Certainty in the emotional classification (0.0 to 1.0)</li>
@@ -595,9 +617,9 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             The purpose is early detection of friction before it escalates. When emotion signals cross thresholds, Unlost can intervene with guidance or escalate to the user.
           </p>
-          <div class="terminal">
+          <div class="terminal overflow-x-auto">
             <div class="text-white/40 mb-1"># Emotion detection example</div>
-            <div class="text-white/80">user_mood: frustration (conf=0.55 val=-0.50 int=0.45)</div>
+            <div class="text-white/80 whitespace-nowrap">user_mood: frustration (conf=0.55 val=-0.50 int=0.45)</div>
             <div class="text-white/40 mt-2"># Detected from patterns like:</div>
             <div class="text-white/60">- "That didn't work" followed by multiple retries</div>
             <div class="text-white/60">- Increased negative language density</div>
@@ -607,58 +629,58 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
 
         <!-- Frictions -->
         <div>
-          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Frictions We Compute</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Frictions We Compute</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             Real-time detection of failure patterns computed locally to identify when agents are about to go off track:
           </p>
           <div class="space-y-6 text-midnight-violet-950/60">
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">1. Drift Detection</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">1. Drift Detection</h4>
               <p class="leading-relaxed">
                 Measures semantic divergence between the original intent and current conversation trajectory. When the agent's focus shifts away from the stated goal beyond a threshold, we flag potential drift.
               </p>
             </div>
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">2. Retry Spiral</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">2. Retry Spiral</h4>
               <p class="leading-relaxed">
                 Detects repeated attempts to solve the same problem with similar approaches. Algorithm: track consecutive failures on the same task, increment counter on each retry, flag when exceeding threshold (typically 3+ attempts).
               </p>
             </div>
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">3. False Progress</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">3. False Progress</h4>
               <p class="leading-relaxed">
                 Identifies when the agent reports success but metrics don't improve. We compare claimed outcomes against actual test results, build status, or lint errors to detect phantom progress.
               </p>
             </div>
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">4. Unbounded Horizon</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">4. Unbounded Horizon</h4>
               <p class="leading-relaxed">
                 Flags when the scope of work expands uncontrollably. Algorithm: monitor the number of files touched, new dependencies introduced, or architectural changes—trigger when growth exceeds 2x the original scope estimate.
               </p>
             </div>
           </div>
-          <div class="terminal mt-6">
+          <div class="terminal mt-6 overflow-x-auto">
             <div class="text-white/40 mb-1"># Friction detection in action</div>
-            <div class="text-fiery-terracotta">retry spiral detected: 4 consecutive failures on auth fix</div>
-            <div class="text-white/80">confidence: 0.87 | pattern: "The Apology Loop"</div>
-            <div class="text-white/60 mt-2">→ Injecting guidance: "Consider reviewing the middleware order"</div>
+            <div class="text-fiery-terracotta whitespace-nowrap">retry spiral detected: 4 consecutive failures on auth fix</div>
+            <div class="text-white/80 whitespace-nowrap">confidence: 0.87 | pattern: "The Apology Loop"</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">→ Injecting guidance: "Consider reviewing the middleware order"</div>
           </div>
         </div>
 
         <!-- Recall & Query -->
         <div>
-          <h3 class="text-xl font-semibold text-fiery-terracotta mb-4">Recall & Query</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Recall & Query</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
             Semantic search across your workspace memory to retrieve relevant context and answer questions about past work.
           </p>
           
           <div class="space-y-6 text-midnight-violet-950/60">
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">How Recall Works</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">How Recall Works</h4>
               <p class="leading-relaxed mb-3">
                 Recall generates a proactive overview by aggregating recent capsules relevant to a specific file or directory.
               </p>
-              <ul class="list-disc pl-5 space-y-1">
+              <ul class="list-disc pl-4 sm:pl-5 space-y-1">
                 <li>Path matching: Filter capsules by file/directory path</li>
                 <li>Recency weighting: Prioritize more recent interactions</li>
                 <li>Depth control: Limit how many capsule layers to traverse</li>
@@ -667,11 +689,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2">How Query Works</h4>
+              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">How Query Works</h4>
               <p class="leading-relaxed mb-3">
                 Natural language search converts your question into embeddings and performs semantic similarity matching.
               </p>
-              <ul class="list-disc pl-5 space-y-1">
+              <ul class="list-disc pl-4 sm:pl-5 space-y-1">
                 <li>Embedding: Your query is converted to a vector using the same model that indexed the capsules</li>
                 <li>Vector search: LanceDB performs approximate nearest neighbor (ANN) search across all capsule embeddings</li>
                 <li>Hybrid scoring: Combines semantic similarity with metadata filters (time range, symbols, files)</li>
@@ -681,16 +703,16 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
           </div>
           
-          <div class="terminal mt-6">
+          <div class="terminal mt-6 overflow-x-auto">
             <div class="text-white/40 mb-1"># Recall operation</div>
-            <div class="text-white/80">$ unlost recall src/auth.rs --depth 3</div>
-            <div class="text-white/60">→ Found 12 capsules | Generating summary...</div>
-            <div class="text-white/60">→ Last modified: JWT middleware, token validation, error handling</div>
-            <div class="text-white/40 mt-2"># Query operation</div>
-            <div class="text-white/80">$ unlost query "why did we add rate limiting?"</div>
-            <div class="text-white/60">→ ANN search: 0.023s | 47 capsules scanned</div>
-            <div class="text-white/60">→ Top match: "Prevent API abuse" (score: 0.89)</div>
-            <div class="text-white/60">→ Related: auth middleware, redis cache, 429 responses</div>
+            <div class="text-white/80 whitespace-nowrap">$ unlost recall src/auth.rs --depth 3</div>
+            <div class="text-white/60 whitespace-nowrap">→ Found 12 capsules | Generating summary...</div>
+            <div class="text-white/60 whitespace-nowrap">→ Last modified: JWT middleware, token validation, error handling</div>
+            <div class="text-white/40 mt-2 mb-1"># Query operation</div>
+            <div class="text-white/80 whitespace-nowrap">$ unlost query "why did we add rate limiting?"</div>
+            <div class="text-white/60 whitespace-nowrap">→ ANN search: 0.023s | 47 capsules scanned</div>
+            <div class="text-white/60 whitespace-nowrap">→ Top match: "Prevent API abuse" (score: 0.89)</div>
+            <div class="text-white/60 whitespace-nowrap">→ Related: auth middleware, redis cache, 429 responses</div>
           </div>
         </div>
       </div>
@@ -700,7 +722,10 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
   <!-- Who's Behind This -->
   <section class="section">
     <div class="container-narrow">
-      <h2 class="text-3xl font-medium mb-12 flex items-baseline">Who's behind this? <span class="inline-block w-5 h-5 rounded-full bg-fiery-terracotta ml-3 mt-1"></span></h2>
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        Who's behind this? 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
 
       <p class="text-midnight-violet-950/60 leading-relaxed">
         I built Unlost because I keep coming back to codebases (including my own) and spending the first hour
@@ -717,9 +742,9 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
 
 
   <!-- Footer -->
-  <footer class="py-12 px-4">
-    <div class="container-narrow flex items-center justify-between text-sm text-midnight-violet-950/40">
-      <span>MIT License · © 2026 mcfly Hellegouarch</span>
+  <footer class="py-8 sm:py-12 px-4">
+    <div class="max-w-2xl mx-auto flex flex-col sm:flex-row items-center justify-between text-sm text-midnight-violet-950/40 gap-4">
+      <span class="text-center sm:text-left">MIT License · © 2026 mcfly Hellegouarch</span>
       <div class="flex items-center gap-4">
         <a href="https://github.com/unfault/unlost" class="text-midnight-violet-950/60 hover:text-fiery-terracotta transition-colors">GitHub</a>
         <a href="https://unfault.dev" class="text-midnight-violet-950/60 hover:text-fiery-terracotta transition-colors">unfault.dev</a>
