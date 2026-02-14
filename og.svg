@@ -1,0 +1,38 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="titleGradient" x1="240" y1="0" x2="980" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#241D45"/>
+      <stop offset="1" stop-color="#E74F26"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(980 120) rotate(145) scale(560 420)">
+      <stop stop-color="#D1B487" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#D1B487" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#FFFFFF"/>
+  <rect width="1200" height="630" fill="url(#bgGlow)"/>
+
+  <!-- Header -->
+  <g transform="translate(72 72)">
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="28" font-weight="600">Unlost</text>
+    <circle cx="104" cy="-8" r="6" fill="#E74F26"/>
+    <text x="0" y="28" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Local-first memory for agent work</text>
+  </g>
+
+  <!-- Title -->
+  <g transform="translate(72 220)">
+    <text x="0" y="0" fill="url(#titleGradient)" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">Keep your agents from going off track</text>
+  </g>
+
+  <!-- Subline -->
+  <g transform="translate(72 288)">
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="22" font-weight="400" opacity="0.70">Detect friction. Record decisions. Recall the story.</text>
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(72 562)">
+    <text x="0" y="0" fill="#241D45" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="16" font-weight="500" opacity="0.70">unlost.unfault.dev</text>
+    <text x="1050" y="0" fill="#241D45" font-family="JetBrains Mono, DejaVu Sans Mono, monospace" font-size="16" font-weight="500" opacity="0.55" text-anchor="end">github.com/unfault/unlost</text>
+  </g>
+</svg>
