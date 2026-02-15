@@ -282,7 +282,7 @@ async fn llm_init_capsules(
     Ok((debrief, capsules))
 }
 
-pub(crate) async fn run(
+pub async fn run(
     path: String,
     embed_model: String,
     embed_cache_dir: Option<String>,
@@ -526,7 +526,7 @@ pub(crate) async fn run(
     }
 
     for (cap, meta) in capsules {
-        crate::storage::insert_capsule_row(&db, &embedder, 0, 0, now_ms, &meta, None, None, &cap)
+        crate::storage::insert_capsule_row(&db, &embedder, 0, 0, now_ms, &meta, None, None, &cap, None)
             .await
             .ok();
     }

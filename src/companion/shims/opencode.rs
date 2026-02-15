@@ -294,6 +294,43 @@ struct ParsedTurn {
     turn_key: String, // user_msg_id:assistant_msg_id
 }
 
+/// Read full message text from parts if available.
+fn read_message_full_text(message_id: &str) -> Option<String> {
+    let storage = opencode_storage_dir();
+    let part_dir = storage.join("part").join(message_id);
+    if !part_dir.exists() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(part_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if v.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                            if !text.is_empty() {
+                                parts.push((id.to_string(), text.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Sort by part ID to maintain order
+    parts.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(parts.into_iter().map(|p| p.1).collect::<Vec<_>>().join("\n").trim().to_string())
+}
+
 /// Extract turns from a list of messages.
 fn extract_turns(messages: Vec<MessageFile>) -> Vec<ParsedTurn> {
     // Build a map of message_id -> message for quick lookup
@@ -321,25 +358,30 @@ fn extract_turns(messages: Vec<MessageFile>) -> Vec<ParsedTurn> {
             continue;
         }
 
-        // Extract user text from summary.title
-        let user_text = user_msg
-            .summary
-            .as_ref()
-            .and_then(|s| s.title.as_ref())
-            .map(|t| t.clone())
-            .unwrap_or_default();
+        // Try reading full text from parts first, fallback to summary.title
+        let user_text = read_message_full_text(&user_msg.id)
+            .unwrap_or_else(|| {
+                user_msg
+                    .summary
+                    .as_ref()
+                    .and_then(|s| s.title.as_ref())
+                    .cloned()
+                    .unwrap_or_default()
+            });
 
         if user_text.trim().is_empty() {
             continue;
         }
 
-        // Extract assistant text from summary.title (if available)
-        let assistant_text = msg
-            .summary
-            .as_ref()
-            .and_then(|s| s.title.as_ref())
-            .map(|t| t.clone())
-            .unwrap_or_default();
+        let assistant_text = read_message_full_text(&msg.id)
+            .unwrap_or_else(|| {
+                msg
+                    .summary
+                    .as_ref()
+                    .and_then(|s| s.title.as_ref())
+                    .cloned()
+                    .unwrap_or_default()
+            });
 
         // Extract touched paths from diffs
         let mut touched_paths: Vec<String> = Vec::new();
@@ -484,9 +526,10 @@ fn print_cost_warning(turn_count: usize, use_color: bool) {
 // Replay entry point
 // ============================================================================
 
-pub(crate) async fn replay(
+pub async fn replay(
     path: String,
     dedupe: bool,
+    no_llm: bool,
     embed_model: String,
     embed_cache_dir: Option<String>,
 ) -> anyhow::Result<()> {
@@ -603,6 +646,7 @@ pub(crate) async fn replay(
             let config = FlowConfig {
                 embed_model,
                 embed_cache_dir,
+                no_llm,
             };
             let mut flow = Flow::new(config);
 

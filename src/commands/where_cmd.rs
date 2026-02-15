@@ -1,4 +1,4 @@
-pub(crate) fn run(path: String) -> anyhow::Result<()> {
+pub fn run(path: String) -> anyhow::Result<()> {
     let workspace_root = std::path::Path::new(&path);
     let root = crate::workspace::git_toplevel(workspace_root).unwrap_or_else(|| {
         crate::workspace::canonicalize_dir(workspace_root)

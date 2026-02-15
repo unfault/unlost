@@ -195,7 +195,7 @@ impl From<RecordResult> for Response {
 ///
 /// Reads JSON requests from stdin, processes them via the flow, and writes
 /// JSON responses to stdout. Signals readiness with `{"ready": true}` on startup.
-pub(crate) async fn run(
+pub async fn run(
     embed_model: String,
     embed_cache_dir: Option<String>,
 ) -> anyhow::Result<()> {
@@ -205,6 +205,7 @@ pub(crate) async fn run(
     let config = FlowConfig {
         embed_model,
         embed_cache_dir,
+        no_llm: false, // stdio shim is for live, so no_llm defaults to false
     };
     let mut flow = Flow::new(config);
 

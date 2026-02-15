@@ -15,5 +15,5 @@
 //!   - `claude`: Claude hook JSON + transcript parsing.
 //!   - (future) `codex`: OpenAI Codex integration.
 
-pub(crate) mod flow;
-pub(crate) mod shims;
+pub mod flow;
+pub mod shims;

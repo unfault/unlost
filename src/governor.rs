@@ -6,34 +6,376 @@
 //!
 //! Total overhead: <15ms (local emotion + LanceDB query + matching)
 
+use crate::types::{SymptomChannels, TrajectoryState};
 use crate::CapsuleHit;
 use crate::IntentCapsule;
 
+/// Constants for the Trajectory Model (Calibrated Feb 15, 2026)
+const WEIGHT_EFFORT: f32 = 0.34;
+const WEIGHT_REPETITION: f32 = 0.24;
+const WEIGHT_NOVELTY: f32 = 0.24;
+const WEIGHT_SEMANTIC: f32 = 0.18;
+const WEIGHT_ALIGNMENT_DEBT: f32 = 0.45;
+const WEIGHT_PATH_HALLUCINATION: f32 = 0.60;
+
+const THRESHOLD_WATCH: f32 = 0.5;
+const THRESHOLD_INTERVENE: f32 = 0.8;
+const THRESHOLD_STABLE_OFF: f32 = 0.4;
+
+const EMA_ALPHA: f32 = 0.3;
+const COFFEE_PAUSE_MS: i64 = 30 * 60 * 1000;
+const PERSISTENCE_WINDOW: usize = 3;
+const PERSISTENCE_THRESHOLD: f32 = 0.75;
+const COFFEE_PAUSE_DECAY: f32 = 0.3;
+
+#[derive(Debug, Clone, Default)]
+pub struct TrajectoryController {
+    pub state: TrajectoryState,
+    pub intensity: f32,
+    pub smoothed_channels: SymptomChannels,
+    pub last_ts_ms: i64,
+    pub turns_since_intervention: usize,
+    /// History of intensity values for persistence checking.
+    pub intensity_history: std::collections::VecDeque<f32>,
+}
+
+const CORRECTION_PATTERNS: &[&str] = &[
+    "no",
+    "not that",
+    "i meant",
+    "actually",
+    "that's not what i asked",
+    "you misunderstood",
+    "wrong",
+    "incorrect",
+];
+
+fn detect_correction(text: &str) -> f32 {
+    let lower = text.to_lowercase();
+    let mut score = 0.0;
+    for p in CORRECTION_PATTERNS {
+        if lower.contains(p) {
+            if *p == "actually" {
+                score += 0.5;
+            } else {
+                score += 1.0;
+            }
+        }
+    }
+    (score / 1.5_f32).min(1.0_f32)
+}
+
+impl TrajectoryController {
+    pub fn update(
+        &mut self,
+        workspace_id: &str,
+        current: &IntentCapsule,
+        current_emotion: Option<&crate::emotion::EmotionMeta>,
+        history: &[CapsuleHit],
+        ts_ms: i64,
+    ) -> (TrajectoryState, Option<String>) {
+        // 1. Check for Coffee Pause (Soft Decay Reset)
+        if self.last_ts_ms > 0 && (ts_ms - self.last_ts_ms) > COFFEE_PAUSE_MS {
+            self.state = TrajectoryState::Stable;
+            self.intensity *= COFFEE_PAUSE_DECAY;
+        }
+        self.last_ts_ms = ts_ms;
+
+        // 2. Calculate raw symptoms
+        let s_rep = calculate_repetition(current, history);
+        let s_nov = calculate_novelty_collapse(current, history);
+        let s_sem = calculate_semantic_stall(current, history);
+        let s_eff = calculate_effort_spike(current, history);
+        let s_corr = detect_correction(&current.intent);
+        let s_path = calculate_path_hallucination(workspace_id, current);
+
+        // 3. EMA Smoothing
+        self.smoothed_channels.repetition =
+            EMA_ALPHA * s_rep + (1.0 - EMA_ALPHA) * self.smoothed_channels.repetition;
+        self.smoothed_channels.novelty_collapse =
+            EMA_ALPHA * s_nov + (1.0 - EMA_ALPHA) * self.smoothed_channels.novelty_collapse;
+        self.smoothed_channels.semantic_stall =
+            EMA_ALPHA * s_sem + (1.0 - EMA_ALPHA) * self.smoothed_channels.semantic_stall;
+        self.smoothed_channels.effort_spike =
+            EMA_ALPHA * s_eff + (1.0 - EMA_ALPHA) * self.smoothed_channels.effort_spike;
+        self.smoothed_channels.alignment_debt =
+            EMA_ALPHA * s_corr + (1.0 - EMA_ALPHA) * self.smoothed_channels.alignment_debt;
+        self.smoothed_channels.path_hallucination =
+            EMA_ALPHA * s_path + (1.0 - EMA_ALPHA) * self.smoothed_channels.path_hallucination;
+
+        // 4. Intensity Calculation
+        let loop_intensity = WEIGHT_REPETITION * self.smoothed_channels.repetition
+            + WEIGHT_NOVELTY * self.smoothed_channels.novelty_collapse
+            + WEIGHT_SEMANTIC * self.smoothed_channels.semantic_stall
+            + WEIGHT_EFFORT * self.smoothed_channels.effort_spike;
+
+        let spec_intensity = WEIGHT_ALIGNMENT_DEBT * self.smoothed_channels.alignment_debt;
+        let drift_intensity = WEIGHT_PATH_HALLUCINATION * self.smoothed_channels.path_hallucination;
+
+        let mut raw_intensity = loop_intensity + spec_intensity + drift_intensity;
+
+        // 5. Affective Modulation (The "Emotional Wave")
+        if let Some(e) = current_emotion {
+            match e.label.as_str() {
+                "joy" if e.confidence > 0.7 => {
+                    raw_intensity *= 0.5;
+                }
+                "anger" if e.confidence > 0.6 => {
+                    raw_intensity = (raw_intensity + 0.3).min(1.0);
+                }
+                _ => {}
+            }
+        }
+
+        let old_intensity = self.intensity;
+        self.intensity = raw_intensity;
+        let slope = self.intensity - old_intensity;
+
+        // Track history for persistence
+        self.intensity_history.push_back(self.intensity);
+        if self.intensity_history.len() > PERSISTENCE_WINDOW {
+            self.intensity_history.pop_front();
+        }
+        let is_persistent = self.intensity_history.len() == PERSISTENCE_WINDOW
+            && self
+                .intensity_history
+                .iter()
+                .all(|&v| v > PERSISTENCE_THRESHOLD);
+
+        // 6. State Transitions
+        let prev_state = self.state;
+        match self.state {
+            TrajectoryState::Stable => {
+                if self.intensity > THRESHOLD_WATCH && slope > 0.0 {
+                    self.state = TrajectoryState::Watch;
+                }
+            }
+            TrajectoryState::Watch => {
+                if (self.intensity > THRESHOLD_INTERVENE && slope > 0.05) || is_persistent {
+                    self.state = TrajectoryState::Intervene;
+                } else if self.intensity < THRESHOLD_STABLE_OFF {
+                    self.state = TrajectoryState::Stable;
+                }
+            }
+            TrajectoryState::Intervene => {
+                self.turns_since_intervention = 0;
+                self.state = TrajectoryState::Watch;
+                self.intensity_history.clear();
+            }
+        }
+
+        self.turns_since_intervention += 1;
+
+        // 7. Select Intervention
+        let note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
+            let cause = if drift_intensity > spec_intensity && drift_intensity > loop_intensity {
+                "drift"
+            } else if spec_intensity > loop_intensity {
+                "spec"
+            } else {
+                "loop"
+            };
+            select_intervention_with_substance(
+                self.state,
+                current_emotion,
+                cause,
+                workspace_id,
+                current,
+                history,
+            )
+        } else {
+            None
+        };
+
+        (self.state, note)
+    }
+
+    pub fn reset(&mut self) {
+        self.state = TrajectoryState::Stable;
+        self.intensity = 0.0;
+        self.smoothed_channels = SymptomChannels::default();
+        self.turns_since_intervention = 0;
+        self.intensity_history.clear();
+    }
+}
+
+fn calculate_repetition(current: &IntentCapsule, history: &[CapsuleHit]) -> f32 {
+    if current.symbols.is_empty() || history.is_empty() {
+        return 0.0;
+    }
+    let mut recent_symbols = std::collections::HashSet::new();
+    for h in history.iter().take(8) {
+        for s in &h.capsule.symbols {
+            recent_symbols.insert(s);
+        }
+    }
+    let overlap = current
+        .symbols
+        .iter()
+        .filter(|s| recent_symbols.contains(s))
+        .count();
+    overlap as f32 / current.symbols.len() as f32
+}
+
+fn calculate_novelty_collapse(current: &IntentCapsule, history: &[CapsuleHit]) -> f32 {
+    1.0 - (1.0 - calculate_repetition(current, history))
+}
+
+fn calculate_path_hallucination(workspace_id: &str, current: &IntentCapsule) -> f32 {
+    let (_checked, missing) = crate::workspace::validate_paths(workspace_id, &current.symbols);
+    if current.symbols.is_empty() {
+        return 0.0;
+    }
+    if missing > 0 {
+        (missing as f32 / current.symbols.len() as f32).max(0.5)
+    } else {
+        0.0
+    }
+}
+
+fn calculate_semantic_stall(_current: &IntentCapsule, history: &[CapsuleHit]) -> f32 {
+    if history.is_empty() {
+        return 0.0;
+    }
+    0.0
+}
+
+fn calculate_effort_spike(current: &IntentCapsule, history: &[CapsuleHit]) -> f32 {
+    if history.is_empty() {
+        return 0.0;
+    }
+
+    let current_eff = (current.symbols.len() * 100 + current.intent.len()) as f32;
+
+    let mut total_prev_eff = 0.0;
+    let count = history.iter().take(8).count();
+    for h in history.iter().take(8) {
+        total_prev_eff += (h.capsule.symbols.len() * 100 + h.capsule.intent.len()) as f32;
+    }
+
+    let avg_eff = total_prev_eff / count as f32;
+    if avg_eff > 0.0 {
+        (current_eff / avg_eff).min(2.0) / 2.0
+    } else {
+        0.5
+    }
+}
+
+fn select_intervention_with_substance(
+    state: TrajectoryState,
+    emotion: Option<&crate::emotion::EmotionMeta>,
+    cause: &str,
+    workspace_id: &str,
+    current: &IntentCapsule,
+    history: &[CapsuleHit],
+) -> Option<String> {
+    let label = emotion.map(|e| e.label.as_str()).unwrap_or("neutral");
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+
+    match (state, cause, label) {
+        // --- Specification Basin (Staff Engineer Voice) ---
+        (TrajectoryState::Watch, "spec", "confused" | "doubt") => {
+            let rationale = current.rationale.trim();
+            let rational_part = if !rationale.is_empty() {
+                format!(" (Rationale was: \"{rationale}\")")
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "[SYSTEM NOTE: User appears confused by the direction{}. Briefly explain the 'why' behind your current approach and ask if this aligns with their intent before proceeding.]",
+                rational_part
+            ))
+        }
+        (TrajectoryState::Watch, "spec", _) => {
+            let intent = current.intent.trim();
+            let decision = current.decision.trim();
+            Some(format!(
+                "[SYSTEM NOTE: I noticed a few corrections recently. To ensure we're aligned: my current understanding is \"{}\". Next I'll do \"{}\". Does that sound right?]",
+                intent, decision
+            ))
+        }
+        (TrajectoryState::Intervene, "spec", _) => {
+            let corrections: Vec<String> = recent
+                .iter()
+                .take(5)
+                .filter(|h| detect_correction(&h.capsule.intent) > 0.5)
+                .map(|h| h.capsule.intent.trim().to_string())
+                .collect();
+
+            let north_star = recent
+                .iter()
+                .rev()
+                .find(|h| !h.capsule.intent.trim().is_empty())
+                .map(|h| h.capsule.intent.trim());
+
+            let mut note = "[SYSTEM NOTE: Alignment debt is high. Stop and restate the current objective. Ask the user to confirm or pivot before any more code is written.]".to_string();
+
+            if let Some(ns) = north_star {
+                note.push_str(&format!("\nOriginal Goal: \"{}\"", ns));
+            }
+
+            if !corrections.is_empty() {
+                note.push_str("\nRecent corrections:\n- ");
+                note.push_str(&corrections.join("\n- "));
+            }
+            Some(note)
+        }
+
+        // --- Drift Basin (Grounding/Hallucination) ---
+        (TrajectoryState::Watch, "drift", _) => {
+            let (_, missing_count) = crate::workspace::validate_paths(workspace_id, &current.symbols);
+            if missing_count > 0 {
+                Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Verify the workspace state before proceeding.]".to_string())
+            } else {
+                Some("[SYSTEM NOTE: High assumption load or grounding mismatch detected. Verify your facts about the codebase.]".to_string())
+            }
+        }
+        (TrajectoryState::Intervene, "drift", _) => {
+            Some("[SYSTEM NOTE: Factual drift is high. Stop. Re-read the relevant files and list 3 verified facts about the current code structure before continuing.]".to_string())
+        }
+
+        // --- Loop Basin (Hydration/Attempt Log) ---
+        (TrajectoryState::Watch, "loop", "frustration") => Some(
+            "[SYSTEM NOTE: User frustration detected in a potential loop. Pause to clarify the immediate blocker.]"
+                .to_string(),
+        ),
+        (TrajectoryState::Watch, "loop", _) => {
+            let syms = current.symbols.join(", ");
+            Some(format!(
+                "[SYSTEM NOTE: A lot of repeat activity detected in [{}]. If this approach is stalling, consider proposing an alternative.]",
+                syms
+            ))
+        }
+        (TrajectoryState::Intervene, "loop", "anger") => Some(
+            "[SYSTEM NOTE: CRITICAL: Anger detected. Stop all execution. Apologize and await explicit instructions.]"
+                .to_string(),
+        ),
+        (TrajectoryState::Intervene, "loop", _) => {
+            let w = FrictionWeights::default();
+            let packet = build_hydration_packet(current, emotion, &recent, &w);
+            let symbols_str = current.symbols.join(", ");
+            Some(render_hydration_warning(
+                &symbols_str,
+                String::new(),
+                packet.as_ref(),
+            ))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FrictionWeights {
-    /// How many recent capsules are treated as the "immediate" window.
     pub(crate) recent_window: usize,
-    /// Symbol repetition threshold within `recent_window`.
     pub(crate) symbol_repeat_threshold: usize,
-    /// How many recent capsules are considered when ranking Graveyard nodes.
     pub(crate) graveyard_window: usize,
-    /// How many recent capsules are considered when building the Map.
     pub(crate) map_window: usize,
-
-    /// Controls decay of the Logic Recency base. Larger => slower decay.
     pub(crate) logic_recency_tau: f32,
-
-    /// Multiplier for Jaccard symbol overlap in Graveyard scoring.
     pub(crate) overlap_scale: f32,
-    /// Multiplicative boost applied when friction emotion is present.
     pub(crate) emotion_boost: f32,
-
-    /// Token count at which the effort boost saturates.
     pub(crate) effort_tokens_norm: f32,
-    /// Max effort multiplier contribution (added on top of 1.0).
     pub(crate) effort_scale: f32,
-
-    /// Token count at which we add the stronger warning copy.
     pub(crate) effort_tokens_warn_threshold: i64,
 }
 
@@ -56,11 +398,8 @@ impl Default for FrictionWeights {
 
 #[derive(Debug, Clone)]
 pub(crate) struct HydrationPacket {
-    /// One short reminder of the top-level goal (the "North Star").
     pub(crate) north_star: Option<String>,
-    /// 3-5 most recent attempts/failures in the same code area (the "Graveyard").
     pub(crate) graveyard: Vec<HydrationNode>,
-    /// A compact symbolic map of the territory touched recently (the "Map").
     pub(crate) map: Option<String>,
 }
 
@@ -73,8 +412,6 @@ pub(crate) struct HydrationNode {
     pub(crate) tokens_total: Option<i64>,
 }
 
-/// Emotions that indicate friction - user is frustrated, disapproves, doubts, or expresses dissatisfaction
-/// Note: "sad" in agent context usually means "not happy with this" = dissatisfaction, not actual sadness
 const FRICTION_EMOTIONS: &[&str] = &[
     "frustration",
     "anger",
@@ -82,16 +419,30 @@ const FRICTION_EMOTIONS: &[&str] = &[
     "disapproval",
     "doubt",
     "sad",
-    // In agent contexts, explicit confusion often indicates we're misaligned or moving too fast.
     "confused",
 ];
 
-/// Stateless friction note for the very first user message (no history yet).
-///
-/// When history is empty, the main friction heuristics can't run (they rely on
-/// repetition and past emotion). However, we still want to inject a lightweight
-/// warning when the user is clearly upset so the assistant can acknowledge and
-/// re-align immediately.
+pub fn detect_failure_keywords(text: &str) -> Option<crate::types::FailureMode> {
+    let lower = text.to_lowercase();
+    if lower.contains("try again")
+        || lower.contains("circles")
+        || lower.contains("same error")
+        || lower.contains("retry")
+    {
+        return Some(crate::types::FailureMode::RetrySpiral);
+    }
+    if lower.contains("never mind")
+        || lower.contains("forget it")
+        || lower.contains("actually")
+        || lower.contains("instead")
+    {
+        if lower.contains("wrong") || lower.contains("incorrect") || lower.contains("fact") {
+            return Some(crate::types::FailureMode::Drift);
+        }
+    }
+    None
+}
+
 pub(crate) fn evaluate_stateless_friction(
     current_user_emotion: Option<&crate::emotion::EmotionMeta>,
 ) -> Option<String> {
@@ -99,50 +450,15 @@ pub(crate) fn evaluate_stateless_friction(
     if !FRICTION_EMOTIONS.contains(&e.label.as_str()) {
         return None;
     }
-
-    // Keep thresholds low-ish; we prefer a gentle nudge over missing obvious frustration.
     if e.confidence < 0.45 || e.intensity < 0.35 {
         return None;
     }
-
     Some(
         "[SYSTEM NOTE: User appears frustrated or confused. Pause to acknowledge the concern and ask what they want to achieve next before continuing.]"
             .to_string(),
     )
 }
 
-/// Check whether we should inject a *friction warning* into the next LLM request.
-///
-/// This is intentionally a small, cheap heuristic (no frameworks, no state machines).
-/// The goal is to catch the common failure mode where an agent keeps hammering the same
-/// files/symbols while the user is clearly not happy with progress.
-///
-/// What it looks at
-/// - **Current context**: the symbols extracted from the request we are about to send.
-/// - **Current user emotion** (optional): a local classifier output for *this* user message.
-/// - **Recent history**: the last few recorded capsules (for the same workspace/session).
-///
-/// Signals
-/// 1. **Friction emotion**: user emotion buckets that correlate with “we're stuck / this isn't working”.
-///    - Current message counts (when provided).
-///    - Recent history counts (best-effort; may be missing).
-/// 2. **Symbol repetition**: if the same symbols appear repeatedly in recent capsules, we assume
-///    we are stuck in the same code area.
-/// 3. **Effort amplifier**: if recent repeated-symbol capsules show high token usage, we make the
-///    warning more forceful (this is a proxy for “we already burned time/money here”).
-///
-/// Trigger
-/// - We inject a warning when **(friction emotion)** AND **(symbol repetition >= 2)**.
-///
-/// Output
-/// - Returns `Some(warning)` containing a small SYSTEM note intended to be *prepended* to the
-///   next upstream request (see `crate::net::inject_warning`).
-/// - Returns `None` when no warning should be injected.
-///
-/// Design notes / trade-offs
-/// - We require symbols to be present; otherwise we cannot tell *where* the loop is.
-/// - Emotion classification is noisy; we therefore combine it with concrete “same symbols again” evidence.
-/// - This function must stay cheap: it only scans a small prefix of `history`.
 pub fn evaluate_friction(
     current: &IntentCapsule,
     current_user_emotion: Option<&crate::emotion::EmotionMeta>,
@@ -165,12 +481,8 @@ pub(crate) fn evaluate_friction_with_weights(
     if history.is_empty() {
         return None;
     }
-
-    // Treat the most recent items first even if storage returns an arbitrary order.
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-
-    // Signal 1: User friction emotion (current message OR recent history)
     let current_friction = current_user_emotion
         .map(|e| FRICTION_EMOTIONS.contains(&e.label.as_str()))
         .unwrap_or(false);
@@ -181,8 +493,6 @@ pub(crate) fn evaluate_friction_with_weights(
             .unwrap_or(false)
     });
     let frustrated = current_friction || recent_friction;
-
-    // Signal 2: Same symbols touched 2+ times recently (only meaningful if we have symbols)
     let symbol_repeats = if current.symbols.is_empty() {
         0
     } else {
@@ -197,8 +507,6 @@ pub(crate) fn evaluate_friction_with_weights(
             })
             .count()
     };
-
-    // Amplifier: if we're burning tokens in the same area, be more forceful.
     let effort_tokens: i64 = if current.symbols.is_empty() {
         0
     } else {
@@ -214,8 +522,33 @@ pub(crate) fn evaluate_friction_with_weights(
             .filter_map(|h| h.meta.usage.as_ref().and_then(|u| u.tokens_total()))
             .sum()
     };
-
-    // Trigger: User is frustrated AND agent is stuck in the same code area
+    let keyword_failure = detect_failure_keywords(&current.intent)
+        .or_else(|| detect_failure_keywords(&current.decision));
+    if current.failure_mode != crate::types::FailureMode::None || keyword_failure.is_some() {
+        let mode = if current.failure_mode != crate::types::FailureMode::None {
+            current.failure_mode.clone()
+        } else {
+            keyword_failure.unwrap()
+        };
+        let mode_str = match mode {
+            crate::types::FailureMode::Drift => "Drift detected (incorrect fact/structure).",
+            crate::types::FailureMode::Rediscovery => {
+                "Rediscovery detected (repeating old decisions)."
+            }
+            crate::types::FailureMode::DecisionConflict => {
+                "Decision conflict (conflicts with project constraint)."
+            }
+            crate::types::FailureMode::RetrySpiral => "Retry spiral (stuck in a loop).",
+            crate::types::FailureMode::FalseProgress => "False progress (claims done but broken).",
+            crate::types::FailureMode::UnboundedHorizon => "Unbounded horizon (off-task tangents).",
+            _ => "Failure mode detected.",
+        };
+        let _signals = current.failure_signals.as_deref().unwrap_or("");
+        return Some(format!(
+            "[SYSTEM NOTE: {} Pause to re-align with the user.]",
+            mode_str
+        ));
+    }
     if !current.symbols.is_empty() && frustrated && symbol_repeats >= w.symbol_repeat_threshold {
         let packet = build_hydration_packet(current, current_user_emotion, &recent, w);
         let symbols_str = current.symbols.join(", ");
@@ -227,48 +560,19 @@ pub(crate) fn evaluate_friction_with_weights(
         } else {
             String::new()
         };
-
-        // Log friction detection with metadata
-        let user_emotion_label = current_user_emotion
-            .map(|e| e.label.as_str())
-            .unwrap_or("none");
-        tracing::info!(
-            friction = "detected",
-            symbols = %symbols_str,
-            symbol_repeats = symbol_repeats,
-            effort_tokens = effort_tokens,
-            user_emotion = user_emotion_label,
-            current_friction = current_friction,
-            recent_friction = recent_friction,
-            has_hydration = packet.is_some(),
-            "friction warning will be injected"
-        );
-
         return Some(render_hydration_warning(
             &symbols_str,
             amplifier,
             packet.as_ref(),
         ));
     }
-
-    // If symbol-based friction didn't trigger, check for conversational friction
-    // (symbol-less frustration detection)
     evaluate_conversational_friction_with_current(current_user_emotion, history, w.recent_window)
 }
 
-/// Soft warning for 2 frustrated messages in window
 const SOFT_FRICTION_WARNING: &str =
     "The user seems frustrated or confused. Consider pausing to acknowledge their concern before continuing.";
-
-/// Firm warning for 3+ frustrated messages in window  
 const FIRM_FRICTION_WARNING: &str = "The user has expressed repeated frustration or confusion. Stop and ask what's wrong or how you can help differently.";
 
-/// Evaluate conversational friction based on current + recent user emotion patterns.
-///
-/// This catches cases where the user is frustrated with the conversation
-/// but no specific code symbols are involved.
-///
-/// Note: if `current_user_emotion` is present, we treat it as part of the window.
 pub(crate) fn evaluate_conversational_friction_with_current(
     current_user_emotion: Option<&crate::emotion::EmotionMeta>,
     history: &[CapsuleHit],
@@ -277,29 +581,20 @@ pub(crate) fn evaluate_conversational_friction_with_current(
     if history.is_empty() && current_user_emotion.is_none() {
         return None;
     }
-
-    // Sort by recency
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-
     let current_negative = current_user_emotion
         .map(|e| crate::emotion::is_negative_emotion(&e.label))
         .unwrap_or(false);
-
-    // If we were able to classify the current user message and it's not negative,
-    // don't inject a conversational friction warning. Friction nudges should react
-    // to the user's *current* state, not linger after the user is happy/neutral.
     if current_user_emotion.is_some() && !current_negative {
         return None;
     }
-
     let include_current = current_user_emotion.is_some();
     let take_n = if include_current {
         window.saturating_sub(1)
     } else {
         window
     };
-
     let history_negative_count = recent
         .iter()
         .take(take_n)
@@ -311,82 +606,30 @@ pub(crate) fn evaluate_conversational_friction_with_current(
                 .unwrap_or(false)
         })
         .count();
-
     let total_negative = history_negative_count + (current_negative as usize);
-
-    // If the current message is clearly negative, inject a gentle nudge even if this is
-    // the first negative signal in the window (helps acknowledge confusion/frustration early).
-    if total_negative == 1 && current_negative {
-        if let Some(e) = current_user_emotion {
-            if e.confidence >= 0.60 && e.intensity >= 0.45 {
-                tracing::info!(
-                    friction = "conversational",
-                    total_negative = total_negative,
-                    window = window,
-                    severity = "soft",
-                    reason = "current_strong",
-                    "conversational friction warning will be injected"
-                );
-                return Some(SOFT_FRICTION_WARNING.to_string());
-            }
-        }
-    }
-
     if total_negative >= 3 {
-        tracing::info!(
-            friction = "conversational",
-            total_negative = total_negative,
-            window = window,
-            severity = "firm",
-            "conversational friction warning will be injected"
-        );
         return Some(FIRM_FRICTION_WARNING.to_string());
     }
-
     if total_negative >= 2 {
-        tracing::info!(
-            friction = "conversational",
-            total_negative = total_negative,
-            window = window,
-            severity = "soft",
-            "conversational friction warning will be injected"
-        );
         return Some(SOFT_FRICTION_WARNING.to_string());
     }
-
     None
 }
 
-/// Warning messages for LLM-detected failure modes
 const DRIFT_WARNING: &str = "Previous context may be stale or incorrect. The last exchange showed signs of drift (wrong mental model). Verify your assumptions about the codebase before proceeding.";
-
 const FALSE_PROGRESS_WARNING: &str = "The user disputed completion in a recent exchange. Verify that your changes actually work before claiming the task is done.";
-
 const REDISCOVERY_WARNING: &str = "This topic was already discussed recently. Check the prior decision before re-exploring the same ground.";
-
 const DECISION_CONFLICT_WARNING: &str = "Intervention: This approach conflicts with a prior project decision. Re-route to the compliant pattern.";
 
-/// Evaluate recent capsules for LLM-detected failure modes.
-///
-/// Returns a warning if a relevant failure mode was detected in recent history.
-/// Only looks at the most recent capsule to avoid stale warnings.
 pub(crate) fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
     if history.is_empty() {
         return None;
     }
-
-    // Sort by recency and look at the most recent capsule
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-
-    // Check the most recent capsule for failure modes
-    // (Only look at the latest to avoid repeatedly warning about old issues)
     let latest = recent.first()?;
-
     let failure_mode = &latest.capsule.failure_mode;
-    let failure_signals = latest.capsule.failure_signals.as_deref().unwrap_or("");
     let symbols = &latest.capsule.symbols;
-
     match failure_mode {
         crate::types::FailureMode::Drift => {
             let symbols_str = if symbols.is_empty() {
@@ -394,61 +637,25 @@ pub(crate) fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
             } else {
                 format!(" Relevant symbols: {}", symbols.join(", "))
             };
-
-            tracing::info!(
-                failure_mode = "drift",
-                failure_signals = failure_signals,
-                symbols = ?symbols,
-                "injecting drift warning"
-            );
-
             Some(format!("{}{}", DRIFT_WARNING, symbols_str))
         }
         crate::types::FailureMode::DecisionConflict => {
-            // Prefer a concrete prior decision reminder if it exists in the capsule.
             let prior_decision = if !latest.capsule.decision.is_empty() {
                 format!(" Prior decision: \"{}\"", latest.capsule.decision)
             } else {
                 String::new()
             };
-
-            tracing::info!(
-                failure_mode = "decision_conflict",
-                failure_signals = failure_signals,
-                prior_decision = %latest.capsule.decision,
-                "injecting decision conflict warning"
-            );
-
             Some(format!("{}{}", DECISION_CONFLICT_WARNING, prior_decision))
         }
-        crate::types::FailureMode::FalseProgress => {
-            tracing::info!(
-                failure_mode = "false_progress",
-                failure_signals = failure_signals,
-                "injecting false progress warning"
-            );
-
-            Some(FALSE_PROGRESS_WARNING.to_string())
-        }
+        crate::types::FailureMode::FalseProgress => Some(FALSE_PROGRESS_WARNING.to_string()),
         crate::types::FailureMode::Rediscovery => {
-            // For rediscovery, include the prior decision if available
             let prior_decision = if !latest.capsule.decision.is_empty() {
                 format!(" Prior decision: \"{}\"", latest.capsule.decision)
             } else {
                 String::new()
             };
-
-            tracing::info!(
-                failure_mode = "rediscovery",
-                failure_signals = failure_signals,
-                prior_decision = %latest.capsule.decision,
-                "injecting rediscovery warning"
-            );
-
             Some(format!("{}{}", REDISCOVERY_WARNING, prior_decision))
         }
-        // RetrySpiral is already handled by symbol-based friction detection
-        // UnboundedHorizon is out of scope for now
         _ => None,
     }
 }
@@ -458,7 +665,6 @@ fn has_any_marker(s: &str, markers: &[&str]) -> bool {
 }
 
 fn tokenize_keywords(s: &str) -> std::collections::HashSet<String> {
-    // ASCII-only, cheap tokenization; keep identifiers/paths-like tokens.
     let mut out = std::collections::HashSet::new();
     for raw in s
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '/' && c != '.' && c != '-')
@@ -471,7 +677,6 @@ fn tokenize_keywords(s: &str) -> std::collections::HashSet<String> {
         if t.chars().all(|c| c.is_ascii_digit()) {
             continue;
         }
-        // Very small stopword set; keep it conservative.
         if matches!(
             t.as_str(),
             "that"
@@ -511,7 +716,6 @@ fn window_contains(hay: &str, needle: &str, idx: usize, window: usize) -> bool {
 }
 
 fn token_is_negated(prompt_lc: &str, token: &str) -> bool {
-    // If user is explicitly saying to avoid/not-do the token, treat as not a conflict.
     const NEG: &[&str] = &[
         "do not",
         "don't",
@@ -553,7 +757,6 @@ fn decision_prohibits_token(decision_lc: &str, token: &str) -> bool {
                 return true;
             }
         }
-        // Special-case: "no <token>".
         if decision_lc.contains(&format!("no {token}")) {
             return true;
         }
@@ -582,13 +785,6 @@ fn prompt_requests_action(prompt_lc: &str) -> bool {
     has_any_marker(prompt_lc, ACTION)
 }
 
-/// Detect a likely "I told you NOT to" moment: current request asks for something that
-/// conflicts with an established decision capsule.
-///
-/// This is intentionally heuristic and cheap (no extra LLM call):
-/// - semantic retrieval happens upstream (caller provides relevant hits)
-/// - we look for strong prohibition language in `capsule.decision`
-/// - we look for overlapping keywords between the prompt and the decision
 pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> Option<String> {
     let prompt_lc = prompt.to_ascii_lowercase();
     if prompt_lc.trim().is_empty() {
@@ -597,15 +793,11 @@ pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> O
     if !prompt_requests_action(&prompt_lc) {
         return None;
     }
-
-    // Pick the strongest nearby decision (first relevant hit with a non-empty decision).
     let best = hits
         .iter()
         .find(|h| !h.capsule.decision.trim().is_empty())?;
     let decision = best.capsule.decision.trim();
     let decision_lc = decision.to_ascii_lowercase();
-
-    // Only trigger this mode when the stored decision reads like a constraint.
     const PROHIBIT: &[&str] = &[
         "do not",
         "don't",
@@ -623,16 +815,12 @@ pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> O
     if !has_any_marker(&decision_lc, PROHIBIT) {
         return None;
     }
-
-    // Keyword overlap is the guardrail against random matches.
     let p_tok = tokenize_keywords(&prompt_lc);
     let d_tok = tokenize_keywords(&decision_lc);
     let shared: Vec<String> = p_tok.intersection(&d_tok).cloned().collect();
     if shared.is_empty() {
         return None;
     }
-
-    // Confirm at least one shared token is actually prohibited and not negated in the prompt.
     let mut conflict_token: Option<String> = None;
     for t in shared {
         if token_is_negated(&prompt_lc, &t) {
@@ -644,14 +832,12 @@ pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> O
         }
     }
     let _ = conflict_token?;
-
     let cat = best.capsule.category.trim();
     let cat_part = if cat.is_empty() {
         String::new()
     } else {
         format!(" ({cat})")
     };
-
     Some(format!(
         "{DECISION_CONFLICT_WARNING}{cat_part} Prior decision: \"{decision}\"\n\n"
     ))
@@ -685,8 +871,6 @@ fn build_hydration_packet(
     if recent.is_empty() {
         return None;
     }
-
-    // --- North Star (goal reminder) ---
     let north_star = if !current.intent.trim().is_empty() {
         Some(current.intent.trim().to_string())
     } else {
@@ -694,58 +878,34 @@ fn build_hydration_packet(
             (!h.capsule.intent.trim().is_empty()).then(|| h.capsule.intent.trim().to_string())
         })
     };
-
-    // --- Graveyard (recent failed/repeated nodes) ---
-    // Rank by a lightweight "Logic Recency" score: most recent hit wins, then prefer same-symbol overlap,
-    // then prefer explicit friction emotion, then tokens usage.
     let mut candidates: Vec<(f32, HydrationNode)> = Vec::new();
     for (i, h) in recent.iter().take(w.graveyard_window).enumerate() {
         let overlap = jaccard(&current.symbols, &h.capsule.symbols);
         if overlap <= 0.0 {
             continue;
         }
-
         let tau = if w.logic_recency_tau <= 0.1 {
             0.1
         } else {
             w.logic_recency_tau
         };
-        let logic_recency = (-((i as f32) / tau)).exp(); // ~1.0, 0.72, 0.51, ...
+        let logic_recency = (-((i as f32) / tau)).exp();
         let emo = h.user_emotion.as_ref().map(|e| e.label.clone());
         let emo_is_friction = emo.as_deref().map(is_friction_label).unwrap_or(false)
             || current_user_emotion
                 .map(|e| is_friction_label(&e.label))
                 .unwrap_or(false);
         let emo_boost = if emo_is_friction {
-            if w.emotion_boost < 1.0 {
-                1.0
-            } else {
-                w.emotion_boost
-            }
+            w.emotion_boost.max(1.0)
         } else {
             1.0
         };
-        let overlap_scale = if w.overlap_scale < 0.0 {
-            0.0
-        } else {
-            w.overlap_scale
-        };
-        let overlap_boost = 1.0 + (overlap * overlap_scale);
+        let overlap_boost = 1.0 + (overlap * w.overlap_scale.max(0.0));
         let tok = h.meta.usage.as_ref().and_then(|u| u.tokens_total());
-        let norm = if w.effort_tokens_norm <= 1.0 {
-            1.0
-        } else {
-            w.effort_tokens_norm
-        };
-        let effort_scale = if w.effort_scale < 0.0 {
-            0.0
-        } else {
-            w.effort_scale
-        };
+        let norm = w.effort_tokens_norm.max(1.0);
         let effort_boost = tok
-            .map(|t| 1.0 + ((t as f32) / norm).clamp(0.0, 1.0) * effort_scale)
+            .map(|t| 1.0 + ((t as f32) / norm).clamp(0.0, 1.0) * w.effort_scale.max(0.0))
             .unwrap_or(1.0);
-
         let score = logic_recency * overlap_boost * emo_boost * effort_boost;
         candidates.push((
             score,
@@ -759,8 +919,6 @@ fn build_hydration_packet(
         ));
     }
     candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Keep diversity: avoid returning 5 nodes that are effectively the same symbol set.
     let mut graveyard: Vec<HydrationNode> = Vec::new();
     let mut seen_fps: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (_, node) in candidates {
@@ -775,17 +933,7 @@ fn build_hydration_packet(
         }
         graveyard.push(node);
     }
-    if graveyard.len() > 5 {
-        graveyard.truncate(5);
-    }
-    if graveyard.len() < 3 {
-        // Not enough overlap candidates; still useful to return a packet with the Map.
-        // (We keep whatever we found.)
-    }
-
-    // --- Map (symbolic territory graph) ---
     let map = build_symbol_map(recent, w);
-
     let north_star = north_star
         .map(|s| s.lines().next().unwrap_or("").trim().to_string())
         .filter(|s| !s.is_empty())
@@ -797,7 +945,6 @@ fn build_hydration_packet(
             }
             s
         });
-
     Some(HydrationPacket {
         north_star,
         graveyard,
@@ -808,7 +955,6 @@ fn build_hydration_packet(
 fn build_symbol_map(recent: &[&CapsuleHit], w: &FrictionWeights) -> Option<String> {
     let mut counts: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
     let mut edges: std::collections::HashMap<(&str, &str), i32> = std::collections::HashMap::new();
-
     for h in recent.iter().take(w.map_window) {
         let mut syms: Vec<&str> = h.capsule.symbols.iter().map(|s| s.as_str()).collect();
         syms.sort();
@@ -825,23 +971,19 @@ fn build_symbol_map(recent: &[&CapsuleHit], w: &FrictionWeights) -> Option<Strin
             }
         }
     }
-
     if counts.is_empty() {
         return None;
     }
-
     let mut top: Vec<(&str, i32)> = counts.into_iter().collect();
     top.sort_by(|a, b| b.1.cmp(&a.1));
     top.truncate(8);
     let top_set: std::collections::HashSet<&str> = top.iter().map(|(s, _)| *s).collect();
-
     let mut edge_list: Vec<((&str, &str), i32)> = edges
         .into_iter()
         .filter(|((a, b), w)| *w >= 2 && top_set.contains(a) && top_set.contains(b))
         .collect();
     edge_list.sort_by(|a, b| b.1.cmp(&a.1));
     edge_list.truncate(6);
-
     let sym_part = top
         .into_iter()
         .map(|(s, n)| format!("{s}({n})"))
@@ -864,7 +1006,6 @@ fn render_hydration_warning(
     packet: Option<&HydrationPacket>,
 ) -> String {
     let mut out = String::new();
-
     out.push_str(
         "[SYSTEM NOTE: Friction detected. Stop this approach. Propose a different strategy.",
     );
@@ -872,15 +1013,12 @@ fn render_hydration_warning(
         out.push_str(&format!(" (Loop area: {symbols_str})"));
     }
     out.push_str("]\n");
-
     if let Some(p) = packet {
-        // Keep the note compact but structured.
         if let Some(ns) = p.north_star.as_deref() {
             out.push_str("North Star: ");
             out.push_str(ns);
             out.push('\n');
         }
-
         if !p.graveyard.is_empty() {
             out.push_str("Graveyard (recent failed attempts):\n");
             for n in p.graveyard.iter().take(5) {
@@ -914,14 +1052,12 @@ fn render_hydration_warning(
                 out.push('\n');
             }
         }
-
         if let Some(map) = p.map.as_deref() {
             out.push_str("Map: ");
             out.push_str(map);
             out.push('\n');
         }
     }
-
     if !amplifier.trim().is_empty() {
         out.push_str(amplifier.trim());
         out.push('\n');
@@ -985,29 +1121,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stateless_friction_note_not_emitted_for_neutral() {
-        let e = EmotionMeta {
-            label: "neutral".to_string(),
-            valence: 0.0,
-            intensity: 0.2,
-            confidence: 0.9,
-        };
-        assert!(evaluate_stateless_friction(Some(&e)).is_none());
-    }
-
-    #[test]
-    fn test_stateless_friction_note_emitted_for_confused() {
-        let e = EmotionMeta {
-            label: "confused".to_string(),
-            valence: -0.1,
-            intensity: 0.55,
-            confidence: 0.8,
-        };
-        let note = evaluate_stateless_friction(Some(&e));
-        assert!(note.is_some());
-    }
-
-    #[test]
     fn test_no_friction_empty_history() {
         let current = IntentCapsule {
             category: "".to_string(),
@@ -1020,133 +1133,6 @@ mod tests {
             failure_signals: None,
         };
         assert!(evaluate_friction(&current, None, &[]).is_none());
-    }
-
-    #[test]
-    fn test_no_friction_empty_symbols() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec![],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![make_hit(vec!["auth.ts"], Some("frustration"))];
-        assert!(evaluate_friction(&current, None, &history).is_none());
-    }
-
-    #[test]
-    fn test_conversational_friction_triggers_without_symbols() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec![],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("frustration")),
-            make_hit(vec!["db.rs"], Some("disapproval")),
-        ];
-        let result = evaluate_friction(&current, None, &history);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_conversational_friction_current_strong_negative_triggers_without_symbols() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec![],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![make_hit(vec!["auth.ts"], Some("joy"))];
-        let cur_emotion = EmotionMeta {
-            label: "confused".to_string(),
-            valence: -0.1,
-            intensity: 0.6,
-            confidence: 0.9,
-        };
-        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_no_conversational_friction_when_current_neutral() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec![],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("frustration")),
-            make_hit(vec!["db.rs"], Some("disapproval")),
-            make_hit(vec!["models.rs"], Some("joy")),
-        ];
-        let cur_emotion = EmotionMeta {
-            label: "joy".to_string(),
-            valence: 0.8,
-            intensity: 0.4,
-            confidence: 0.9,
-        };
-        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_no_friction_happy_user() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["auth.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("joy")),
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], None),
-        ];
-        assert!(evaluate_friction(&current, None, &history).is_none());
-    }
-
-    #[test]
-    fn test_no_friction_different_symbols() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["utils.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            // Negative emotions would trigger *conversational* friction even without symbol overlap.
-            // This test is specifically about symbol-based loops.
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], Some("joy")),
-        ];
-        assert!(evaluate_friction(&current, None, &history).is_none());
     }
 
     #[test]
@@ -1171,83 +1157,5 @@ mod tests {
         let warning = result.unwrap();
         assert!(warning.contains("auth.ts"));
         assert!(warning.contains("SYSTEM NOTE"));
-    }
-
-    #[test]
-    fn test_friction_with_annoyance() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["db.rs".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["db.rs"], Some("annoyance")),
-            make_hit(vec!["db.rs", "models.rs"], None),
-        ];
-        let result = evaluate_friction(&current, None, &history);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_friction_current_emotion_triggers() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["auth.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        // Not frustrated in history, but we are repeating symbols.
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], Some("joy")),
-            make_hit(vec!["auth.ts"], None),
-        ];
-
-        let cur_emotion = EmotionMeta {
-            label: "frustration".to_string(),
-            valence: -0.7,
-            intensity: 0.8,
-            confidence: 0.9,
-        };
-
-        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_no_friction_current_emotion_happy() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["auth.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], None),
-        ];
-
-        let cur_emotion = EmotionMeta {
-            label: "joy".to_string(),
-            valence: 0.8,
-            intensity: 0.4,
-            confidence: 0.9,
-        };
-        let result = evaluate_friction(&current, Some(&cur_emotion), &history);
-        assert!(result.is_none());
     }
 }

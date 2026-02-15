@@ -54,7 +54,7 @@ pub(crate) fn show_llm_config() {
     }
 }
 
-pub(crate) async fn llm_extract<T>(
+pub async fn llm_extract<T>(
     model_override: Option<&str>,
     preamble: &str,
     input: &str,

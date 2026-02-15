@@ -1,4 +1,4 @@
-pub(crate) fn run(path: String) -> anyhow::Result<()> {
+pub fn run(path: String) -> anyhow::Result<()> {
     let ws = crate::workspace::get_or_create_workspace_paths(std::path::Path::new(&path))?;
     let summary = crate::metrics::summarize_metrics(&ws.metrics_jsonl)?;
 

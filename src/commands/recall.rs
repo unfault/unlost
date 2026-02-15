@@ -119,7 +119,7 @@ fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec
     selected
 }
 
-pub(crate) async fn run(
+pub async fn run(
     target: Vec<String>,
     limit: usize,
     emotion: Option<crate::cli::EmotionType>,

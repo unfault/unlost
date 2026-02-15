@@ -949,6 +949,7 @@ pub(crate) async fn insert_capsule_row(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
+    override_embed_text: Option<&str>,
 ) -> anyhow::Result<()> {
     tracing::info!(
         conn_id,
@@ -956,6 +957,7 @@ pub(crate) async fn insert_capsule_row(
         ts_ms,
         has_usage = meta.usage.is_some(),
         decision_bytes = capsule.decision.len(),
+        has_override_text = override_embed_text.is_some(),
         "insert_capsule_row called"
     );
     tracing::debug!(
@@ -968,7 +970,12 @@ pub(crate) async fn insert_capsule_row(
     let table = ensure_capsules_table(db).await?;
     let schema = capsules_schema();
 
-    let embedding = crate::embed::embed_text(embedder, &capsule_embed_text(capsule)).await?;
+    let text_to_embed = if let Some(t) = override_embed_text {
+        t.to_string()
+    } else {
+        capsule_embed_text(capsule)
+    };
+    let embedding = crate::embed::embed_text(embedder, &text_to_embed).await?;
     if embedding.len() != 384 {
         anyhow::bail!("embedding dimension mismatch: {}", embedding.len());
     }

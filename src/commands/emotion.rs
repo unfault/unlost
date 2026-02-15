@@ -5,7 +5,7 @@
 
 use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
 
-pub(crate) async fn run(text: String) -> anyhow::Result<()> {
+pub async fn run(text: String) -> anyhow::Result<()> {
     println!("Loading emotion model...");
     let mut model = EmotionModel::load(EmotionConfig::default()).await?;
 

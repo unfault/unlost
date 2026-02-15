@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "internal/bench"]
+
 [package]
 name = "unlost"
 version = "0.2.7"

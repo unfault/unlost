@@ -244,7 +244,7 @@ fn query_capsules_jsonl(path: &str, query: &str, limit: usize) -> anyhow::Result
     Ok(())
 }
 
-pub(crate) async fn run(
+pub async fn run(
     query: Vec<String>,
     limit: usize,
     symbol: Option<String>,

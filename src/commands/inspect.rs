@@ -8,7 +8,7 @@ fn fmt_ts_utc(ts_ms: i64) -> String {
         .unwrap_or_else(|| ts_ms.to_string())
 }
 
-pub(crate) async fn run(
+pub async fn run(
     path: String,
     limit: usize,
     emotion: Option<crate::cli::EmotionType>,

@@ -3,42 +3,14 @@
 #![allow(clippy::too_many_arguments)]
 
 use clap::{CommandFactory, Parser};
-
-mod analysis;
-mod cli;
-mod commands;
-mod companion;
-mod config;
-mod constants;
-mod embed;
-mod emotion;
-mod governor;
-mod http_proxy;
-mod llm;
-mod logging;
-mod metrics;
-mod narrative;
-mod net;
-mod recording;
-mod storage;
-mod types;
-mod util;
-mod workspace;
-
-#[cfg(test)]
-mod test_support;
-
-pub(crate) use crate::llm::llm_extract;
-pub use crate::types::IntentCapsule;
-pub(crate) use crate::types::{CapsuleHit, InitCapsulesOutput, QueryNarrativeOutput, ResponseMeta};
-pub(crate) use crate::workspace::{WorkspacePaths, now_ms, unlost_data_root, unlost_workspace_dir};
+use unlost::cli::{Cli, Command, ShimCommand, ReplayCommand, OutputFormat};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = crate::cli::Cli::parse();
+    let cli = Cli::parse();
 
     if cli.command.is_none() {
-        crate::cli::Cli::command().print_help()?;
+        Cli::command().print_help()?;
         println!(
             "\n\nTry:\n- unlost config agent opencode --path .\n- unlost config agent claude --global\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost init --path .\n- unlost recall\n- unlost query \"what are the routes available?\"\n"
         );
@@ -47,13 +19,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Default to "info" for shim (we want to see friction/emotion logs),
     // "warn" for everything else
-    let is_shim = matches!(&cli.command, Some(crate::cli::Command::Shim { .. }));
+    let is_shim = matches!(&cli.command, Some(Command::Shim { .. }));
     let default_level = if is_shim { "info" } else { "warn" };
     let log_level = cli
         .log
-        .map(|l| l.as_tracing_str().to_string())
+        .map(|l: unlost::cli::LogLevel| l.as_tracing_str().to_string())
         .unwrap_or_else(|| default_level.to_string());
-    let filter = crate::logging::create_filter(&log_level);
+    let filter = unlost::logging::create_filter(&log_level);
 
     // Determine logging mode based on command type:
     // - Shim commands use file-only (stdout/stderr used for protocol)
@@ -61,14 +33,14 @@ async fn main() -> anyhow::Result<()> {
     // - Short-lived commands just use stderr
     let is_long_running = matches!(
         &cli.command,
-        Some(crate::cli::Command::Serve { .. }) | Some(crate::cli::Command::Record { .. })
+        Some(Command::Serve { .. }) | Some(Command::Record { .. })
     );
 
     // Keep the guard alive for the duration of main()
     let _log_guard = if is_shim {
-        Some(crate::logging::init_logging_file_only(filter))
+        Some(unlost::logging::init_logging_file_only(filter))
     } else if is_long_running {
-        Some(crate::logging::init_logging(filter))
+        Some(unlost::logging::init_logging(filter))
     } else {
         tracing_subscriber::fmt().with_env_filter(filter).init();
         None
@@ -80,21 +52,21 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to install rustls crypto provider");
 
     match cli.command.unwrap() {
-        crate::cli::Command::Serve {
+        Command::Serve {
             bind,
             embed_model,
             embed_cache_dir,
         } => {
-            crate::commands::serve::run(bind, embed_model, embed_cache_dir).await?;
+            unlost::commands::serve::run(bind, embed_model, embed_cache_dir).await?;
         }
-        crate::cli::Command::Record {
+        Command::Record {
             bind,
             upstream_host,
             upstream_port,
             embed_model,
             embed_cache_dir,
         } => {
-            crate::commands::record::run(
+            unlost::commands::record::run(
                 bind,
                 upstream_host,
                 upstream_port,
@@ -103,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        crate::cli::Command::Query {
+        Command::Query {
             query,
             limit,
             symbol,
@@ -121,11 +93,11 @@ async fn main() -> anyhow::Result<()> {
             file,
         } => {
             let output = if plain {
-                crate::cli::OutputFormat::Plain
+                OutputFormat::Plain
             } else {
                 output
             };
-            crate::commands::query::run(
+            unlost::commands::query::run(
                 query,
                 limit,
                 symbol,
@@ -143,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        crate::cli::Command::Recall {
+        Command::Recall {
             target,
             limit,
             emotion,
@@ -157,11 +129,11 @@ async fn main() -> anyhow::Result<()> {
             embed_cache_dir,
         } => {
             let output = if plain {
-                crate::cli::OutputFormat::Plain
+                OutputFormat::Plain
             } else {
                 output
             };
-            crate::commands::recall::run(
+            unlost::commands::recall::run(
                 target,
                 limit,
                 emotion,
@@ -175,10 +147,10 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        crate::cli::Command::Metrics { path } => {
-            crate::commands::metrics::run(path)?;
+        Command::Metrics { path } => {
+            unlost::commands::metrics::run(path)?;
         }
-        crate::cli::Command::Inspect {
+        Command::Inspect {
             path,
             limit,
             emotion,
@@ -187,10 +159,10 @@ async fn main() -> anyhow::Result<()> {
             until,
             filter,
         } => {
-            crate::commands::inspect::run(path, limit, emotion, provider, since, until, filter)
+            unlost::commands::inspect::run(path, limit, emotion, provider, since, until, filter)
                 .await?;
         }
-        crate::cli::Command::Init {
+        Command::Init {
             path,
             embed_model,
             embed_cache_dir,
@@ -202,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             llm_max_capsules,
         } => {
-            crate::commands::init::run(
+            unlost::commands::init::run(
                 path,
                 embed_model,
                 embed_cache_dir,
@@ -216,64 +188,68 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-        crate::cli::Command::Model { command } => {
-            crate::commands::model::run(command).await?;
+        Command::Model { command } => {
+            unlost::commands::model::run(command).await?;
         }
-        crate::cli::Command::Config { command } => {
-            crate::commands::config::run(command)?;
+        Command::Config { command } => {
+            unlost::commands::config::run(command)?;
         }
-        crate::cli::Command::Clear { path, yes } => {
-            crate::commands::clear::run(path, yes)?;
+        Command::Clear { path, yes } => {
+            unlost::commands::clear::run(path, yes)?;
         }
-        crate::cli::Command::Reindex { path, yes } => {
-            crate::commands::reindex::run(path, yes).await?;
+        Command::Reindex { path, yes } => {
+            unlost::commands::reindex::run(path, yes).await?;
         }
-        crate::cli::Command::Emotion { text } => {
-            crate::commands::emotion::run(text).await?;
+        Command::Emotion { text } => {
+            unlost::commands::emotion::run(text).await?;
         }
-        crate::cli::Command::Shim { command } => match command {
-            crate::cli::ShimCommand::Opencode {
+        Command::Shim { command } => match command {
+            ShimCommand::Opencode {
                 embed_model,
                 embed_cache_dir,
             } => {
-                crate::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir).await?;
+                unlost::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir).await?;
             }
-            crate::cli::ShimCommand::Claude {
+            ShimCommand::Claude {
                 embed_model,
                 embed_cache_dir,
             } => {
-                crate::companion::shims::claude::run(embed_model, embed_cache_dir).await?;
+                unlost::companion::shims::claude::run(embed_model, embed_cache_dir).await?;
             }
-            crate::cli::ShimCommand::Replay { command } => match command {
-                crate::cli::ReplayCommand::Claude {
+            ShimCommand::Replay { command } => match command {
+                ReplayCommand::Claude {
                     path,
                     transcript_path,
                     session_id,
                     from_start,
                     dedupe,
+                    no_llm,
                     embed_model,
                     embed_cache_dir,
                 } => {
-                    crate::companion::shims::claude::replay(
+                    unlost::companion::shims::claude::replay(
                         path,
                         transcript_path,
                         session_id,
                         from_start,
                         dedupe,
+                        no_llm,
                         embed_model,
                         embed_cache_dir,
                     )
                     .await?;
                 }
-                crate::cli::ReplayCommand::Opencode {
+                ReplayCommand::Opencode {
                     path,
                     dedupe,
+                    no_llm,
                     embed_model,
                     embed_cache_dir,
                 } => {
-                    crate::companion::shims::opencode::replay(
+                    unlost::companion::shims::opencode::replay(
                         path,
                         dedupe,
+                        no_llm,
                         embed_model,
                         embed_cache_dir,
                     )
@@ -281,8 +257,8 @@ async fn main() -> anyhow::Result<()> {
                 }
             },
         },
-        crate::cli::Command::Where { path } => {
-            crate::commands::where_cmd::run(path)?;
+        Command::Where { path } => {
+            unlost::commands::where_cmd::run(path)?;
         }
     }
 

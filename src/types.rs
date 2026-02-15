@@ -2,36 +2,40 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
-pub(crate) struct UsageMeta {
-    pub(crate) provider_id: Option<String>,
-    pub(crate) model_id: Option<String>,
-    pub(crate) cost: Option<f64>,
-    pub(crate) tokens_input: Option<i64>,
-    pub(crate) tokens_output: Option<i64>,
-    pub(crate) tokens_reasoning: Option<i64>,
-    pub(crate) tokens_cache_read: Option<i64>,
-    pub(crate) tokens_cache_write: Option<i64>,
+pub struct UsageMeta {
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub cost: Option<f64>,
+    pub tokens_input: Option<i64>,
+    pub tokens_output: Option<i64>,
+    pub tokens_reasoning: Option<i64>,
+    pub tokens_cache_read: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
 }
 
 impl UsageMeta {
-    pub(crate) fn tokens_total(&self) -> Option<i64> {
+    pub fn tokens_total(&self) -> Option<i64> {
         let sum = self.tokens_input.unwrap_or(0)
             + self.tokens_output.unwrap_or(0)
             + self.tokens_reasoning.unwrap_or(0);
-        if sum > 0 { Some(sum) } else { None }
+        if sum > 0 {
+            Some(sum)
+        } else {
+            None
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResponseMeta {
-    pub(crate) source: String,
-    pub(crate) upstream_host: String,
-    pub(crate) request_path: String,
-    pub(crate) http_status: u16,
+pub struct ResponseMeta {
+    pub source: String,
+    pub upstream_host: String,
+    pub request_path: String,
+    pub http_status: u16,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
-    pub(crate) agent_session_id: Option<String>,
+    pub agent_session_id: Option<String>,
     /// Best-effort usage metrics (tokens/cost). Not always present.
-    pub(crate) usage: Option<UsageMeta>,
+    pub usage: Option<UsageMeta>,
 }
 
 /// Failure modes that unlost can detect in agent conversations.
@@ -54,6 +58,42 @@ pub enum FailureMode {
     FalseProgress,
     /// Agent wandering into unrelated side-quests
     UnboundedHorizon,
+}
+
+/// State of the proactive friction regulation controller.
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TrajectoryState {
+    /// Normal iteration.
+    #[default]
+    Stable,
+    /// Instability is rising; monitoring closely.
+    Watch,
+    /// High confidence loop detected; intervention required.
+    Intervene,
+}
+
+/// Detailed instability metrics for a conversation turn.
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, Default)]
+pub struct InstabilityIntensity {
+    /// Overall intensity score (0..1).
+    pub intensity: f32,
+    /// Rate of change in intensity.
+    pub slope: f32,
+    /// Individual symptom channel scores.
+    pub channels: SymptomChannels,
+}
+
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, Default)]
+pub struct SymptomChannels {
+    pub repetition: f32,
+    pub novelty_collapse: f32,
+    pub semantic_stall: f32,
+    pub effort_spike: f32,
+    /// Measure of interaction volatility (repeated corrections).
+    pub alignment_debt: f32,
+    /// Measure of path hallucinations (referencing non-existent files).
+    pub path_hallucination: f32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
@@ -81,28 +121,28 @@ fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schema
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug)]
-pub(crate) struct InitCapsulesOutput {
+pub struct InitCapsulesOutput {
     /// Short, colleague-style debrief to print to the user.
-    pub(crate) debrief: String,
-    pub(crate) capsules: Vec<IntentCapsule>,
+    pub debrief: String,
+    pub capsules: Vec<IntentCapsule>,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug)]
-pub(crate) struct QueryNarrativeOutput {
-    pub(crate) narrative: String,
+pub struct QueryNarrativeOutput {
+    pub narrative: String,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CapsuleHit {
-    pub(crate) id: String,
-    pub(crate) ts_ms: i64,
-    pub(crate) conn_id: i64,
-    pub(crate) exchange_seq: i64,
-    pub(crate) distance: f32,
-    pub(crate) user_emotion: Option<crate::emotion::EmotionMeta>,
-    pub(crate) assistant_emotion: Option<crate::emotion::EmotionMeta>,
-    pub(crate) capsule: IntentCapsule,
-    pub(crate) meta: ResponseMeta,
+pub struct CapsuleHit {
+    pub id: String,
+    pub ts_ms: i64,
+    pub conn_id: i64,
+    pub exchange_seq: i64,
+    pub distance: f32,
+    pub user_emotion: Option<crate::emotion::EmotionMeta>,
+    pub assistant_emotion: Option<crate::emotion::EmotionMeta>,
+    pub capsule: IntentCapsule,
+    pub meta: ResponseMeta,
 }
 
 #[cfg(test)]

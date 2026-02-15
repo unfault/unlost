@@ -2,6 +2,6 @@
 //!
 //! Each shim adapts an external protocol to the internal flow events.
 
-pub(crate) mod claude;
-pub(crate) mod opencode;
-pub(crate) mod opencode_stdio;
+pub mod claude;
+pub mod opencode;
+pub mod opencode_stdio;

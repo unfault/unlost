@@ -126,6 +126,7 @@ pub(crate) struct RecordResult {
 pub(crate) struct FlowConfig {
     pub embed_model: String,
     pub embed_cache_dir: Option<String>,
+    pub no_llm: bool,
 }
 
 /// Shared state for background processing (accessed from the worker task).
@@ -135,16 +136,18 @@ struct BackgroundState {
     db_cache: HashMap<String, Connection>,
     embed_model: String,
     embed_cache_dir: Option<String>,
+    no_llm: bool,
 }
 
 impl BackgroundState {
-    fn new(embed_model: String, embed_cache_dir: Option<String>) -> Self {
+    fn new(embed_model: String, embed_cache_dir: Option<String>, no_llm: bool) -> Self {
         Self {
             emotion_model: None,
             embedder: None,
             db_cache: HashMap::new(),
             embed_model,
             embed_cache_dir,
+            no_llm,
         }
     }
 
@@ -198,6 +201,8 @@ struct FlowState {
     emotion_model: Option<EmotionModel>,
     /// Chunker that buffers exchanges and emits FlushJobs.
     chunker: WorkspaceChunker,
+    /// Proactive friction regulation controllers, keyed by workspace ID.
+    controllers: HashMap<String, crate::governor::TrajectoryController>,
 }
 
 impl FlowState {
@@ -206,6 +211,7 @@ impl FlowState {
         Self {
             emotion_model: None,
             chunker,
+            controllers: HashMap::new(),
         }
     }
 
@@ -240,6 +246,7 @@ impl Flow {
         let bg_state = Arc::new(Mutex::new(BackgroundState::new(
             config.embed_model,
             config.embed_cache_dir,
+            config.no_llm,
         )));
 
         // Spawn background worker
@@ -389,6 +396,9 @@ impl Flow {
             };
         }
 
+        // Detect failure modes from keywords in the current message
+        let failure_mode = crate::governor::detect_failure_keywords(&event.text).unwrap_or(crate::types::FailureMode::None);
+
         // Create current capsule for friction evaluation
         let current = IntentCapsule {
             category: String::new(),
@@ -397,11 +407,33 @@ impl Flow {
             rationale: String::new(),
             next_steps: vec![],
             symbols,
-            failure_mode: crate::types::FailureMode::None,
+            failure_mode,
             failure_signals: None,
         };
 
-        // First check for friction (emotion + symbol repetition OR conversational frustration)
+        // NEW: Trajectory-based proactive friction regulation
+        let (trajectory_state, trajectory_note) = {
+            let controller = self.state.controllers.entry(ws.id.clone()).or_default();
+            controller.update(
+                &ws.id,
+                &current,
+                user_emotion.as_ref(),
+                &history,
+                crate::workspace::now_ms(),
+            )
+        };
+
+        if let Some(note) = trajectory_note {
+            tracing::info!(
+                workspace = %ws.id,
+                session = event.agent_session_id.as_deref().unwrap_or("-"),
+                state = ?trajectory_state,
+                "trajectory controller returned proactive warning"
+            );
+            return CheckResult { note: Some(note), error: None };
+        }
+
+        // Fallback to legacy friction check (emotion + symbol repetition)
         let note = evaluate_friction(&current, user_emotion.as_ref(), &history);
 
         if note.is_some() {
@@ -611,8 +643,52 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         None
     };
 
+    // Extract capsule metadata locally (fast, zero cost)
+    let symbols = crate::net::extract_symbols_from_text(&job.input);
+    let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
+
+    let no_llm = state.lock().await.no_llm;
+
     // Extract capsule using LLM (this is the expensive network call)
-    let mut capsule = crate::llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await?;
+    let mut capsule = if !no_llm {
+        match crate::llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await {
+            Ok(mut c) => {
+                // Augment LLM capsule with local symbols if LLM missed any
+                for s in symbols {
+                    if !c.symbols.contains(&s) {
+                        c.symbols.push(s);
+                    }
+                }
+                c
+            }
+            Err(e) => {
+                tracing::warn!("LLM extraction failed, falling back to heuristic: {e}");
+                IntentCapsule {
+                    category: "unknown".to_string(),
+                    intent: user_text.lines().next().unwrap_or("").to_string(),
+                    decision: assistant_text.lines().next().unwrap_or("").to_string(),
+                    rationale: String::new(),
+                    next_steps: vec![],
+                    symbols,
+                    failure_mode,
+                    failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                }
+            }
+        }
+    } else {
+        // Ghost Mode (Option B)
+        IntentCapsule {
+            category: "replay".to_string(),
+            intent: user_text.lines().next().unwrap_or("").to_string(),
+            decision: assistant_text.lines().next().unwrap_or("").to_string(),
+            rationale: String::new(),
+            next_steps: vec![],
+            symbols,
+            failure_mode,
+            failure_signals: Some("Ghost extraction (no-LLM)".to_string()),
+        }
+    };
+
     crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
 
     // Log if a failure mode was detected by the LLM
@@ -673,6 +749,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
         user_emotion.as_ref(),
         assistant_emotion.as_ref(),
         &capsule,
+        Some(&job.input),
     )
     .await?;
 

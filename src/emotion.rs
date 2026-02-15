@@ -4,16 +4,18 @@ use ort::value::Tensor;
 use serde::{Deserialize, Serialize};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer as HfTokenizer, TruncationParams};
 
+use crate::workspace::unlost_data_root;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct EmotionMeta {
+pub struct EmotionMeta {
     /// One of: joy | neutral | confused | doubt | frustration | anger | sad | disapproval
-    pub(crate) label: String,
+    pub label: String,
     /// -1..1 (negative..positive)
-    pub(crate) valence: f32,
+    pub valence: f32,
     /// 0..1 (calm..intense)
-    pub(crate) intensity: f32,
+    pub intensity: f32,
     /// 0..1
-    pub(crate) confidence: f32,
+    pub confidence: f32,
 }
 
 fn clamp01(x: f32) -> f32 {
@@ -31,7 +33,7 @@ fn is_turn_marker(t: &str) -> bool {
     !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit())
 }
 
-pub(crate) fn extract_user_and_assistant_text(slice: &str) -> (String, String) {
+pub fn extract_user_and_assistant_text(slice: &str) -> (String, String) {
     // slice format produced by build_flush_job(): Turn i: <exchange_text>
     // exchange_text itself starts with "User:" and/or "Assistant:".
     let mut user = String::new();
@@ -72,24 +74,24 @@ pub(crate) fn extract_user_and_assistant_text(slice: &str) -> (String, String) {
 }
 
 #[derive(Debug)]
-pub(crate) struct EmotionModel {
+pub struct EmotionModel {
     tokenizer: HfTokenizer,
     session: Session,
     id2label: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EmotionConfig {
+pub struct EmotionConfig {
     /// HuggingFace repo id
-    repo: String,
+    pub repo: String,
     /// ONNX model path within repo
-    model_path: String,
+    pub model_path: String,
     /// Tokenizer path within repo
-    tokenizer_path: String,
+    pub tokenizer_path: String,
     /// Config path within repo (for id2label)
-    config_path: String,
+    pub config_path: String,
     /// Max tokens for classification
-    max_len: usize,
+    pub max_len: usize,
 }
 
 impl Default for EmotionConfig {
@@ -109,7 +111,7 @@ fn emotion_cache_dir() -> std::path::PathBuf {
         return std::path::PathBuf::from(d);
     }
     // ~/.local/share/unlost/models/emotion
-    crate::unlost_data_root().join("models").join("emotion")
+    unlost_data_root().join("models").join("emotion")
 }
 
 fn sanitize_repo_dir_name(repo: &str) -> String {
@@ -178,7 +180,7 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-pub(crate) fn map_go_emotions(label: &str, score: f32) -> EmotionMeta {
+pub fn map_go_emotions(label: &str, score: f32) -> EmotionMeta {
     // Map go_emotions labels to a small stable set.
     // ref: google-research-datasets/go_emotions
     let l = label.to_ascii_lowercase();
@@ -296,7 +298,7 @@ const FRUSTRATION_SIGNALS: &[&str] = &[
 ];
 
 /// Emotions that are considered negative for friction detection purposes.
-pub(crate) const NEGATIVE_EMOTIONS: &[&str] = &[
+pub const NEGATIVE_EMOTIONS: &[&str] = &[
     "frustration",
     "anger",
     "sad",
@@ -306,13 +308,13 @@ pub(crate) const NEGATIVE_EMOTIONS: &[&str] = &[
 ];
 
 /// Check if an emotion label is considered negative.
-pub(crate) fn is_negative_emotion(label: &str) -> bool {
+pub fn is_negative_emotion(label: &str) -> bool {
     NEGATIVE_EMOTIONS.contains(&label)
 }
 
 /// Apply text-based heuristics to catch doubt patterns the model misses.
 /// Only overrides neutral/confused, preserves stronger signals.
-pub(crate) fn apply_context_heuristics(text: &str, meta: EmotionMeta) -> EmotionMeta {
+pub fn apply_context_heuristics(text: &str, meta: EmotionMeta) -> EmotionMeta {
     // First, try to boost negative emotions if the model misclassified
     let meta = boost_negative_emotions(text, meta);
 
@@ -426,7 +428,7 @@ fn boost_negative_emotions(text: &str, meta: EmotionMeta) -> EmotionMeta {
 }
 
 impl EmotionModel {
-    pub(crate) async fn load(cfg: EmotionConfig) -> anyhow::Result<Self> {
+    pub async fn load(cfg: EmotionConfig) -> anyhow::Result<Self> {
         let base = ensure_emotion_model_files(&cfg).await?;
         let model_path = base.join(&cfg.model_path);
         let tok_path = base.join(&cfg.tokenizer_path);
@@ -460,7 +462,7 @@ impl EmotionModel {
         })
     }
 
-    pub(crate) fn classify_one(&mut self, text: &str) -> anyhow::Result<(String, f32)> {
+    pub fn classify_one(&mut self, text: &str) -> anyhow::Result<(String, f32)> {
         let enc = self
             .tokenizer
             .encode(text, true)

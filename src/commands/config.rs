@@ -293,7 +293,7 @@ fn rewrite_unlost_hook_commands(hook_array: &mut serde_json::Value) {
     }
 }
 
-pub(crate) fn run(command: ConfigCommand) -> anyhow::Result<()> {
+pub fn run(command: ConfigCommand) -> anyhow::Result<()> {
     match command {
         ConfigCommand::Llm { command } => handle_llm_command(command),
         ConfigCommand::Agent { command } => handle_agent_command(command),

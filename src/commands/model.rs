@@ -1,6 +1,6 @@
 use crate::cli::ModelCommand;
 
-pub(crate) async fn run(command: ModelCommand) -> anyhow::Result<()> {
+pub async fn run(command: ModelCommand) -> anyhow::Result<()> {
     match command {
         ModelCommand::Download {
             embed_model,

@@ -1,4 +1,4 @@
-pub(crate) async fn run(
+pub async fn run(
     bind: String,
     embed_model: String,
     embed_cache_dir: Option<String>,

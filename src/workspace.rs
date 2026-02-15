@@ -6,11 +6,11 @@ use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
-pub(crate) struct WorkspacePaths {
-    pub(crate) id: String,
-    pub(crate) db_dir: std::path::PathBuf,
-    pub(crate) capsules_jsonl: std::path::PathBuf,
-    pub(crate) metrics_jsonl: std::path::PathBuf,
+pub struct WorkspacePaths {
+    pub id: String,
+    pub db_dir: std::path::PathBuf,
+    pub capsules_jsonl: std::path::PathBuf,
+    pub metrics_jsonl: std::path::PathBuf,
 }
 
 fn xdg_config_home() -> std::path::PathBuf {
@@ -33,19 +33,19 @@ fn xdg_data_home() -> std::path::PathBuf {
     std::path::PathBuf::from(".")
 }
 
-pub(crate) fn unlost_config_path() -> std::path::PathBuf {
+pub fn unlost_config_path() -> std::path::PathBuf {
     xdg_config_home().join("unlost").join("config.json")
 }
 
-pub(crate) fn unlost_data_root() -> std::path::PathBuf {
+pub fn unlost_data_root() -> std::path::PathBuf {
     xdg_data_home().join("unlost")
 }
 
-pub(crate) fn unlost_workspace_dir(workspace_id: &str) -> std::path::PathBuf {
+pub fn unlost_workspace_dir(workspace_id: &str) -> std::path::PathBuf {
     unlost_data_root().join("workspaces").join(workspace_id)
 }
 
-pub(crate) fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -373,6 +373,51 @@ pub(crate) fn clear_workspace(workspace_root: &std::path::Path, yes: bool) -> an
 
     println!("cleared workspace: {workspace_id}");
     Ok(())
+}
+
+pub fn looks_like_rel_path(sym: &str) -> bool {
+    // Mirror (loosely) the extraction heuristic in net.rs.
+    sym.contains('/')
+        || sym.starts_with("./")
+        || sym.ends_with(".rs")
+        || sym.ends_with(".ts")
+        || sym.ends_with(".py")
+        || sym.ends_with(".js")
+        || sym.ends_with(".go")
+}
+
+pub fn normalize_rel_path(sym: &str) -> &str {
+    sym.strip_prefix("./").unwrap_or(sym)
+}
+
+pub fn workspace_root_for_id(workspace_id: &str) -> Option<std::path::PathBuf> {
+    let cfg = load_workspace_config();
+    cfg.workspaces
+        .get(workspace_id)
+        .map(|w| std::path::PathBuf::from(w.root.clone()))
+}
+
+pub fn validate_paths(workspace_id: &str, symbols: &[String]) -> (usize, usize) {
+    let Some(root) = workspace_root_for_id(workspace_id) else {
+        return (0, 0);
+    };
+    let mut checked = 0usize;
+    let mut missing = 0usize;
+    for s in symbols {
+        if !looks_like_rel_path(s) {
+            continue;
+        }
+        checked += 1;
+        let rel = normalize_rel_path(s);
+        if rel.is_empty() {
+            missing += 1;
+            continue;
+        }
+        if !root.join(rel).exists() {
+            missing += 1;
+        }
+    }
+    (checked, missing)
 }
 
 #[cfg(test)]

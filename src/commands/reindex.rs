@@ -55,7 +55,7 @@ struct Caps {
     failure_signals: Option<String>,
 }
 
-pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
+pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
     let ws = crate::workspace::get_or_create_workspace_paths(Path::new(&path))?;
 
     let jsonl_path = &ws.capsules_jsonl;
@@ -170,6 +170,7 @@ pub(crate) async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             None,
             None,
             &intent_capsule,
+            None,
         )
         .await?;
 

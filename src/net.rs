@@ -288,7 +288,7 @@ pub(crate) fn extract_symbols_from_body(body: &[u8], path: &str) -> Vec<String> 
 }
 
 /// Extract file paths and identifiers from text.
-pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
+pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
     let mut out = vec![];
 
     // File paths: src/foo.rs, ./lib/bar.py, auth.ts
@@ -298,13 +298,21 @@ pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
             c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ','
         });
         // Check if it looks like a file path
-        if word.contains('.')
+        if (word.contains('.') || word.contains('/'))
             && (word.contains('/')
                 || word.ends_with(".rs")
                 || word.ends_with(".ts")
+                || word.ends_with(".tsx")
                 || word.ends_with(".py")
                 || word.ends_with(".js")
-                || word.ends_with(".go"))
+                || word.ends_with(".jsx")
+                || word.ends_with(".go")
+                || word.ends_with(".astro")
+                || word.ends_with(".md")
+                || word.ends_with(".toml")
+                || word.ends_with(".yaml")
+                || word.ends_with(".yml")
+                || word.ends_with(".json"))
         {
             // Basic sanity: not too long, has reasonable characters
             if word.len() < 200
@@ -323,15 +331,18 @@ pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
     for c in text.chars() {
         if c == '`' {
             if in_backtick && current.len() >= 3 {
-                // Only include if it looks like an identifier (starts with letter, alphanumeric)
-                if current
-                    .chars()
-                    .next()
-                    .map(|c| c.is_alphabetic())
-                    .unwrap_or(false)
-                    && current.chars().all(|c| c.is_alphanumeric() || c == '_')
-                {
-                    out.push(current.clone());
+                // If it contains spaces, split it and treat each word as a potential symbol
+                if current.contains(' ') {
+                    for part in current.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/') {
+                        if part.len() >= 3 {
+                            out.push(part.to_string());
+                        }
+                    }
+                } else {
+                    // Single word in backticks - keep it if it looks reasonable
+                    if current.len() < 100 {
+                        out.push(current.clone());
+                    }
                 }
             }
             current.clear();
@@ -339,6 +350,36 @@ pub(crate) fn extract_symbols_from_text(text: &str) -> Vec<String> {
         } else if in_backtick {
             current.push(c);
         }
+    }
+
+    // Bold identifiers: **validateAuth**
+    let mut in_bold = false;
+    current.clear();
+    let mut last_c = ' ';
+    for c in text.chars() {
+        if c == '*' && last_c == '*' {
+            if in_bold && current.len() >= 3 {
+                // If it contains spaces, split it
+                if current.contains(' ') {
+                    for part in current.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/') {
+                        if part.len() >= 3 {
+                            out.push(part.to_string());
+                        }
+                    }
+                } else {
+                    if current.len() < 100 {
+                        out.push(current.clone());
+                    }
+                }
+            }
+            current.clear();
+            in_bold = !in_bold;
+        } else if c != '*' {
+            if in_bold {
+                current.push(c);
+            }
+        }
+        last_c = c;
     }
 
     out.sort();

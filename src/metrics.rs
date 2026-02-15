@@ -62,51 +62,6 @@ fn append_event(path: &std::path::Path, ev: &MetricsEvent) -> anyhow::Result<()>
     Ok(())
 }
 
-fn looks_like_rel_path(sym: &str) -> bool {
-    // Mirror (loosely) the extraction heuristic in net.rs.
-    sym.contains('/')
-        || sym.starts_with("./")
-        || sym.ends_with(".rs")
-        || sym.ends_with(".ts")
-        || sym.ends_with(".py")
-        || sym.ends_with(".js")
-        || sym.ends_with(".go")
-}
-
-fn normalize_rel_path(sym: &str) -> &str {
-    sym.strip_prefix("./").unwrap_or(sym)
-}
-
-fn workspace_root_for_id(workspace_id: &str) -> Option<std::path::PathBuf> {
-    let cfg = crate::workspace::load_workspace_config();
-    cfg.workspaces
-        .get(workspace_id)
-        .map(|w| std::path::PathBuf::from(w.root.clone()))
-}
-
-fn validate_paths(workspace_id: &str, symbols: &[String]) -> (usize, usize) {
-    let Some(root) = workspace_root_for_id(workspace_id) else {
-        return (0, 0);
-    };
-    let mut checked = 0usize;
-    let mut missing = 0usize;
-    for s in symbols {
-        if !looks_like_rel_path(s) {
-            continue;
-        }
-        checked += 1;
-        let rel = normalize_rel_path(s);
-        if rel.is_empty() {
-            missing += 1;
-            continue;
-        }
-        if !root.join(rel).exists() {
-            missing += 1;
-        }
-    }
-    (checked, missing)
-}
-
 pub(crate) fn record_capsule_saved(
     ws: &crate::WorkspacePaths,
     ts_ms: i64,
@@ -117,7 +72,7 @@ pub(crate) fn record_capsule_saved(
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
 ) -> anyhow::Result<()> {
-    let (paths_checked, paths_missing) = validate_paths(&ws.id, &capsule.symbols);
+    let (paths_checked, paths_missing) = crate::workspace::validate_paths(&ws.id, &capsule.symbols);
     let (tokens_total, cost) = meta
         .usage
         .as_ref()

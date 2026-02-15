@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub(crate) enum EmotionType {
+pub enum EmotionType {
     Joy,
     Anger,
     Frustration,
@@ -13,7 +13,7 @@ pub(crate) enum EmotionType {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub(crate) enum ProviderType {
+pub enum ProviderType {
     Openai,
     Anthropic,
     Opencode,
@@ -25,17 +25,17 @@ pub(crate) enum ProviderType {
     version,
     about = "Local-first code memory (record, init, query)"
 )]
-pub(crate) struct Cli {
+pub struct Cli {
     /// Logging level for unlost (overrides RUST_LOG when set)
     #[arg(long, global = true, value_enum, alias = "log-level")]
-    pub(crate) log: Option<LogLevel>,
+    pub log: Option<LogLevel>,
 
     #[command(subcommand)]
-    pub(crate) command: Option<Command>,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub(crate) enum LogLevel {
+pub enum LogLevel {
     Error,
     Warn,
     Info,
@@ -44,7 +44,7 @@ pub(crate) enum LogLevel {
 }
 
 impl LogLevel {
-    pub(crate) fn as_tracing_str(self) -> &'static str {
+    pub fn as_tracing_str(self) -> &'static str {
         match self {
             LogLevel::Error => "error",
             LogLevel::Warn => "warn",
@@ -56,7 +56,7 @@ impl LogLevel {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub(crate) enum OutputFormat {
+pub enum OutputFormat {
     /// Default terminal-friendly output (ANSI colors)
     Ansi,
     /// No ANSI colors (useful for piping)
@@ -64,7 +64,7 @@ pub(crate) enum OutputFormat {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum Command {
+pub enum Command {
     /// Global recorder that multiplexes workspaces via base URL
     Serve {
         /// Bind address. Accepts either `port` or `ip:port`.
@@ -353,7 +353,7 @@ pub(crate) enum Command {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ShimCommand {
+pub enum ShimCommand {
     /// Run the OpenCode stdio shim (JSON-RPC over stdin/stdout)
     Opencode {
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
@@ -385,7 +385,7 @@ pub(crate) enum ShimCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ReplayCommand {
+pub enum ReplayCommand {
     /// Replay a Claude transcript file into the current workspace
     #[command(alias = "claudecode")]
     Claude {
@@ -409,6 +409,10 @@ pub(crate) enum ReplayCommand {
         #[arg(long, default_value_t = true)]
         dedupe: bool,
 
+        /// Disable LLM extraction (fast mode)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -428,6 +432,10 @@ pub(crate) enum ReplayCommand {
         #[arg(long, default_value_t = true)]
         dedupe: bool,
 
+        /// Disable LLM extraction (fast mode)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -439,7 +447,7 @@ pub(crate) enum ReplayCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ConfigCommand {
+pub enum ConfigCommand {
     /// Manage LLM configuration for init/query narratives
     Llm {
         #[command(subcommand)]
@@ -454,7 +462,7 @@ pub(crate) enum ConfigCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum AgentCommand {
+pub enum AgentCommand {
     /// Configure OpenCode to load the unlost plugin (stdio shim)
     Opencode {
         /// Workspace path (defaults to current directory; uses git toplevel)
@@ -484,7 +492,7 @@ pub(crate) enum AgentCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum LlmCommand {
+pub enum LlmCommand {
     /// Configure OpenAI as LLM provider
     Openai {
         /// OpenAI API key
@@ -549,7 +557,7 @@ pub(crate) enum LlmCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum ModelCommand {
+pub enum ModelCommand {
     /// Download embedding model files into the local cache
     Download {
         /// Embedding model (fastembed)
@@ -566,7 +574,7 @@ pub(crate) enum ModelCommand {
     },
 }
 
-pub(crate) fn parse_bind(s: &str) -> anyhow::Result<SocketAddr> {
+pub fn parse_bind(s: &str) -> anyhow::Result<SocketAddr> {
     let s = s.trim();
     if s.is_empty() {
         anyhow::bail!("bind cannot be empty");

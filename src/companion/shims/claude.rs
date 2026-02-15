@@ -655,7 +655,7 @@ fn parse_transcript_from_cursor(
 // Main entry point
 // ============================================================================
 
-pub(crate) async fn run(
+pub async fn run(
     embed_model: String,
     embed_cache_dir: Option<String>,
 ) -> anyhow::Result<()> {
@@ -675,6 +675,7 @@ pub(crate) async fn run(
     let config = FlowConfig {
         embed_model,
         embed_cache_dir,
+        no_llm: false, // hooks are for live, so no_llm defaults to false
     };
     let mut flow = Flow::new(config);
 
@@ -928,12 +929,13 @@ fn count_turns_in_transcript(path: &Path) -> usize {
     user_count
 }
 
-pub(crate) async fn replay(
+pub async fn replay(
     path: String,
     transcript_path: String,
     session_id: Option<String>,
     from_start: bool,
     dedupe: bool,
+    no_llm: bool,
     embed_model: String,
     embed_cache_dir: Option<String>,
 ) -> anyhow::Result<()> {
@@ -1044,6 +1046,7 @@ pub(crate) async fn replay(
             let config = FlowConfig {
                 embed_model,
                 embed_cache_dir,
+                no_llm,
             };
             let mut flow = Flow::new(config);
 
