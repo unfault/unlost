@@ -45,6 +45,10 @@ pub struct TrajectoryController {
     pub stall_streak: usize,
     /// Persistence counter for instruction staticness.
     pub static_streak: usize,
+    /// Per-basin cooldown counters (turns remaining).
+    pub basin_cooldowns: std::collections::HashMap<String, usize>,
+    /// History of user-mentioned symbols with timestamps for decay.
+    pub user_symbol_history: std::collections::VecDeque<(std::collections::HashSet<String>, i64)>,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -129,20 +133,35 @@ impl TrajectoryController {
         let s_summary = detect_summary_intent(&current.decision);
 
         // 2.1 Deep Drift Sensors
-        let _user_paths: std::collections::HashSet<_> =
-            current.user_symbols.iter().cloned().collect();
+        if !current.user_symbols.is_empty() {
+            let user_paths: std::collections::HashSet<_> =
+                current.user_symbols.iter().cloned().collect();
+            self.user_symbol_history.push_back((user_paths, ts_ms));
+            if self.user_symbol_history.len() > 10 {
+                self.user_symbol_history.pop_front();
+            }
+        }
 
-        // Grounding Stall: previous assistant ignored previous user paths
+        // Grounding Stall: previous assistant ignored recently mentioned user paths (with decay)
         let has_stall = if let Some(last) = history.first() {
-            let last_user_paths: std::collections::HashSet<_> =
-                last.capsule.user_symbols.iter().cloned().collect();
             let last_assistant_symbols: std::collections::HashSet<_> =
                 last.capsule.symbols.iter().cloned().collect();
-            !last_user_paths.is_empty()
-                && last_user_paths
-                    .intersection(&last_assistant_symbols)
-                    .next()
-                    .is_none()
+
+            // Check recent history for ignored paths, with exponential decay on importance
+            let mut weighted_stall = 0.0;
+            for (paths, mentioned_ts) in &self.user_symbol_history {
+                let age_mins = (ts_ms - *mentioned_ts) as f32 / 60000.0;
+                let weight = (-0.2 * age_mins).exp(); // Path importance decays over time
+
+                let missing = paths
+                    .iter()
+                    .filter(|p| !last_assistant_symbols.contains(*p))
+                    .count();
+                if !paths.is_empty() && missing > 0 {
+                    weighted_stall += (missing as f32 / paths.len() as f32) * weight;
+                }
+            }
+            weighted_stall > 0.5
         } else {
             false
         };
@@ -258,6 +277,11 @@ impl TrajectoryController {
         }
 
         self.turns_since_intervention += 1;
+        for count in self.basin_cooldowns.values_mut() {
+            if *count > 0 {
+                *count -= 1;
+            }
+        }
 
         // 7. Select Intervention
         let cause = if drift_intensity > spec_intensity && drift_intensity > loop_intensity {
@@ -269,20 +293,34 @@ impl TrajectoryController {
         };
 
         let mut note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
-            let intervention_type = format!("{}:{}", cause, self.state as u8);
-            if self.last_intervention_type.as_ref() == Some(&intervention_type) {
-                // One-Shot Rule: Don't repeat the exact same intervention type within the same episode
+            // Check per-basin cooldown
+            if self.basin_cooldowns.get(cause).map_or(0, |c| *c) > 0 {
                 None
             } else {
-                self.last_intervention_type = Some(intervention_type);
-                select_intervention_with_substance(
-                    self.state,
-                    current_emotion,
-                    cause,
-                    workspace_id,
-                    current,
-                    history,
-                )
+                let intervention_type = format!("{}:{}", cause, self.state as u8);
+                if self.last_intervention_type.as_ref() == Some(&intervention_type) {
+                    // One-Shot Rule: Don't repeat the exact same intervention type within the same episode
+                    None
+                } else {
+                    self.last_intervention_type = Some(intervention_type);
+
+                    // Apply Refractory Period
+                    let cooldown = match cause {
+                        "loop" => 5,
+                        _ => 2,
+                    };
+                    self.basin_cooldowns.insert(cause.to_string(), cooldown);
+
+                    select_intervention_with_substance(
+                        self.intensity,
+                        self.state,
+                        current_emotion,
+                        cause,
+                        workspace_id,
+                        current,
+                        history,
+                    )
+                }
             }
         } else {
             None
@@ -378,7 +416,8 @@ fn calculate_effort_spike(current: &IntentCapsule, history: &[CapsuleHit]) -> f3
 }
 
 fn select_intervention_with_substance(
-    state: TrajectoryState,
+    intensity: f32,
+    _state: TrajectoryState,
     emotion: Option<&crate::emotion::EmotionMeta>,
     cause: &str,
     workspace_id: &str,
@@ -389,9 +428,17 @@ fn select_intervention_with_substance(
     let mut recent: Vec<&CapsuleHit> = history.iter().collect();
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
 
-    match (state, cause, label) {
+    // Stratified Policy: Map intensity to structural severity
+    // - I_t < 0.8: Ambient Note (Hints)
+    // - I_t >= 0.8: Structural Note (Hydration/Fact Check)
+    // - I_t > 0.95: Actionable Intervene (Hard Stop)
+    let is_ambient = intensity < 0.8;
+    let _is_structural = intensity >= 0.8 && intensity < 0.95;
+    let is_emergency = intensity >= 0.95;
+
+    match (cause, label) {
         // --- Specification Basin (Staff Engineer Voice) ---
-        (TrajectoryState::Watch, "spec", "confused" | "doubt") => {
+        ("spec", "confused" | "doubt") => {
             let rationale = current.rationale.trim();
             let rational_part = if !rationale.is_empty() {
                 format!(" (Rationale was: \"{rationale}\")")
@@ -403,15 +450,15 @@ fn select_intervention_with_substance(
                 rational_part
             ))
         }
-        (TrajectoryState::Watch, "spec", _) => {
+        ("spec", _) if is_ambient => {
             let intent = current.intent.trim();
             let decision = current.decision.trim();
             Some(format!(
-                "[SYSTEM NOTE: I noticed a few corrections recently. To ensure we're aligned: my current understanding is \"{}\". Next I'll do \"{}\". Does that sound right?]",
+                "[SYSTEM NOTE: To ensure we're aligned: my current understanding is \"{}\". Next I'll do \"{}\". Does that sound right?]",
                 intent, decision
             ))
         }
-        (TrajectoryState::Intervene, "spec", _) => {
+        ("spec", _) => {
             let corrections: Vec<String> = recent
                 .iter()
                 .take(5)
@@ -439,7 +486,7 @@ fn select_intervention_with_substance(
         }
 
         // --- Drift Basin (Grounding/Hallucination) ---
-        (TrajectoryState::Watch, "drift", _) => {
+        ("drift", _) if is_ambient => {
             let (_, missing_count) = crate::workspace::validate_paths(workspace_id, &current.symbols);
             if missing_count > 0 {
                 Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Verify the workspace state before proceeding.]".to_string())
@@ -447,27 +494,27 @@ fn select_intervention_with_substance(
                 Some("[SYSTEM NOTE: High assumption load or grounding mismatch detected. Verify your facts about the codebase.]".to_string())
             }
         }
-        (TrajectoryState::Intervene, "drift", _) => {
+        ("drift", _) => {
             Some("[SYSTEM NOTE: Factual drift is high. Stop. Re-read the relevant files and list 3 verified facts about the current code structure before continuing.]".to_string())
         }
 
         // --- Loop Basin (Hydration/Attempt Log) ---
-        (TrajectoryState::Watch, "loop", "frustration") => Some(
+        ("loop", "frustration") => Some(
             "[SYSTEM NOTE: User frustration detected in a potential loop. Pause to clarify the immediate blocker.]"
                 .to_string(),
         ),
-        (TrajectoryState::Watch, "loop", _) => {
+        ("loop", "anger") | ("loop", _) if is_emergency => Some(
+            "[SYSTEM NOTE: CRITICAL: Repetitive stall detected. Stop all execution. Apologize and await explicit instructions.]"
+                .to_string(),
+        ),
+        ("loop", _) if is_ambient => {
             let syms = current.symbols.join(", ");
             Some(format!(
                 "[SYSTEM NOTE: A lot of repeat activity detected in [{}]. If this approach is stalling, consider proposing an alternative.]",
                 syms
             ))
         }
-        (TrajectoryState::Intervene, "loop", "anger") => Some(
-            "[SYSTEM NOTE: CRITICAL: Anger detected. Stop all execution. Apologize and await explicit instructions.]"
-                .to_string(),
-        ),
-        (TrajectoryState::Intervene, "loop", _) => {
+        ("loop", _) => {
             let w = FrictionWeights::default();
             let packet = build_hydration_packet(current, emotion, &recent, &w);
             let symbols_str = current.symbols.join(", ");
@@ -502,7 +549,6 @@ impl Default for FrictionWeights {
 
 #[derive(Debug, Clone)]
 pub(crate) struct HydrationNode {
-    pub(crate) ts_ms: i64,
     pub(crate) intent: String,
     pub(crate) decision: String,
     pub(crate) user_emotion: Option<String>,
@@ -568,7 +614,6 @@ fn build_hydration_packet(
         candidates.push((
             score,
             HydrationNode {
-                ts_ms: h.ts_ms,
                 intent: h.capsule.intent.clone(),
                 decision: h.capsule.decision.clone(),
                 user_emotion: emo,

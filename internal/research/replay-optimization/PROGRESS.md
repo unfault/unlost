@@ -42,9 +42,9 @@ This file serves as the "living memory" of our research to ensure continuity and
 *   **Decision**: For historical replay, the default should be **Ghost Replay** (Raw Text + Keyword Friction). Users can opt-in to **Hybrid Replay** for high-quality narratives.
 
 ## Next Steps
-1. [ ] **Friction Golden Set Expansion**: Explicitly label subtypes (drift, loop, etc.) to refine detection.
-2. [ ] **Governor Implementation**: Update `unlost::governor` to prioritize capsule `failure_mode`.
-3. [ ] **Simulate/Test Batching**: Measure the efficiency gain of processing 10 turns in one Cloud LLM call.
+1. [ ] **Terminal UX Design**: Define non-intrusive rendering for "Ambient" vs "Structural" notes.
+2. [ ] **Logic Churn Sensing**: Research if multi-turn rationale divergence improves coverage.
+3. [ ] **Simulate/Test Batching**: Measure efficiency of processing 10 turns in one Cloud LLM call.
 
 ## Deep Dive Notes (Search + Friction + Emotion)
 
@@ -179,19 +179,47 @@ We have upgraded `unlost metrics` to provide a complete picture of workspace hea
 - **Average Intensity**: Tracks the severity of friction episodes.
 - **Top Friction Files**: Identifies specific codebase "hotspots" where the agent consistently stalls or drifts.
 
+### Stability Hardening & Stratified Policy
+*Status as of Feb 15, 2026 (Post-v0.3.0)*
+
+We have moved beyond pure detection into **Control-System Rigor**, addressing oscillation risks and policy confidence.
+
+#### 1. Implementation: Control Constraints
+- **Per-Basin Refractory Periods (Cooldowns)**:
+    - **Loop**: 5-turn cooldown (prevent nagging on same repetition).
+    - **Spec/Drift**: 2-turn cooldown (allow quicker re-alignment).
+- **Stratified Intervention Policy**:
+    - **Ambient Note ($I_t < 0.8$)**: Soft hints (non-blocking).
+    - **Structural Note ($0.8 \le I_t < 0.95$)**: Heavy context injection (Hydration/Facts).
+    - **Actionable Intervene ($I_t \ge 0.95$)**: CRITICAL emergency brake.
+- **Grounding Decay**: Implemented exponential decay on user-mentioned path importance ($weight = e^{-0.2 \cdot age\_mins}$) to prevent "stale" grounding penalties.
+
+#### 2. Statistical Validation (H-Curve Sweep)
+We analyzed the **Coverage@H** curve (H=1..15) to determine if our window was too narrow.
+
+| H (Lookahead) | Worktree Precision | Worktree Coverage |
+| :--- | :--- | :--- |
+| 1 | 62.9% | 22.7% |
+| 5 | **67.7%** | **24.4%** |
+| 10 | 77.4% | 25.6% |
+| 15 | 83.9% | 26.7% |
+
+**Insight**: The curve is remarkably flat. Increasing H from 5 to 15 only adds ~2% coverage. This confirms that missed disputes are **not preceded by measurable tension** in the current symptom space, rather than us being "too early."
+
 ### The "Model Gap" (Next Steps for Formalization)
 - [x] **Mathematical Mapping**: Formal score function $I_t = \sum w_k d_t$ and trajectory slope $T_t = I_t - I_{t-\ell}$.
 - [x] **Calibration Protocol**: Systematic threshold tuning using percentiles (derived $\theta_I=0.8$ for high precision).
 - [x] **Intervention Taxonomy**: Mapping `(Trajectory, Affect)` states to specific "Control Actions."
-- [x] **Intervention Substance**: Dynamic payload generation (Hydration Packets, Resumption Briefs) in `src/governor.rs`.
+- [x] **Intervention Substance**: Dynamic payload generation (Hydration Packets, Resumption Briefs).
+- [x] **Stability Hardening**: Refractory periods and Stratified Policy (v0.3.0).
 - [x] **Cross-Dataset Validation**: Generalization confirmed across Marathon and Sprint sets.
 - [x] **Enhanced Metrics**: Detailed friction breakdown in `unlost metrics`.
 
 ## Remaining Tasks (Pending Phase)
-1. [ ] **Terminal UX Design**: Define how to render "Cognitive Mirror" notes in the CLI without being intrusive.
-2. [ ] **Logic Churn Sensing (Rationale)**: Research if comparing rationale text divergence can catch subtle plan-shifting friction.
-3. [ ] **Live Trial**: Enable the regulator in an interactive session and observe real-time precision.
-4. [ ] **Analytics Dashboard**: Leverage the new `friction_by_symbol` metrics for a workspace health overview.
+1. [ ] **Terminal UX Design**: Render stratified notes in the CLI.
+2. [ ] **Logic Churn Sensing (Rationale)**: Research rationale text divergence.
+3. [ ] **Live Trial**: Enable regulator in interactive session.
+4. [ ] **Analytics Dashboard**: Leverage symbol-specific metrics for workspace health.
 
 ## Questions to Revisit Later (Parking Lot)
 - **Rationale Depth**: Should we store full rationales or just a semantic hash for churn detection?

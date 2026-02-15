@@ -225,7 +225,7 @@ impl FlowState {
 
 pub(crate) struct Flow {
     state: FlowState,
-    background_state: Arc<Mutex<BackgroundState>>,
+    _background_state: Arc<Mutex<BackgroundState>>,
 }
 
 impl Flow {
@@ -242,7 +242,7 @@ impl Flow {
 
         Self {
             state: FlowState::new(job_tx),
-            background_state,
+            _background_state: background_state,
         }
     }
 

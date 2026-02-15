@@ -216,7 +216,15 @@ class TrajectoryController:
         self.history.append(
             {"symbols": current_symbols, "text": combined_text, "user": user_text}
         )
-        return triggered, self.intensity
+
+        # Calculate cause for telemetry
+        cause = "loop"
+        if spec_i > loop_i and spec_i > drift_i:
+            cause = "spec"
+        elif drift_i > loop_i:
+            cause = "drift"
+
+        return triggered, self.intensity, cause
 
 
 def run_eval(data, mode, label):
@@ -231,47 +239,77 @@ def run_eval(data, mode, label):
         "frustrat",
         "confus",
     ]
-    H = 5
+    H_RANGE = range(1, 16)
     controller = TrajectoryController(mode=mode)
     results = []
     total_disputes = 0
-    covered_disputes = set()
 
     for i, turn in enumerate(data):
-        triggered, intensity = controller.update(turn)
+        triggered, intensity, cause = controller.update(turn)
         is_dispute = any(kw in turn.get("user", "").lower() for kw in DISPUTE_KEYWORDS)
         if is_dispute:
             total_disputes += 1
-        results.append({"triggered": triggered, "is_dispute": is_dispute})
+        results.append(
+            {
+                "triggered": triggered,
+                "is_dispute": is_dispute,
+                "cause": cause,
+                "intensity": intensity,
+            }
+        )
 
-    total_triggers = sum(1 for r in results if r["triggered"])
-    total_hits = 0
-    for i in range(len(results)):
-        if results[i]["triggered"]:
-            for j in range(i + 1, min(i + 1 + H, len(results))):
+    # Basin Performance at H=5
+    basin_stats = {b: {"hits": 0, "triggers": 0} for b in ["loop", "spec", "drift"]}
+    for i, r in enumerate(results):
+        if r["triggered"]:
+            basin_stats[r["cause"]]["triggers"] += 1
+            for j in range(i + 1, min(i + 1 + 5, len(results))):
                 if results[j]["is_dispute"]:
-                    total_hits += 1
-                    covered_disputes.add(j)
+                    basin_stats[r["cause"]]["hits"] += 1
                     break
 
-    precision = total_hits / total_triggers if total_triggers > 0 else 0
-    coverage = len(covered_disputes) / total_disputes if total_disputes > 0 else 0
-    return precision, coverage, total_triggers, total_disputes
+    # H-Curve
+    h_curve = []
+    for h in H_RANGE:
+        covered_disputes = set()
+        total_triggers = sum(1 for r in results if r["triggered"])
+        total_hits = 0
+        for i in range(len(results)):
+            if results[i]["triggered"]:
+                for j in range(i + 1, min(i + 1 + h, len(results))):
+                    if results[j]["is_dispute"]:
+                        total_hits += 1
+                        covered_disputes.add(j)
+                        break
+
+        precision = total_hits / total_triggers if total_triggers > 0 else 0
+        coverage = len(covered_disputes) / total_disputes if total_disputes > 0 else 0
+        h_curve.append((h, precision, coverage))
+
+    return h_curve, basin_stats, total_disputes
 
 
 if __name__ == "__main__":
     with open("internal/research/replay-optimization/marathon_set_raw.json", "r") as f:
         marathon = json.load(f)
-    with open("internal/research/replay-optimization/sprint_set_raw.json", "r") as f:
-        sprint = json.load(f)
 
-    for set_name, data in [
-        ("Marathon (390 turns)", marathon),
-        ("Sprint (50 turns)", sprint),
-    ]:
-        print(f"\n--- {set_name} ---")
-        for mode in ["committed", "worktree"]:
-            p, c, t, d = run_eval(data, mode, mode)
-            print(
-                f"[{mode:10}] Precision@5: {p:>5.1%} | Coverage@5: {c:>5.1%} | Triggers: {t:>2}"
-            )
+    print("=== Robustness Deep Dive (Marathon Set) ===")
+    for mode in ["committed", "worktree"]:
+        h_curve, basin_stats, total_d = run_eval(marathon, mode, mode)
+        print(f"\n[{mode.upper()}]")
+        print(f"Total Disputes: {total_d}")
+
+        print("\nBasin Performance (H=5):")
+        for b, stats in basin_stats.items():
+            if stats["triggers"] > 0:
+                p = stats["hits"] / stats["triggers"]
+                print(f"  {b:6}: Precision {p:>5.1%} | Triggers {stats['triggers']:>2}")
+            else:
+                print(f"  {b:6}: No triggers")
+
+        print("\nCoverage@H Curve:")
+        print("  H  | Prec  | Cov")
+        print("-----|-------|-----")
+        for h, p, c in h_curve:
+            if h in [1, 3, 5, 8, 10, 15]:
+                print(f"  {h:2} | {p:>5.1%} | {c:>5.1%}")
