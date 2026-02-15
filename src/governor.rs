@@ -105,6 +105,9 @@ const SUMMARY_CUES: &[&str] = &[
     "overview",
     "in short",
     "to conclude",
+    "sorry",
+    "apologize",
+    "my apologies",
 ];
 
 fn detect_summary_intent(text: &str) -> f32 {
@@ -247,7 +250,14 @@ impl TrajectoryController {
 
         let mut raw_intensity = loop_intensity + spec_intensity + drift_intensity;
 
+        // "Stubbornness" Boost: If logic churn is LOW but alignment debt is HIGH,
+        // the agent is stubbornly repeating a failed approach.
+        if self.smoothed_channels.alignment_debt > 0.5 && self.smoothed_channels.logic_churn < 0.2 {
+            raw_intensity = (raw_intensity + 0.2).min(1.0);
+        }
+
         // NEW: Summary Intent Damping (Prevents false positives during consolidation)
+        // Also includes "Apology Damping" to filter out submissive noise.
         if s_summary > 0.5 {
             raw_intensity *= 0.6;
         }
@@ -546,13 +556,13 @@ fn select_intervention_with_substance(
         ("drift", _) if is_ambient => {
             let (_, missing_count) = crate::workspace::validate_paths(workspace_id, &current.symbols);
             if missing_count > 0 {
-                Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Verify the workspace state before proceeding.]".to_string())
+                Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Please re-read the relevant files and list 3 verified facts about the current codebase before proceeding.]".to_string())
             } else {
-                Some("[SYSTEM NOTE: High assumption load or grounding mismatch detected. Verify your facts about the codebase.]".to_string())
+                Some("[SYSTEM NOTE: High assumption load or grounding mismatch detected. Verify your facts about the codebase. List your core assumptions and confirm them against the source code.]".to_string())
             }
         }
         ("drift", _) => {
-            Some("[SYSTEM NOTE: Factual drift is high. Stop. Re-read the relevant files and list 3 verified facts about the current code structure before continuing.]".to_string())
+            Some("[SYSTEM NOTE: Factual drift is high. Stop. Re-read the relevant files and list 3 verified facts about the current code structure before continuing. You must explicitly cite the source files for these facts.]".to_string())
         }
 
         // --- Loop Basin (Hydration/Attempt Log) ---

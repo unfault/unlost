@@ -188,8 +188,11 @@ We have aligned our trajectory model with the findings of the **EASE'25 paper** 
 - **Context Inflection**: The paper confirms that context window pressure is a major emotional strain driver, justifying our new **Context-Load Diagnostic** in `unlost metrics`.
 - **Motivation Resilience**: Confirmed that while frustration is high, motivation often remains intact, supporting our focus on **cumulative strain reduction** (the Babysitting Tax) rather than just "blocking failures."
 
-#### 2. Implementation: Paper-Informed Refinements
+#### 2. Implementation: Paper-Informed Ref refinements
 - **Affective Spec Boost**: Implemented a **+0.3 intensity boost** for corrections that align with high-confidence negative valence (addressing linguistic fragility).
+- **Stubbornness Boost**: Added an intensity boost (+0.2) for cases where **Logic Churn is LOW** but **Alignment Debt is HIGH** (agent insisting on being wrong).
+- **Apology Damping**: Integrated apology lexical cues into the **Intent Damping** logic to filter out submissive noise and focus on real trajectory progress.
+- **Source Grounding**: Updated **Drift Basin** interventions to explicitly demand "3 verified facts" and cited source files to force factual re-grounding.
 - **Expanded Spec Lexicon**: Added defensive/corrective triggers (`"wait", "stop", "hold on", "never mind"`) identified as common user reactions in the paper.
 - **Memo**: Formalized the alignment in `internal/research/replay-optimization/11-ease25-paper-alignment.md`.
 
