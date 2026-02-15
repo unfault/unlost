@@ -111,6 +111,27 @@ unlost query "why did we rename the capsules table?"
 unlost query --symbol proxy_request
 ```
 
+## The Cognitive Mirror (Metrics)
+
+Unlost doesn't just store memory; it tracks the **trajectory** of your collaboration. As context grows, agents often begin to stall or drift. Unlost monitors these patterns across three "Basins of Friction":
+
+| Basin | What it senses | Leading Indicator |
+|-------|----------------|-------------------|
+| **Loop** | Repetitive stalls | Symbol repetition, novelty collapse, logic churn. |
+| **Spec** | Alignment debt | VERBATIM instruction repeats, corrective keywords. |
+| **Drift** | Grounding failure | Hallucinated paths, ignoring user-mentioned files. |
+
+Use the `metrics` command to see the "Cognitive Mirror" of your workspace:
+
+```bash
+unlost metrics
+```
+
+This reveals:
+- **Friction vs Context Size**: See how the warning rate spikes as your input tokens grow (the "Lost in Context" threshold).
+- **Average Interval**: How many tokens of productive work you get between trajectory breakdowns.
+- **Top Friction Files**: Codebase "hotspots" that are consistently causing the agent to stall or drift.
+
 ## Install
 
 ```bash
