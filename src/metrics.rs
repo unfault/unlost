@@ -242,6 +242,7 @@ pub(crate) struct ExpensiveIntervention {
     pub(crate) intensity: f32,
     pub(crate) symbols: Vec<String>,
     pub(crate) cost_next_5: f64,
+    #[allow(dead_code)]
     pub(crate) tokens_next_5: i64,
 }
 
