@@ -98,6 +98,8 @@ pub struct SymptomChannels {
     pub grounding_stall: f32,
     /// Measure of user repeating long structural instructions.
     pub instruction_staticness: f32,
+    /// Measure of rapid plan/decision changes without progress.
+    pub logic_churn: f32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]

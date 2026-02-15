@@ -19,6 +19,7 @@ const WEIGHT_ALIGNMENT_DEBT: f32 = 0.45;
 const WEIGHT_PATH_HALLUCINATION: f32 = 0.60;
 const WEIGHT_GROUNDING_STALL: f32 = 0.30;
 const WEIGHT_INSTRUCTION_STATICNESS: f32 = 0.25;
+const WEIGHT_LOGIC_CHURN: f32 = 0.20;
 
 const THRESHOLD_WATCH: f32 = 0.5;
 const THRESHOLD_INTERVENE: f32 = 0.8;
@@ -49,6 +50,8 @@ pub struct TrajectoryController {
     pub basin_cooldowns: std::collections::HashMap<String, usize>,
     /// History of user-mentioned symbols with timestamps for decay.
     pub user_symbol_history: std::collections::VecDeque<(std::collections::HashSet<String>, i64)>,
+    /// The last assistant decision for churn calculation.
+    pub last_decision: Option<String>,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -60,21 +63,38 @@ const CORRECTION_PATTERNS: &[&str] = &[
     "you misunderstood",
     "wrong",
     "incorrect",
+    "wait",
+    "stop",
+    "hold on",
+    "not quite",
+    "don't do",
+    "never mind",
+    "re-read",
+    "false",
 ];
 
-fn detect_correction(text: &str) -> f32 {
+fn detect_correction(text: &str, emotion: Option<&crate::emotion::EmotionMeta>) -> f32 {
     let lower = text.to_lowercase();
     let mut score = 0.0;
     for p in CORRECTION_PATTERNS {
         if lower.contains(p) {
-            if *p == "actually" {
+            if *p == "actually" || *p == "wait" || *p == "hold on" {
                 score += 0.5;
             } else {
                 score += 1.0;
             }
         }
     }
-    (score / 1.5_f32).min(1.0_f32)
+    let mut final_score = (score / 1.5_f32).min(1.0_f32);
+
+    // Affective Boost: If the user is frustrated while correcting, it's high signal
+    if let Some(e) = emotion {
+        if FRICTION_EMOTIONS.contains(&e.label.as_str()) && final_score > 0.1 {
+            final_score = (final_score + 0.3).min(1.0);
+        }
+    }
+
+    final_score
 }
 
 const SUMMARY_CUES: &[&str] = &[
@@ -128,9 +148,11 @@ impl TrajectoryController {
         let s_nov = calculate_novelty_collapse(current, history);
         let s_sem = calculate_semantic_stall(current, history);
         let s_eff = calculate_effort_spike(current, history);
-        let s_corr = detect_correction(&current.intent);
+        let s_corr = detect_correction(&current.intent, current_emotion);
         let s_path = calculate_path_hallucination(workspace_id, current);
         let s_summary = detect_summary_intent(&current.decision);
+        let s_churn = calculate_logic_churn(&current.decision, &self.last_decision);
+        self.last_decision = Some(current.decision.clone());
 
         // 2.1 Deep Drift Sensors
         if !current.user_symbols.is_empty() {
@@ -206,12 +228,15 @@ impl TrajectoryController {
             EMA_ALPHA * s_stall + (1.0 - EMA_ALPHA) * self.smoothed_channels.grounding_stall;
         self.smoothed_channels.instruction_staticness =
             EMA_ALPHA * s_stat + (1.0 - EMA_ALPHA) * self.smoothed_channels.instruction_staticness;
+        self.smoothed_channels.logic_churn =
+            EMA_ALPHA * s_churn + (1.0 - EMA_ALPHA) * self.smoothed_channels.logic_churn;
 
         // 4. Intensity Calculation
         let loop_intensity = WEIGHT_REPETITION * self.smoothed_channels.repetition
             + WEIGHT_NOVELTY * self.smoothed_channels.novelty_collapse
             + WEIGHT_SEMANTIC * self.smoothed_channels.semantic_stall
-            + WEIGHT_EFFORT * self.smoothed_channels.effort_spike;
+            + WEIGHT_EFFORT * self.smoothed_channels.effort_spike
+            + WEIGHT_LOGIC_CHURN * self.smoothed_channels.logic_churn;
 
         let spec_intensity = WEIGHT_ALIGNMENT_DEBT * self.smoothed_channels.alignment_debt
             + WEIGHT_INSTRUCTION_STATICNESS * self.smoothed_channels.instruction_staticness;
@@ -350,6 +375,8 @@ impl TrajectoryController {
         self.turns_since_intervention = 0;
         self.intensity_history.clear();
         self.last_intervention_type = None;
+        self.last_decision = None;
+        self.user_symbol_history.clear();
     }
 }
 
@@ -415,6 +442,34 @@ fn calculate_effort_spike(current: &IntentCapsule, history: &[CapsuleHit]) -> f3
     }
 }
 
+fn calculate_logic_churn(current: &str, last: &Option<String>) -> f32 {
+    if let Some(prev) = last {
+        if current.is_empty() || prev.is_empty() {
+            return 0.0;
+        }
+        let w1: std::collections::HashSet<_> = current
+            .split_whitespace()
+            .map(|s| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), ""))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let w2: std::collections::HashSet<_> = prev
+            .split_whitespace()
+            .map(|s| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), ""))
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if w1.is_empty() || w2.is_empty() {
+            return 0.0;
+        }
+
+        let intersection = w1.intersection(&w2).count();
+        let union = w1.len().max(w2.len());
+        1.0 - (intersection as f32 / union as f32)
+    } else {
+        0.0
+    }
+}
+
 fn select_intervention_with_substance(
     intensity: f32,
     _state: TrajectoryState,
@@ -462,7 +517,7 @@ fn select_intervention_with_substance(
             let corrections: Vec<String> = recent
                 .iter()
                 .take(5)
-                .filter(|h| detect_correction(&h.capsule.intent) > 0.5)
+                .filter(|h| detect_correction(&h.capsule.intent, h.user_emotion.as_ref()) > 0.5)
                 .map(|h| h.capsule.intent.trim().to_string())
                 .collect();
 
@@ -794,8 +849,9 @@ mod tests {
 
     #[test]
     fn test_detect_correction() {
-        assert!(detect_correction("no that's wrong") > 0.5);
-        assert!(detect_correction("actually I meant") > 0.5);
-        assert_eq!(detect_correction("looks good"), 0.0);
+        assert!(detect_correction("no that's wrong", None) > 0.5);
+        assert!(detect_correction("actually I meant", None) > 0.5);
+        assert!(detect_correction("wait stop", None) > 0.5);
+        assert_eq!(detect_correction("looks good", None), 0.0);
     }
 }
