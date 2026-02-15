@@ -62,11 +62,34 @@ pub fn run(path: String) -> anyhow::Result<()> {
             "  legacy:           {}",
             summary.friction_by_cause.get("legacy").unwrap_or(&0)
         );
-        if summary.friction_warnings > 0 {
-            println!(
-                "  avg intensity:    {:.2}",
-                summary.friction_intensity_total / (summary.friction_warnings as f32)
-            );
+        println!(
+            "  avg intensity:    {:.2}",
+            summary.friction_intensity_total / (summary.friction_warnings as f32)
+        );
+        println!(
+            "  avg interval:     {} tokens",
+            summary.avg_tokens_between_interventions.round() as i64
+        );
+
+        if !summary.friction_by_input_bucket.is_empty() {
+            println!("\n=== Friction vs Context Size (Input Tokens) ===");
+            println!("  Bucket      | Turns | Warnings | Rate (Warnings/100 Turns)");
+            println!("--------------|-------|----------|---------------------------");
+            for (bucket, (warnings, turns)) in &summary.friction_by_input_bucket {
+                let rate = if *turns > 0 {
+                    (*warnings as f64 / *turns as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "  {:>5} - {:>5} | {:>5} | {:>8} | {:>5.1}%",
+                    bucket,
+                    bucket + 4000,
+                    turns,
+                    warnings,
+                    rate
+                );
+            }
         }
 
         if !summary.friction_by_symbol.is_empty() {

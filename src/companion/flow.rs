@@ -341,6 +341,7 @@ impl Flow {
             let _ = crate::metrics::record_friction_warning_injected(
                 &ws.id,
                 0, // conn_id not available in CheckEvent
+                event.agent_session_id.clone(),
                 current.symbols.clone(),
                 user_emotion.as_ref(),
                 update.intensity,

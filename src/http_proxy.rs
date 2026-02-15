@@ -251,6 +251,7 @@ async fn serve_request(
                         let _ = crate::metrics::record_friction_warning_injected(
                             &workspace_id,
                             conn_id,
+                            None, // Proxy doesn't track agent_session_id yet
                             current_intent.symbols.clone(),
                             current_user_emotion.as_ref(),
                             1.0, // Legacy warnings are high confidence
@@ -468,6 +469,7 @@ async fn proxy_request(
                         let _ = crate::metrics::record_friction_warning_injected(
                             &ws.id,
                             conn_id,
+                            None,
                             current_intent.symbols.clone(),
                             current_user_emotion.as_ref(),
                             1.0,

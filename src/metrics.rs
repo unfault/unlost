@@ -13,6 +13,7 @@ pub(crate) enum MetricsEvent {
         http_status: u16,
         agent_session_id: Option<String>,
         tokens_total: Option<i64>,
+        tokens_input: Option<i64>,
         cost: Option<f64>,
         symbols_total: usize,
         paths_checked: usize,
@@ -26,6 +27,8 @@ pub(crate) enum MetricsEvent {
         ts_ms: i64,
         conn_id: u64,
         workspace_id: String,
+        #[serde(default)]
+        agent_session_id: Option<String>,
         symbols: Vec<String>,
         user_emotion: Option<String>,
         intensity: f32,
@@ -75,11 +78,11 @@ pub(crate) fn record_capsule_saved(
     capsule: &crate::IntentCapsule,
 ) -> anyhow::Result<()> {
     let (paths_checked, paths_missing) = crate::workspace::validate_paths(&ws.id, &capsule.symbols);
-    let (tokens_total, cost) = meta
+    let (tokens_total, tokens_input, cost) = meta
         .usage
         .as_ref()
-        .map(|u| (u.tokens_total(), u.cost))
-        .unwrap_or((None, None));
+        .map(|u| (u.tokens_total(), u.tokens_input, u.cost))
+        .unwrap_or((None, None, None));
 
     let failure_mode_str = match capsule.failure_mode {
         crate::types::FailureMode::None => None,
@@ -101,6 +104,7 @@ pub(crate) fn record_capsule_saved(
         http_status: meta.http_status,
         agent_session_id: meta.agent_session_id.clone(),
         tokens_total,
+        tokens_input,
         cost,
         symbols_total: capsule.symbols.len(),
         paths_checked,
@@ -115,6 +119,7 @@ pub(crate) fn record_capsule_saved(
 pub(crate) fn record_friction_warning_injected(
     workspace_id: &str,
     conn_id: u64,
+    agent_session_id: Option<String>,
     symbols: Vec<String>,
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     intensity: f32,
@@ -126,6 +131,7 @@ pub(crate) fn record_friction_warning_injected(
         ts_ms: crate::now_ms(),
         conn_id,
         workspace_id: workspace_id.to_string(),
+        agent_session_id,
         symbols,
         user_emotion: user_emotion.map(|e| e.label.clone()),
         intensity,
@@ -206,6 +212,11 @@ pub(crate) struct MetricsSummary {
     pub(crate) recall_commands: u64,
     /// Failure modes detected via LLM semantic analysis
     pub(crate) failure_modes: FailureModeCounts,
+    /// Average tokens between interventions across all sessions
+    pub(crate) avg_tokens_between_interventions: f64,
+    /// Breakdown of friction rate by input token buckets (context growth proxy)
+    /// Key is lower bound of bucket (e.g. 0, 4000, 8000), value is (warnings, total_turns_in_bucket)
+    pub(crate) friction_by_input_bucket: std::collections::BTreeMap<i64, (u64, i64)>,
 }
 
 pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<MetricsSummary> {
@@ -217,6 +228,10 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
     };
     let mut out = MetricsSummary::default();
     let reader = std::io::BufReader::new(f);
+
+    let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =
+        std::collections::HashMap::new();
+
     for line in reader.lines() {
         let Ok(line) = line else { continue };
         if line.trim().is_empty() {
@@ -225,27 +240,29 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
         let Ok(ev) = serde_json::from_str::<MetricsEvent>(&line) else {
             continue;
         };
-        match ev {
+
+        // Pass 1: Global totals and session grouping
+        match &ev {
             MetricsEvent::CapsuleSaved {
                 tokens_total,
                 cost,
                 paths_checked,
                 paths_missing,
                 failure_mode,
+                agent_session_id,
                 ..
             } => {
                 out.capsules += 1;
                 if let Some(t) = tokens_total {
-                    out.tokens_total = out.tokens_total.saturating_add(t);
+                    out.tokens_total = out.tokens_total.saturating_add(*t);
                 }
                 if let Some(c) = cost {
                     out.cost_total += c;
                 }
-                out.drift_paths_checked += paths_checked as u64;
-                out.drift_paths_missing += paths_missing as u64;
+                out.drift_paths_checked += *paths_checked as u64;
+                out.drift_paths_missing += *paths_missing as u64;
 
-                // Count failure modes from LLM analysis
-                if let Some(ref mode) = failure_mode {
+                if let Some(mode) = failure_mode {
                     match mode.as_str() {
                         "drift" => out.failure_modes.drift += 1,
                         "rediscovery" => out.failure_modes.rediscovery += 1,
@@ -256,18 +273,32 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                         _ => {}
                     }
                 }
+
+                if let Some(sid) = agent_session_id {
+                    session_events
+                        .entry(sid.clone())
+                        .or_default()
+                        .push(ev.clone());
+                }
             }
             MetricsEvent::FrictionWarningInjected {
                 intensity,
                 cause,
                 symbols,
+                agent_session_id,
                 ..
             } => {
                 out.friction_warnings += 1;
-                out.friction_intensity_total += intensity;
-                *out.friction_by_cause.entry(cause).or_insert(0) += 1;
+                out.friction_intensity_total += *intensity;
+                *out.friction_by_cause.entry(cause.clone()).or_insert(0) += 1;
                 for s in symbols {
-                    *out.friction_by_symbol.entry(s).or_insert(0) += 1;
+                    *out.friction_by_symbol.entry(s.clone()).or_insert(0) += 1;
+                }
+                if let Some(sid) = agent_session_id {
+                    session_events
+                        .entry(sid.clone())
+                        .or_default()
+                        .push(ev.clone());
                 }
             }
             MetricsEvent::CommandQuery { .. } => {
@@ -278,5 +309,66 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
             }
         }
     }
+
+    // Pass 2: Session-level spacing and bucket analysis
+    let mut total_spacing_tokens = 0i64;
+    let mut total_spacing_segments = 0u64;
+
+    for events in session_events.values_mut() {
+        events.sort_by_key(|e| match e {
+            MetricsEvent::CapsuleSaved { ts_ms, .. } => *ts_ms,
+            MetricsEvent::FrictionWarningInjected { ts_ms, .. } => *ts_ms,
+            MetricsEvent::CommandQuery { ts_ms, .. } => *ts_ms,
+            MetricsEvent::CommandRecall { ts_ms, .. } => *ts_ms,
+        });
+
+        let mut tokens_since_last_warning = 0i64;
+        let mut had_warning = false;
+        let mut last_capsule_bucket = 0i64;
+
+        for ev in events {
+            match ev {
+                MetricsEvent::CapsuleSaved {
+                    tokens_input,
+                    tokens_total,
+                    ..
+                } => {
+                    let input = tokens_input.unwrap_or(0);
+                    let total = tokens_total.unwrap_or(0);
+                    tokens_since_last_warning += total;
+
+                    // Bucket analysis (using tokens_input as the real context proxy)
+                    last_capsule_bucket = (input / 4000) * 4000;
+                    let b = out
+                        .friction_by_input_bucket
+                        .entry(last_capsule_bucket)
+                        .or_default();
+                    b.1 += 1; // Increment turn count N
+                }
+                MetricsEvent::FrictionWarningInjected { .. } => {
+                    if had_warning {
+                        total_spacing_tokens += tokens_since_last_warning;
+                        total_spacing_segments += 1;
+                    }
+                    had_warning = true;
+                    tokens_since_last_warning = 0;
+
+                    // Mark warning in the current bucket
+                    let b = out
+                        .friction_by_input_bucket
+                        .entry(last_capsule_bucket)
+                        .or_default();
+                    b.0 += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if total_spacing_segments > 0 {
+        out.avg_tokens_between_interventions =
+            total_spacing_tokens as f64 / total_spacing_segments as f64;
+    }
+
     Ok(out)
 }
