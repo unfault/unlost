@@ -211,6 +211,19 @@ We have aligned our trajectory model with the findings of the **EASE'25 paper** 
 2. [ ] **Live Trial**: Enable the regulator in an interactive session and observe real-time precision.
 3. [ ] **Analytics Dashboard**: Leverage `friction_by_symbol` for a "Workspace Hotspot" heat-map.
 
+### Deep Drift: Symbol-Level Grounding (unfault-core)
+*Status as of Feb 15, 2026*
+
+We have integrated the fast parsing capabilities of `unfault-core` into the real-time regulator to move beyond file-level grounding.
+
+#### 1. Implementation: Identifier Validation
+- **Live Symbol Check**: The `validate_identifiers` utility now performs a high-speed parse of workspace source files during the friction check.
+- **Symbol-Sensitive Drift**: The **Drift Basin** now triggers if an agent mentions non-existent functions or classes, not just non-existent files.
+- **Heuristic Refinement**: Hallucination scores are now a composite of missing files and missing identifiers, providing a much higher resolution drift signal.
+
+#### 2. Strategic Value
+By leveraging the same engine used for `init` during live interactions, Unlost can now detect "Cognitive Hallucinations" (hallucinating logic/APIs) even if the agent is looking at the correct file.
+
 ## Questions to Revisit Later (Parking Lot)
 - **Rationale Depth**: Should we store full rationales or just a semantic hash for churn detection?
 - **VSCode Integration**: Can these trajectory warnings be surfaced as "Ambient Awareness" in the IDE?

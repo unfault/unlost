@@ -153,7 +153,7 @@ impl TrajectoryController {
         let s_sem = calculate_semantic_stall(current, history);
         let s_eff = calculate_effort_spike(current, history);
         let s_corr = detect_correction(&current.intent, current_emotion);
-        let s_path = calculate_path_hallucination(workspace_id, current);
+        let s_hallucination = calculate_drift_hallucination(workspace_id, current);
         let s_summary = detect_summary_intent(&current.decision);
         let s_churn = calculate_logic_churn(&current.decision, &self.last_decision);
         self.last_decision = Some(current.decision.clone());
@@ -226,8 +226,8 @@ impl TrajectoryController {
             EMA_ALPHA * s_eff + (1.0 - EMA_ALPHA) * self.smoothed_channels.effort_spike;
         self.smoothed_channels.alignment_debt =
             EMA_ALPHA * s_corr + (1.0 - EMA_ALPHA) * self.smoothed_channels.alignment_debt;
-        self.smoothed_channels.path_hallucination =
-            EMA_ALPHA * s_path + (1.0 - EMA_ALPHA) * self.smoothed_channels.path_hallucination;
+        self.smoothed_channels.path_hallucination = EMA_ALPHA * s_hallucination
+            + (1.0 - EMA_ALPHA) * self.smoothed_channels.path_hallucination;
         self.smoothed_channels.grounding_stall =
             EMA_ALPHA * s_stall + (1.0 - EMA_ALPHA) * self.smoothed_channels.grounding_stall;
         self.smoothed_channels.instruction_staticness =
@@ -414,15 +414,26 @@ fn calculate_novelty_collapse(current: &IntentCapsule, history: &[CapsuleHit]) -
     1.0 - (1.0 - calculate_repetition(current, history))
 }
 
-fn calculate_path_hallucination(workspace_id: &str, current: &IntentCapsule) -> f32 {
-    let (_checked, missing) = crate::workspace::validate_paths(workspace_id, &current.symbols);
-    if current.symbols.is_empty() {
+fn calculate_drift_hallucination(workspace_id: &str, current: &IntentCapsule) -> f32 {
+    let (paths_checked, paths_missing) =
+        crate::workspace::validate_paths(workspace_id, &current.symbols);
+    let (idents_checked, idents_missing) =
+        crate::workspace::validate_identifiers(workspace_id, &current.symbols);
+
+    let total_checked = paths_checked + idents_checked;
+    let total_missing = paths_missing + idents_missing;
+
+    if total_checked == 0 {
         return 0.0;
     }
-    if missing > 0 {
-        (missing as f32 / current.symbols.len() as f32).max(0.5)
+
+    // Hallucination score is the ratio of missing symbols, but we floor it at 0.5
+    // if ANY path is missing to prioritize grounding.
+    let ratio = total_missing as f32 / total_checked as f32;
+    if paths_missing > 0 {
+        ratio.max(0.5)
     } else {
-        0.0
+        ratio
     }
 }
 
@@ -554,9 +565,13 @@ fn select_intervention_with_substance(
 
         // --- Drift Basin (Grounding/Hallucination) ---
         ("drift", _) if is_ambient => {
-            let (_, missing_count) = crate::workspace::validate_paths(workspace_id, &current.symbols);
-            if missing_count > 0 {
+            let (_, missing_paths) = crate::workspace::validate_paths(workspace_id, &current.symbols);
+            let (_, missing_idents) = crate::workspace::validate_identifiers(workspace_id, &current.symbols);
+            
+            if missing_paths > 0 {
                 Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Please re-read the relevant files and list 3 verified facts about the current codebase before proceeding.]".to_string())
+            } else if missing_idents > 0 {
+                Some("[SYSTEM NOTE: Potential symbol drift detected. Some mentioned functions or classes do not exist. Verify the codebase structure.]".to_string())
             } else {
                 Some("[SYSTEM NOTE: High assumption load or grounding mismatch detected. Verify your facts about the codebase. List your core assumptions and confirm them against the source code.]".to_string())
             }

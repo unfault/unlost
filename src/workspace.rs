@@ -420,6 +420,130 @@ pub fn validate_paths(workspace_id: &str, symbols: &[String]) -> (usize, usize) 
     (checked, missing)
 }
 
+/// Validates symbols against the actual codebase structure using unfault-core.
+/// Returns (total_identifiers_checked, missing_identifiers).
+pub fn validate_identifiers(workspace_id: &str, symbols: &[String]) -> (usize, usize) {
+    let Some(root) = workspace_root_for_id(workspace_id) else {
+        return (0, 0);
+    };
+
+    // For now, we do a live parse of the most recently modified files to keep it fast.
+    let files = match collect_recent_source_files(&root) {
+        Ok(f) => f,
+        Err(_) => return (0, 0),
+    };
+
+    if files.is_empty() {
+        return (0, 0);
+    }
+
+    let mut sem_entries = Vec::new();
+    let mut next_id = 1u64;
+
+    for sf in files {
+        let file_id = unfault_core::FileId(next_id);
+        next_id += 1;
+        if let Ok(parsed) = unfault_core::parse::parse_source_file(file_id, &sf) {
+            if let Ok(Some(sem)) = unfault_core::semantics::build_source_semantics(&parsed) {
+                sem_entries.push((file_id, std::sync::Arc::new(sem)));
+            }
+        }
+    }
+
+    if sem_entries.is_empty() {
+        return (0, 0);
+    }
+
+    let cg = unfault_core::build_code_graph(&sem_entries);
+    let mut valid_identifiers = std::collections::HashSet::new();
+
+    for node in cg.graph.node_weights() {
+        match node {
+            unfault_core::GraphNode::Function { name, .. } => {
+                valid_identifiers.insert(name.clone());
+            }
+            unfault_core::GraphNode::Class { name, .. } => {
+                valid_identifiers.insert(name.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let mut checked = 0;
+    let mut missing = 0;
+
+    for s in symbols {
+        // Skip paths, we only care about plain identifiers here
+        if looks_like_rel_path(s) {
+            continue;
+        }
+        // Basic sanity check for identifiers (alphanumeric + underscore, at least 3 chars)
+        if s.len() >= 3 && s.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            checked += 1;
+            if !valid_identifiers.contains(s) {
+                missing += 1;
+            }
+        }
+    }
+
+    (checked, missing)
+}
+
+fn collect_recent_source_files(
+    root: &std::path::Path,
+) -> anyhow::Result<Vec<unfault_core::SourceFile>> {
+    use ignore::WalkBuilder;
+    let walker = WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .max_depth(Some(3)) // Shallow walk for speed
+        .build();
+
+    let mut out = Vec::new();
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = entry.path();
+        let Some(lang) = detect_language(path) else {
+            continue;
+        };
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        out.push(unfault_core::SourceFile {
+            path: rel.to_string_lossy().to_string(),
+            language: lang,
+            content,
+        });
+
+        if out.len() > 50 {
+            break;
+        } // Limit to 50 files for "live" check speed
+    }
+
+    Ok(out)
+}
+
+fn detect_language(path: &std::path::Path) -> Option<unfault_core::Language> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match ext.as_str() {
+        "py" => Some(unfault_core::Language::Python),
+        "rs" => Some(unfault_core::Language::Rust),
+        "go" => Some(unfault_core::Language::Go),
+        "ts" | "tsx" => Some(unfault_core::Language::Typescript),
+        "js" | "jsx" => Some(unfault_core::Language::Javascript),
+        "java" => Some(unfault_core::Language::Java),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
