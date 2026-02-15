@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "internal/bench"]
+members = ["."]
 
 [package]
 name = "unlost"
