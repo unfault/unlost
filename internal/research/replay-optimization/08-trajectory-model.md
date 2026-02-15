@@ -46,6 +46,11 @@ $$d^{(k)}_t = \alpha s^{(k)}_t + (1-\alpha)d^{(k)}_{t-1}$$
 The **Total Instability Intensity** is a weighted sum:
 $$I_t = \sum_k w_k d^{(k)}_t$$
 
+**Intent-Based Damping**:
+To prevent false triggers during productive consolidation, we damp the intensity when a "Summary Intent" is detected:
+- **Condition**: Lexical cues ("summary", "recap", "consolidate") in agent decision.
+- **Effect**: $I_t := I_t \cdot 0.6$
+
 **Initial Calibrated Weights ($w_k$):**
 - $s_{eff}$ (Effort Spike): **0.34**
 - $s_{rep}$ (Symbol Repetition): **0.24**

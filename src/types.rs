@@ -94,6 +94,10 @@ pub struct SymptomChannels {
     pub alignment_debt: f32,
     /// Measure of path hallucinations (referencing non-existent files).
     pub path_hallucination: f32,
+    /// Measure of agent ignoring user-mentioned paths.
+    pub grounding_stall: f32,
+    /// Measure of user repeating long structural instructions.
+    pub instruction_staticness: f32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]

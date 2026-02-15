@@ -152,6 +152,19 @@ We are now researching **Drift Regulation** to close the remaining coverage gap.
 - **Threshold 0.8**: **100% Precision@5** (1 trigger).
 - **Insight**: The weights derived from the long Marathon session generalize perfectly to shorter sessions, confirming the **Instability Signature** is a universal property of human-agent friction episodes.
 
+### Falsification Test Suite (Healthy Stress)
+**Status as of Feb 15, 2026**
+
+We ran a falsification suite (`falsify_trajectory.py`) to test if the 0.80 threshold over-triggers during productive work that mimics loops.
+
+| Scenario | Max Intensity | State | False Positive? |
+| :--- | :--- | :--- | :--- |
+| **Deep Refactor** (10 turns same files) | 0.62 | Watch | **No** |
+| **Exploratory Debug** (5 turns search/read) | 0.37 | Stable | **No** |
+| **The Teacher** (5 turns high effort) | 0.13 | Stable | **No** |
+
+**Result**: **Passed**. The model correctly stays silent during deep work, proving that the 0.80 threshold provides sufficient headroom for "Healthy Stress."
+
 ### The "Model Gap" (Next Steps for Formalization)
 - [x] **Mathematical Mapping**: Formal score function $I_t = \sum w_k d_t$ and trajectory slope $T_t = I_t - I_{t-\ell}$.
 - [x] **Calibration Protocol**: Systematic threshold tuning using percentiles (derived $\theta_I=0.8$ for high precision).

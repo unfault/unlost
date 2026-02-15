@@ -32,3 +32,6 @@ package-lock.json
 # Keep the OpenCode plugin lockfile committed (CI uses `npm ci`).
 !agents/opencode/plugin/package-lock.json
 .unfault/
+
+.fastembed_cache/
+replay_log.txt

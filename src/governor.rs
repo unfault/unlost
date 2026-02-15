@@ -17,6 +17,8 @@ const WEIGHT_NOVELTY: f32 = 0.24;
 const WEIGHT_SEMANTIC: f32 = 0.18;
 const WEIGHT_ALIGNMENT_DEBT: f32 = 0.45;
 const WEIGHT_PATH_HALLUCINATION: f32 = 0.60;
+const WEIGHT_GROUNDING_STALL: f32 = 0.30;
+const WEIGHT_INSTRUCTION_STATICNESS: f32 = 0.25;
 
 const THRESHOLD_WATCH: f32 = 0.5;
 const THRESHOLD_INTERVENE: f32 = 0.8;
@@ -37,6 +39,12 @@ pub struct TrajectoryController {
     pub turns_since_intervention: usize,
     /// History of intensity values for persistence checking.
     pub intensity_history: std::collections::VecDeque<f32>,
+    /// Tracks the last intervention type to avoid repetitive "nagging" oscillations.
+    pub last_intervention_type: Option<String>,
+    /// Persistence counter for grounding stall (consecutive turns).
+    pub stall_streak: usize,
+    /// Persistence counter for instruction staticness.
+    pub static_streak: usize,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -65,6 +73,36 @@ fn detect_correction(text: &str) -> f32 {
     (score / 1.5_f32).min(1.0_f32)
 }
 
+const SUMMARY_CUES: &[&str] = &[
+    "summary",
+    "recap",
+    "summarize",
+    "consolidate",
+    "overview",
+    "in short",
+    "to conclude",
+];
+
+fn detect_summary_intent(text: &str) -> f32 {
+    let lower = text.to_lowercase();
+    for cue in SUMMARY_CUES {
+        if lower.contains(cue) {
+            return 1.0;
+        }
+    }
+    0.0
+}
+
+fn extract_paths(text: &str) -> std::collections::HashSet<String> {
+    let mut paths = std::collections::HashSet::new();
+    // Simplified regex for files/paths
+    let re = regex::Regex::new(r"[\w\-\./]+\.[a-z]{2,5}").unwrap();
+    for cap in re.captures_iter(text) {
+        paths.insert(cap[0].to_string());
+    }
+    paths
+}
+
 impl TrajectoryController {
     pub fn update(
         &mut self,
@@ -74,10 +112,13 @@ impl TrajectoryController {
         history: &[CapsuleHit],
         ts_ms: i64,
     ) -> (TrajectoryState, Option<String>) {
+        let mut reset_note = None;
+
         // 1. Check for Coffee Pause (Soft Decay Reset)
         if self.last_ts_ms > 0 && (ts_ms - self.last_ts_ms) > COFFEE_PAUSE_MS {
             self.state = TrajectoryState::Stable;
             self.intensity *= COFFEE_PAUSE_DECAY;
+            reset_note = render_resumption_brief(history);
         }
         self.last_ts_ms = ts_ms;
 
@@ -88,6 +129,33 @@ impl TrajectoryController {
         let s_eff = calculate_effort_spike(current, history);
         let s_corr = detect_correction(&current.intent);
         let s_path = calculate_path_hallucination(workspace_id, current);
+        let s_summary = detect_summary_intent(&current.decision);
+
+        // 2.1 Deep Drift Sensors
+        let user_paths = extract_paths(&current.intent);
+        let assistant_symbols: std::collections::HashSet<_> =
+            current.symbols.iter().cloned().collect();
+
+        // Grounding Stall: user mentions paths, agent touches disjoint set
+        let has_stall =
+            !user_paths.is_empty() && user_paths.intersection(&assistant_symbols).next().is_none();
+        if has_stall {
+            self.stall_streak += 1;
+        } else {
+            self.stall_streak = 0;
+        }
+        let s_stall = if self.stall_streak >= 2 { 1.0 } else { 0.0 };
+
+        // Instruction Staticness: user repeats same long message
+        let is_static = history.first().map_or(false, |h| {
+            current.intent.len() > 50 && current.intent.trim() == h.capsule.intent.trim()
+        });
+        if is_static {
+            self.static_streak += 1;
+        } else {
+            self.static_streak = 0;
+        }
+        let s_stat = if self.static_streak >= 2 { 1.0 } else { 0.0 };
 
         // 3. EMA Smoothing
         self.smoothed_channels.repetition =
@@ -102,6 +170,10 @@ impl TrajectoryController {
             EMA_ALPHA * s_corr + (1.0 - EMA_ALPHA) * self.smoothed_channels.alignment_debt;
         self.smoothed_channels.path_hallucination =
             EMA_ALPHA * s_path + (1.0 - EMA_ALPHA) * self.smoothed_channels.path_hallucination;
+        self.smoothed_channels.grounding_stall =
+            EMA_ALPHA * s_stall + (1.0 - EMA_ALPHA) * self.smoothed_channels.grounding_stall;
+        self.smoothed_channels.instruction_staticness =
+            EMA_ALPHA * s_stat + (1.0 - EMA_ALPHA) * self.smoothed_channels.instruction_staticness;
 
         // 4. Intensity Calculation
         let loop_intensity = WEIGHT_REPETITION * self.smoothed_channels.repetition
@@ -109,10 +181,18 @@ impl TrajectoryController {
             + WEIGHT_SEMANTIC * self.smoothed_channels.semantic_stall
             + WEIGHT_EFFORT * self.smoothed_channels.effort_spike;
 
-        let spec_intensity = WEIGHT_ALIGNMENT_DEBT * self.smoothed_channels.alignment_debt;
-        let drift_intensity = WEIGHT_PATH_HALLUCINATION * self.smoothed_channels.path_hallucination;
+        let spec_intensity = WEIGHT_ALIGNMENT_DEBT * self.smoothed_channels.alignment_debt
+            + WEIGHT_INSTRUCTION_STATICNESS * self.smoothed_channels.instruction_staticness;
+
+        let drift_intensity = WEIGHT_PATH_HALLUCINATION * self.smoothed_channels.path_hallucination
+            + WEIGHT_GROUNDING_STALL * self.smoothed_channels.grounding_stall;
 
         let mut raw_intensity = loop_intensity + spec_intensity + drift_intensity;
+
+        // NEW: Summary Intent Damping (Prevents false positives during consolidation)
+        if s_summary > 0.5 {
+            raw_intensity *= 0.6;
+        }
 
         // 5. Affective Modulation (The "Emotional Wave")
         if let Some(e) = current_emotion {
@@ -167,7 +247,7 @@ impl TrajectoryController {
         self.turns_since_intervention += 1;
 
         // 7. Select Intervention
-        let note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
+        let mut note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
             let cause = if drift_intensity > spec_intensity && drift_intensity > loop_intensity {
                 "drift"
             } else if spec_intensity > loop_intensity {
@@ -175,17 +255,34 @@ impl TrajectoryController {
             } else {
                 "loop"
             };
-            select_intervention_with_substance(
-                self.state,
-                current_emotion,
-                cause,
-                workspace_id,
-                current,
-                history,
-            )
+
+            let intervention_type = format!("{}:{}", cause, self.state as u8);
+            if self.last_intervention_type.as_ref() == Some(&intervention_type) {
+                // One-Shot Rule: Don't repeat the exact same intervention type within the same episode
+                None
+            } else {
+                self.last_intervention_type = Some(intervention_type);
+                select_intervention_with_substance(
+                    self.state,
+                    current_emotion,
+                    cause,
+                    workspace_id,
+                    current,
+                    history,
+                )
+            }
         } else {
             None
         };
+
+        if self.state == TrajectoryState::Stable {
+            self.last_intervention_type = None;
+        }
+
+        // Prioritize reset note (Resumption Brief) over trajectory warnings if it just happened
+        if reset_note.is_some() {
+            note = reset_note;
+        }
 
         (self.state, note)
     }
@@ -196,6 +293,7 @@ impl TrajectoryController {
         self.smoothed_channels = SymptomChannels::default();
         self.turns_since_intervention = 0;
         self.intensity_history.clear();
+        self.last_intervention_type = None;
     }
 }
 
@@ -410,6 +508,7 @@ pub(crate) struct HydrationNode {
     pub(crate) decision: String,
     pub(crate) user_emotion: Option<String>,
     pub(crate) tokens_total: Option<i64>,
+    pub(crate) failure_mode: crate::types::FailureMode,
 }
 
 const FRICTION_EMOTIONS: &[&str] = &[
@@ -906,7 +1005,15 @@ fn build_hydration_packet(
         let effort_boost = tok
             .map(|t| 1.0 + ((t as f32) / norm).clamp(0.0, 1.0) * w.effort_scale.max(0.0))
             .unwrap_or(1.0);
-        let score = logic_recency * overlap_boost * emo_boost * effort_boost;
+
+        // Boost explicitly failed turns
+        let failure_boost = if h.capsule.failure_mode != crate::types::FailureMode::None {
+            1.5
+        } else {
+            1.0
+        };
+
+        let score = logic_recency * overlap_boost * emo_boost * effort_boost * failure_boost;
         candidates.push((
             score,
             HydrationNode {
@@ -915,6 +1022,7 @@ fn build_hydration_packet(
                 decision: h.capsule.decision.clone(),
                 user_emotion: emo,
                 tokens_total: tok,
+                failure_mode: h.capsule.failure_mode.clone(),
             },
         ));
     }
@@ -1041,6 +1149,9 @@ fn render_hydration_warning(
                         line.push_str(&format!(" (tokens~{t})"));
                     }
                 }
+                if n.failure_mode != crate::types::FailureMode::None {
+                    line.push_str(&format!(" [FAILURE:{:?}]", n.failure_mode));
+                }
                 if !n.decision.trim().is_empty() {
                     line.push_str(" -> ");
                     line.push_str(n.decision.trim());
@@ -1064,6 +1175,35 @@ fn render_hydration_warning(
     }
     out.push('\n');
     out
+}
+
+fn render_resumption_brief(history: &[CapsuleHit]) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+
+    // Find the last intent and decision
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+    let last = recent.first()?;
+
+    let mut out = String::new();
+    out.push_str("[SYSTEM NOTE: Welcome back. A long gap was detected since the last turn. To re-orient yourself:\n");
+    if !last.capsule.intent.trim().is_empty() {
+        out.push_str(&format!(
+            "Last User Intent: \"{}\"\n",
+            last.capsule.intent.trim()
+        ));
+    }
+    if !last.capsule.decision.trim().is_empty() {
+        out.push_str(&format!(
+            "Last Agent Decision: \"{}\"\n",
+            last.capsule.decision.trim()
+        ));
+    }
+    out.push_str("Please summarize your current understanding of the task before proceeding with more code.]\n");
+
+    Some(out)
 }
 
 #[cfg(test)]

@@ -568,7 +568,7 @@ pub async fn replay(
         .sum();
 
     // Show cost warning before processing
-    if total_turns > 0 {
+    if total_turns > 0 && !no_llm {
         print_cost_warning(total_turns, use_color);
     }
 

@@ -13,13 +13,14 @@ Drift is a **Grounding Failure**. It occurs when:
 
 ## 2. Leading Symptoms for Drift
 
-Unlike Loop symptoms (which are repetitive), Drift symptoms are **Divergent**.
+Unlike Loop symptoms (which are repetitive), Drift symptoms are **Divergent** or **Stalled**.
 
 | Metric | Symbol | Definition |
 | :--- | :--- | :--- |
-| **Grounding Mismatch** | $s_{ground}$ | Disjoint set between `Decision Symbols` and `Tool Output Symbols`. |
+| **Grounding Stall** | $s_{stall}$ | User mentions paths $P_u$, but agent touches disjoint set $S_a$ ($P_u \cap S_a = \varnothing$). |
+| **Instruction Erosion** | $s_{eros}$ | Agent stops mentioning North Star symbols while production effort ($s_{eff}$) remains high. |
+| **Semantic Staticness** | $s_{stat}$ | User repeats long structural instructions verbatim (detected via Jaccard on user turns). |
 | **Path Hallucination** | $s_{path}$ | Rate of mentioned paths that do not exist in the workspace. |
-| **Knowledge Churn** | $s_{know}$ | High identifier churn ($s_{nov}$ high) combined with low validation delta. |
 | **Assumption Load** | $s_{asmp}$ | Frequency of hedging verbs ("assume", "likely", "probably") in the rationale. |
 
 ---
@@ -27,11 +28,11 @@ Unlike Loop symptoms (which are repetitive), Drift symptoms are **Divergent**.
 ## 3. The Drift Intensity Channel ($I_{drift}$)
 
 We add a third intensity to our controller:
-$$I_{drift} = w_{path} s_{path} + w_{ground} s_{ground} + w_{asmp} s_{asmp}$$
+$$I_{drift} = w_{path} s_{path} + w_{stall} s_{stall} + w_{stat} s_{stat}$$
 
 ### 3.1 State Transitions (Drift)
 - **Stable → Watch(Drift)**: $I_{drift} > 0.4$.
-- **Watch → Intervene(Drift)**: $I_{drift} > 0.7$ OR Path Hallucination count > 1.
+- **Watch → Intervene(Drift)**: $I_{drift} > 0.7$ OR Grounding Stall persists for 3 turns.
 
 ---
 
