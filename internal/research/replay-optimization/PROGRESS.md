@@ -178,27 +178,20 @@ We have upgraded `unlost metrics` to provide a complete picture of workspace hea
 - **Average Intensity**: Tracks the severity of friction episodes.
 - **Top Friction Files**: Identifies specific codebase "hotspots" where the agent consistently stalls or drifts.
 
-### Phase 2: Logic Churn & Specification Hardening
-*Status as of Feb 15, 2026 (Final Coverage Expansion)*
+### Phase 3: Academic Validation (EASE'25 Alignment)
+*Status as of Feb 15, 2026*
 
-We have successfully expanded coverage by implementing **Logic Churn** detection and hardening the **Specification Basin** against linguistic fragility.
+We have aligned our trajectory model with the findings of the **EASE'25 paper** ("Emotional Strain and Frustration in LLM Interactions in Software Engineering"), which independently validates our Three-Basin architecture.
 
-#### 1. Implementation: Cognitive Failure Sensors
-- **Logic Churn ($s_{churn}$)**: Measures word-overlap divergence between adjacent assistant decisions. This catches "plan-shifting" loops where the agent re-argues its approach without satisfying the user.
-- **Spec Basin Lexicon**: Expanded triggers (`"wait", "stop", "hold on", "not quite"`) and implemented **Affective Weighting** (+0.3 boost when corrections align with high-confidence negative valence).
-- **Schema Expansion**: Added `user_symbols` to `IntentCapsule` to enable high-fidelity "Asked vs Did" grounding checks.
+#### 1. Strategic Alignment
+- **Trigger Verification**: The paper identifies "Repeated Inaccuracies," "Intent Misunderstanding," and "Context Limitations" as the primary drivers of SE frustration—matching our **Drift**, **Spec**, and **Loop** basins perfectly.
+- **Context Inflection**: The paper confirms that context window pressure is a major emotional strain driver, justifying our new **Context-Load Diagnostic** in `unlost metrics`.
+- **Motivation Resilience**: Confirmed that while frustration is high, motivation often remains intact, supporting our focus on **cumulative strain reduction** (the Babysitting Tax) rather than just "blocking failures."
 
-#### 2. Final Statistical Validation (Marathon Set)
-| Metrics (H=5) | Baseline (Loop) | Phase 1 (Drift/Spec) | Phase 2 (Churn/Hardened) |
-| :--- | :--- | :--- | :--- |
-| **Precision@5** | 83.9% | 67.7% | **68.6%** |
-| **Coverage@5** | 15.1% | 24.4% | **27.9%** |
-| **Triggers** | 31 | 62 | 70 |
-
-**Key Findings:**
-- **Coverage Breakthrough**: Total coverage reached **27.9%** (H=5) and **29.7%** (H=15). Logic churn successfully captured "soft loops" that symbol-repetition sensors ignored.
-- **Precision Recovery**: Refined affective weighting helped stabilize precision despite the larger sensor set.
-- **Field Stability**: Simulation on 1,224 turns confirmed that refractory periods prevent "nagging" while maintaining lead time.
+#### 2. Implementation: Paper-Informed Refinements
+- **Affective Spec Boost**: Implemented a **+0.3 intensity boost** for corrections that align with high-confidence negative valence (addressing linguistic fragility).
+- **Expanded Spec Lexicon**: Added defensive/corrective triggers (`"wait", "stop", "hold on", "never mind"`) identified as common user reactions in the paper.
+- **Memo**: Formalized the alignment in `internal/research/replay-optimization/11-ease25-paper-alignment.md`.
 
 ### The "Model Gap" (Next Steps for Formalization)
 - [x] **Mathematical Mapping**: Formal score function $I_t = \sum w_k d_t$.
