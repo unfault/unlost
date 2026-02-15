@@ -14,6 +14,7 @@ WEIGHT_ALIGNMENT_DEBT = 0.45
 WEIGHT_PATH_HALLUCINATION = 0.60
 WEIGHT_GROUNDING_STALL = 0.30
 WEIGHT_INSTRUCTION_STATICNESS = 0.25
+WEIGHT_LOGIC_CHURN = 0.20
 
 THRESHOLD_WATCH = 0.5
 THRESHOLD_INTERVENE = 0.8
@@ -34,6 +35,13 @@ CORRECTION_PATTERNS = [
     "you misunderstood",
     "wrong",
     "incorrect",
+    "wait",
+    "stop",
+    "hold on",
+    "not quite",
+    "don't do",
+    "never mind",
+    "re-read",
 ]
 
 SUMMARY_CUES = [
@@ -60,7 +68,7 @@ def detect_correction(text):
     score = 0.0
     for p in CORRECTION_PATTERNS:
         if p in lower:
-            score += 0.5 if p == "actually" else 1.0
+            score += 0.5 if p in ["actually", "wait", "hold on"] else 1.0
     return min(1.0, score / 1.5)
 
 
@@ -69,6 +77,17 @@ def detect_summary_intent(text):
         return 0.0
     lower = text.lower()
     return 1.0 if any(cue in lower for cue in SUMMARY_CUES) else 0.0
+
+
+def word_overlap_churn(s1, s2):
+    if not s1 or not s2:
+        return 0.0
+    w1 = set(re.findall(r"\w+", s1.lower()))
+    w2 = set(re.findall(r"\w+", s2.lower()))
+    if not w1 or not w2:
+        return 0.0
+    intersection = w1 & w2
+    return 1.0 - (len(intersection) / max(len(w1), len(w2)))
 
 
 class TrajectoryController:
@@ -83,20 +102,28 @@ class TrajectoryController:
         self.static_streak = 0
         self.smoothed = {
             k: 0.0
-            for k in ["rep", "nov", "sem", "eff", "corr", "path", "stall", "stat"]
+            for k in [
+                "rep",
+                "nov",
+                "sem",
+                "eff",
+                "corr",
+                "path",
+                "stall",
+                "stat",
+                "churn",
+            ]
         }
 
     def update(self, turn):
         ts_ms = turn["ts_ms"]
         capsule = turn["capsule"]
 
-        # 1. Coffee Pause
         if self.last_ts_ms > 0 and (ts_ms - self.last_ts_ms) > COFFEE_PAUSE_MS:
             self.state = "stable"
             self.intensity *= COFFEE_PAUSE_DECAY
         self.last_ts_ms = ts_ms
 
-        # 2. Symptoms
         current_symbols = set(capsule.get("symbols", []))
         history_symbols = set()
         for h in self.history[-8:]:
@@ -111,11 +138,15 @@ class TrajectoryController:
         s_corr = detect_correction(capsule.get("intent", ""))
         s_summary = detect_summary_intent(capsule.get("decision", ""))
         s_path = 1.0 if capsule.get("failure_mode") == "drift" else 0.0
+        s_churn = (
+            word_overlap_churn(
+                capsule.get("decision", ""), self.history[-1].get("decision", "")
+            )
+            if self.history
+            else 0.0
+        )
 
-        # Deep Drift Sensors
         user_paths = extract_paths(capsule.get("intent", ""))
-        # We don't have direct touched_paths in replayed capsules, but we have symbols.
-        # In replay, assistant symbols are everything in the capsule symbols that isn't in intent.
         assistant_symbols = current_symbols
 
         has_stall = user_paths and not (user_paths & assistant_symbols)
@@ -148,7 +179,6 @@ class TrajectoryController:
         else:
             s_eff = 0.0
 
-        # 3. EMA
         self.smoothed["rep"] = (
             EMA_ALPHA * s_rep + (1 - EMA_ALPHA) * self.smoothed["rep"]
         )
@@ -170,12 +200,15 @@ class TrajectoryController:
         self.smoothed["stat"] = (
             EMA_ALPHA * s_stat + (1 - EMA_ALPHA) * self.smoothed["stat"]
         )
+        self.smoothed["churn"] = (
+            EMA_ALPHA * s_churn + (1 - EMA_ALPHA) * self.smoothed["churn"]
+        )
 
-        # 4. Intensity
         loop_i = (
             WEIGHT_REPETITION * self.smoothed["rep"]
             + WEIGHT_NOVELTY * self.smoothed["nov"]
             + WEIGHT_EFFORT * self.smoothed["eff"]
+            + WEIGHT_LOGIC_CHURN * self.smoothed["churn"]
         )
         spec_i = (
             WEIGHT_ALIGNMENT_DEBT * self.smoothed["corr"]
@@ -198,7 +231,6 @@ class TrajectoryController:
             v > PERSISTENCE_THRESHOLD for v in self.intensity_history
         )
 
-        # 6. Transitions
         triggered = False
         if self.state == "stable":
             if self.intensity > THRESHOLD_WATCH and slope > 0:
@@ -264,28 +296,49 @@ def main():
     trigger_counts = Counter()
     cause_counts = Counter()
 
+    total_spacing_tokens = 0
+    total_spacing_segments = 0
+
+    buckets = {}
+
     for sid, turns in sessions.items():
         if len(turns) < 3:
             continue
 
         controller = TrajectoryController(use_intent_damping=True)
         turn_results = []
+        tokens_since_last_warning = 0
+        had_warning = False
 
         for i, turn in enumerate(turns):
             triggered, intensity, cause = controller.update(turn)
             user_text = turn.get("capsule", {}).get("intent", "").lower()
             is_dispute = any(kw in user_text for kw in DISPUTE_KEYWORDS)
 
+            tokens = turn.get("usage", {}).get("tokens", {}).get("input", 0)
+            tokens_total = (
+                turn.get("usage", {}).get("tokens", {}).get("total", tokens + 200)
+            )  # Proxy total
+
+            b = (tokens // 4000) * 4000
+            if b not in buckets:
+                buckets[b] = {"turns": 0, "triggers": 0}
+            buckets[b]["turns"] += 1
+
+            tokens_since_last_warning += tokens_total
+
             if is_dispute:
                 total_disputes += 1
             if triggered:
                 trigger_counts[sid] += 1
                 cause_counts[cause] += 1
-                if cause == "spec" and cause_counts["spec"] == 1:
-                    print(f"\n[SAMPLE SPEC TRIGGER] Session {sid}, Turn {i}")
-                    print(f"Intent:   {turn['capsule'].get('intent')}")
-                    print(f"Decision: {turn['capsule'].get('decision')}")
-                    print(f"Intensity: {intensity:.2f}")
+                buckets[b]["triggers"] += 1
+
+                if had_warning:
+                    total_spacing_tokens += tokens_since_last_warning
+                    total_spacing_segments += 1
+                had_warning = True
+                tokens_since_last_warning = 0
 
             turn_results.append(
                 {
@@ -320,13 +373,25 @@ def main():
     print(f"Total Disputes:   {total_disputes}")
     print(f"Precision@5:      {precision:.1%}")
     print(f"Coverage@5:       {coverage:.1%}")
+
+    if total_spacing_segments > 0:
+        print(
+            f"Avg Interval:     {total_spacing_tokens / total_spacing_segments:.0f} tokens between warnings"
+        )
+
     print("\nTrigger Causes:")
     for cause, count in cause_counts.items():
         print(f"  {cause:8}: {count:>3} ({count / total_triggers:.1%})")
 
-    print("\nSessions with most interventions:")
-    for sid, count in trigger_counts.most_common(5):
-        print(f"  {sid}: {count} interventions")
+    print("\n=== Friction vs Context Size (Input Tokens) ===")
+    print("  Bucket      | Turns | Warnings | Rate (Warnings/100 Turns)")
+    print("--------------|-------|----------|---------------------------")
+    for b in sorted(buckets.keys()):
+        stats = buckets[b]
+        rate = (stats["triggers"] / stats["turns"] * 100) if stats["turns"] > 0 else 0
+        print(
+            f"  {b:>5} - {b + 4000:>5} | {stats['turns']:>5} | {stats['triggers']:>8} | {rate:>5.1f}%"
+        )
 
 
 if __name__ == "__main__":
