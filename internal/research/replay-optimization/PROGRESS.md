@@ -1,4 +1,14 @@
-# Research Progress: Extraction Granularity for Agent Memory
+## Checkpoint: v0.3.0 Release (Feb 15, 2026)
+**Core Research Goal Reached**: Unlost now functions as a proactive trajectory-based regulator.
+
+- **Baseline Established**: Three-basin architecture (Loop/Spec/Drift) validated on Marathon/Sprint sets.
+- **Academic Alignment**: Robust mapping to EASE'25 findings (repeated inaccuracies/intent misunderstanding).
+- **Tooling Ready**: `unlost metrics` provides high-fidelity "Cognitive Mirror" analytics.
+- **Next Horizon**: Focus shifts to Terminal UX (Ambient vs Structural) and IDE integration.
+
+---
+
+## Research Progress: Extraction Granularity for Agent Memory
 
 This file serves as the "living memory" of our research to ensure continuity and accuracy as we progress.
 

@@ -1,0 +1,230 @@
+[
+  {
+    "turn_id": "msg_c5d51e707001QDq47WdqyntmnU:msg_c5d535e460013pszmUkWAavtaX",
+    "ground_truth": {
+      "category": "chore",
+      "intent": "Understand unlost codebase and architecture",
+      "decision": "The agent explored the codebase and provided a comprehensive summary of its purpose (local-first agent orientation), architecture (modular pipeline with LanceDB/fastembed), and key components (Governor, Emotion detection, Companion Flow).",
+      "rationale": "The user requested a review of the workspace to set context for a subsequent question about replay optimization.",
+      "symbols": [
+        "IntentCapsule",
+        "Governor",
+        "Companion Flow",
+        "LanceDB",
+        "fastembed",
+        "ONNX"
+      ],
+      "next_steps": ["Address the slow replay process"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "What is unlost's architecture?",
+      "How does unlost store capsules?",
+      "overview of the codebase"
+    ]
+  },
+  {
+    "turn_id": "msg_c5d55f491001bxkwCkhB2i55QI:msg_c5d55f49a001rZ0js4fYfw1F1r",
+    "ground_truth": {
+      "category": "question",
+      "intent": "Optimize history reconstruction (replay) performance",
+      "decision": "The agent acknowledged the slow replay process (due to sequential LLM calls) and committed to exploring architectural designs and algorithms for speedup or acceptable compromises.",
+      "rationale": "Current replay is slow because each turn requires an LLM evaluation for structured data extraction.",
+      "symbols": [
+        "unlost shim replay",
+        "IntentCapsule"
+      ],
+      "next_steps": ["Explore parallel LLM calls", "Explore batching turns"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "why is replay slow?",
+      "optimizing history reconstruction",
+      "replay performance"
+    ]
+  },
+  {
+    "turn_id": "msg_b80a504e1001a1PYY3FsT2PZbT:msg_b80a504f20011QNcTEUdqlS6PZ",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Stash current homepage and prepare for rebuild",
+      "decision": "Decided to move the current `index.astro` to `index.astro.stashed` and commit it as a snapshot before starting a fresh implementation.",
+      "rationale": "The user encouraged committing 'as-is' to preserve state before a major change.",
+      "symbols": [
+        "www/src/pages/index.astro",
+        "www/src/pages/_index.astro.stashed",
+        "www/src/components/HeroAnimation.astro"
+      ],
+      "next_steps": ["Rebuild index.astro from scratch"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "stashing the homepage",
+      "why was HeroAnimation.astro touched?",
+      "committing current state before rebuild"
+    ]
+  },
+  {
+    "turn_id": "msg_b80ae9895001wxEUlPaQ4Hp4oW:msg_b80aec410001gg5ytxpIpCgXj6",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Rebuild the homepage with a minimal 'show, don't sell' structure",
+      "decision": "Decided to start over on the landing page to move away from a traditional SaaS framing toward a developer-native, functional vibe.",
+      "rationale": "The previous attempt didn't fully capture the desired 'developer-native' spirit, necessitating a retry with a different conceptual approach.",
+      "symbols": [
+        "www/src/pages/index.astro",
+        "global nav"
+      ],
+      "next_steps": ["Implement minimal landing page structure"],
+      "failure_mode": "retry_spiral",
+      "failure_signals": "User explicitly asked to 'try again' and the assistant acknowledged rewriting from scratch 'again'."
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "why did we restart the landing page?",
+      "dev-native landing page spirit",
+      "retrying the homepage implementation"
+    ]
+  },
+  {
+    "turn_id": "msg_b83473a79001RNGkbEuFycHBoc:msg_b83473b05002OoAkfItQ7EOm2k",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Discuss and implement CLI integration for VSCode extension installation",
+      "decision": "Agreed on adding a button/link in the hero section to [Install VSCode Extension].",
+      "rationale": "To make the onboarding flow as simple as possible for developers.",
+      "symbols": [
+        "CLI",
+        "unfault",
+        "code",
+        "VSCode",
+        "intellij",
+        "neovim",
+        "/tmp/unfault.vsix"
+      ],
+      "next_steps": ["Add install button to hero"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "how to install the vscode extension?",
+      "onboarding flow for devs",
+      "CLI install button"
+    ]
+  },
+  {
+    "turn_id": "msg_c5d646a5e001lKe8VsITuCbfUn:msg_c5d646a6d002q9h4DEVYYBoX2o",
+    "ground_truth": {
+      "category": "chore",
+      "intent": "Analyze data granularity requirements for memory system tasks",
+      "decision": "Identified that search, friction, and recall have different information requirements (granularity). Planned to map these requirements to optimize extraction.",
+      "rationale": "Understanding minimal information needs is key to speeding up the replay process without losing utility.",
+      "symbols": [
+        "recall",
+        "friction",
+        "query",
+        "granularity"
+      ],
+      "next_steps": ["Map requirements to optimize extraction"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "what level of granularity do we need?",
+      "dimensions of utility",
+      "optimizing extraction for specific tasks"
+    ]
+  },
+  {
+    "turn_id": "msg_b833995c7001quDT4IQ2tWoyPw:msg_b8339962f002zvpgVaajuAuyXp",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Implement IDE Left Sidebar with Code Insights and Ask-input",
+      "decision": "Started implementing the IDE sidebar UI components including the search/ask input field and insights panel.",
+      "rationale": "To provide a central location for the user to interact with the agent and see codebase insights.",
+      "symbols": [
+        "www/src/components/Sidebar.astro",
+        "www/src/components/AskInput.astro"
+      ],
+      "next_steps": ["Implement sidebar UI", "Implement insights panel"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "IDE sidebar implementation",
+      "where is the ask input defined?",
+      "sidebar code insights"
+    ]
+  },
+  {
+    "turn_id": "msg_b830cb6f8001sY0wQkOfb4SHK2:msg_b830ef840002X7JDWLXSm2dXOR",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Implement Hero Animation and CodeLens demo UX",
+      "decision": "Refined the hero section animation to better demonstrate the CodeLens functionality visually.",
+      "rationale": "Visual demonstration is key to explaining how Unfault works in the editor flow.",
+      "symbols": [
+        "routes.py",
+        "checkout.py",
+        "payments.py",
+        "www/src/pages/index.astro",
+        "CodeLens",
+        "sidebar",
+        "checkout",
+        "charge"
+      ],
+      "next_steps": ["Finish HeroAnimation animation"],
+      "failure_mode": "none",
+      "failure_signals": null
+    },
+    "is_pivotal": false,
+    "target_queries": [
+      "hero animation details",
+      "how does the codelens demo work?",
+      "refining the hero section"
+    ]
+  },
+  {
+    "turn_id": "msg_b80ae9895001wxEUlPaQ4Hp4oW:msg_b80b0c41b001T0qUBPBIAye8NH",
+    "ground_truth": {
+      "category": "feature",
+      "intent": "Retry landing page implementation with minimal structure",
+      "decision": "Multiple retries on the landing page structure as the user was not satisfied with the SaaS-like framing.",
+      "rationale": "Repetitive work on the same file (index.astro) due to misalignment on design spirit.",
+      "symbols": ["www/src/pages/index.astro"],
+      "next_steps": ["Finalize minimal landing page"],
+      "failure_mode": "retry_spiral",
+      "failure_signals": "User is retrying the same task multiple times."
+    },
+    "is_pivotal": true,
+    "target_queries": ["stuck on landing page", "rebuilding index.astro again"]
+  },
+  {
+    "turn_id": "msg_c5d60ee84001N6piPnxKxsSJB7:msg_c5d62729f002tZseC6PCD1U7pJ",
+    "ground_truth": {
+      "category": "question",
+      "intent": "Think like a researcher about the problem space, hypothesis and idea",
+      "decision": "Identified the core research questions and hypothesis for replay optimization.",
+      "rationale": "User explicitly asked to 'think like a researcher' instead of just focusing on implementation.",
+      "symbols": [],
+      "next_steps": ["Formalize hypotheses", "Design methodology"],
+      "failure_mode": "retry_spiral",
+      "failure_signals": "Turn repeated 4 times with same user text."
+    },
+    "is_pivotal": true,
+    "target_queries": [
+      "thinking like a researcher",
+      "what is the problem space?",
+      "formalizing hypothesis"
+    ]
+  }
+]
