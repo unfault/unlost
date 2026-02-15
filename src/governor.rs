@@ -122,6 +122,7 @@ pub struct TrajectoryUpdate {
     pub note: Option<String>,
     pub intensity: f32,
     pub cause: String,
+    pub channels: SymptomChannels,
 }
 
 impl TrajectoryController {
@@ -365,6 +366,7 @@ impl TrajectoryController {
             note,
             intensity: self.intensity,
             cause: cause.to_string(),
+            channels: self.smoothed_channels.clone(),
         }
     }
 

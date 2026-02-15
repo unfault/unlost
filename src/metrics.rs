@@ -33,6 +33,9 @@ pub(crate) enum MetricsEvent {
         user_emotion: Option<String>,
         intensity: f32,
         cause: String,
+        /// Top contributing symptom channels at trigger time
+        #[serde(default)]
+        top_channels: std::collections::HashMap<String, f32>,
     },
     CommandQuery {
         ts_ms: i64,
@@ -124,9 +127,43 @@ pub(crate) fn record_friction_warning_injected(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     intensity: f32,
     cause: String,
+    channels: Option<&crate::types::SymptomChannels>,
 ) -> anyhow::Result<()> {
     let ws_dir = crate::unlost_workspace_dir(workspace_id);
     let path = ws_dir.join("metrics.jsonl");
+
+    let mut top_channels = std::collections::HashMap::new();
+    if let Some(c) = channels {
+        // Only include channels with non-zero contribution
+        if c.repetition > 0.01 {
+            top_channels.insert("repetition".to_string(), c.repetition);
+        }
+        if c.novelty_collapse > 0.01 {
+            top_channels.insert("novelty".to_string(), c.novelty_collapse);
+        }
+        if c.semantic_stall > 0.01 {
+            top_channels.insert("semantic".to_string(), c.semantic_stall);
+        }
+        if c.effort_spike > 0.01 {
+            top_channels.insert("effort".to_string(), c.effort_spike);
+        }
+        if c.alignment_debt > 0.01 {
+            top_channels.insert("alignment".to_string(), c.alignment_debt);
+        }
+        if c.path_hallucination > 0.01 {
+            top_channels.insert("hallucination".to_string(), c.path_hallucination);
+        }
+        if c.grounding_stall > 0.01 {
+            top_channels.insert("stall".to_string(), c.grounding_stall);
+        }
+        if c.instruction_staticness > 0.01 {
+            top_channels.insert("staticness".to_string(), c.instruction_staticness);
+        }
+        if c.logic_churn > 0.01 {
+            top_channels.insert("churn".to_string(), c.logic_churn);
+        }
+    }
+
     let ev = MetricsEvent::FrictionWarningInjected {
         ts_ms: crate::now_ms(),
         conn_id,
@@ -136,6 +173,7 @@ pub(crate) fn record_friction_warning_injected(
         user_emotion: user_emotion.map(|e| e.label.clone()),
         intensity,
         cause,
+        top_channels,
     };
     append_event(&path, &ev)
 }
@@ -197,6 +235,16 @@ impl FailureModeCounts {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ExpensiveIntervention {
+    pub(crate) ts_ms: i64,
+    pub(crate) cause: String,
+    pub(crate) intensity: f32,
+    pub(crate) symbols: Vec<String>,
+    pub(crate) cost_next_5: f64,
+    pub(crate) tokens_next_5: i64,
+}
+
 #[derive(Default, Debug, Clone)]
 pub(crate) struct MetricsSummary {
     pub(crate) capsules: u64,
@@ -217,6 +265,14 @@ pub(crate) struct MetricsSummary {
     /// Breakdown of friction rate by input token buckets (context growth proxy)
     /// Key is lower bound of bucket (e.g. 0, 4000, 8000), value is (warnings, total_turns_in_bucket)
     pub(crate) friction_by_input_bucket: std::collections::BTreeMap<i64, (u64, i64)>,
+    /// Top expensive interventions (by cost of next 5 turns)
+    pub(crate) top_expensive_interventions: Vec<ExpensiveIntervention>,
+    /// Stats for the last 24 hours
+    pub(crate) recent_capsules: u64,
+    pub(crate) recent_cost_total: f64,
+    pub(crate) recent_friction_warnings: u64,
+    /// Contributions of individual symptom channels to all warnings
+    pub(crate) channel_contributions: std::collections::HashMap<String, f32>,
 }
 
 pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<MetricsSummary> {
@@ -232,6 +288,9 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
     let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =
         std::collections::HashMap::new();
 
+    let now = crate::now_ms();
+    let day_ms = 24 * 60 * 60 * 1000;
+
     for line in reader.lines() {
         let Ok(line) = line else { continue };
         if line.trim().is_empty() {
@@ -244,6 +303,7 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
         // Pass 1: Global totals and session grouping
         match &ev {
             MetricsEvent::CapsuleSaved {
+                ts_ms,
                 tokens_total,
                 cost,
                 paths_checked,
@@ -253,11 +313,17 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 ..
             } => {
                 out.capsules += 1;
+                if now - *ts_ms < day_ms {
+                    out.recent_capsules += 1;
+                }
                 if let Some(t) = tokens_total {
                     out.tokens_total = out.tokens_total.saturating_add(*t);
                 }
                 if let Some(c) = cost {
                     out.cost_total += c;
+                    if now - *ts_ms < day_ms {
+                        out.recent_cost_total += c;
+                    }
                 }
                 out.drift_paths_checked += *paths_checked as u64;
                 out.drift_paths_missing += *paths_missing as u64;
@@ -282,17 +348,25 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 }
             }
             MetricsEvent::FrictionWarningInjected {
+                ts_ms,
                 intensity,
                 cause,
                 symbols,
                 agent_session_id,
+                top_channels,
                 ..
             } => {
                 out.friction_warnings += 1;
+                if now - *ts_ms < day_ms {
+                    out.recent_friction_warnings += 1;
+                }
                 out.friction_intensity_total += *intensity;
                 *out.friction_by_cause.entry(cause.clone()).or_insert(0) += 1;
                 for s in symbols {
                     *out.friction_by_symbol.entry(s.clone()).or_insert(0) += 1;
+                }
+                for (chan, val) in top_channels {
+                    *out.channel_contributions.entry(chan.clone()).or_insert(0.0) += *val;
                 }
                 if let Some(sid) = agent_session_id {
                     session_events
@@ -313,6 +387,7 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
     // Pass 2: Session-level spacing and bucket analysis
     let mut total_spacing_tokens = 0i64;
     let mut total_spacing_segments = 0u64;
+    let mut all_expensive_interventions = Vec::new();
 
     for events in session_events.values_mut() {
         events.sort_by_key(|e| match e {
@@ -326,7 +401,7 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
         let mut had_warning = false;
         let mut last_capsule_bucket = 0i64;
 
-        for ev in events {
+        for (idx, ev) in events.iter().enumerate() {
             match ev {
                 MetricsEvent::CapsuleSaved {
                     tokens_input,
@@ -345,7 +420,13 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                         .or_default();
                     b.1 += 1; // Increment turn count N
                 }
-                MetricsEvent::FrictionWarningInjected { .. } => {
+                MetricsEvent::FrictionWarningInjected {
+                    ts_ms,
+                    cause,
+                    intensity,
+                    symbols,
+                    ..
+                } => {
                     if had_warning {
                         total_spacing_tokens += tokens_since_last_warning;
                         total_spacing_segments += 1;
@@ -359,11 +440,45 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                         .entry(last_capsule_bucket)
                         .or_default();
                     b.0 += 1;
+
+                    // Calculate cost of next 5 turns
+                    let mut cost_next_5 = 0.0;
+                    let mut tokens_next_5 = 0i64;
+                    let mut count = 0;
+                    for next_ev in events.iter().skip(idx + 1) {
+                        if let MetricsEvent::CapsuleSaved {
+                            cost, tokens_total, ..
+                        } = next_ev
+                        {
+                            if let Some(c) = cost {
+                                cost_next_5 += c;
+                            }
+                            if let Some(t) = tokens_total {
+                                tokens_next_5 += t;
+                            }
+                            count += 1;
+                            if count >= 5 {
+                                break;
+                            }
+                        }
+                    }
+
+                    all_expensive_interventions.push(ExpensiveIntervention {
+                        ts_ms: *ts_ms,
+                        cause: cause.clone(),
+                        intensity: *intensity,
+                        symbols: symbols.clone(),
+                        cost_next_5,
+                        tokens_next_5,
+                    });
                 }
                 _ => {}
             }
         }
     }
+
+    all_expensive_interventions.sort_by(|a, b| b.cost_next_5.partial_cmp(&a.cost_next_5).unwrap());
+    out.top_expensive_interventions = all_expensive_interventions.into_iter().take(5).collect();
 
     if total_spacing_segments > 0 {
         out.avg_tokens_between_interventions =

@@ -346,6 +346,7 @@ impl Flow {
                 user_emotion.as_ref(),
                 update.intensity,
                 update.cause,
+                Some(&update.channels),
             );
 
             return CheckResult { note: Some(note), error: None };

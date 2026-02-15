@@ -256,6 +256,7 @@ async fn serve_request(
                             current_user_emotion.as_ref(),
                             1.0, // Legacy warnings are high confidence
                             "legacy".to_string(),
+                            None,
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
                             .unwrap_or(req_body_bytes)
@@ -474,6 +475,7 @@ async fn proxy_request(
                             current_user_emotion.as_ref(),
                             1.0,
                             "legacy".to_string(),
+                            None,
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &request_path)
                             .unwrap_or(req_body_bytes)
