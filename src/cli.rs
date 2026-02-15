@@ -66,6 +66,7 @@ pub enum OutputFormat {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Global recorder that multiplexes workspaces via base URL
+    #[command(hide = true)]
     Serve {
         /// Bind address. Accepts either `port` or `ip:port`.
         /// Examples: `3000`, `127.0.0.1:3000`.
@@ -82,7 +83,7 @@ pub enum Command {
     },
 
     /// Record live LLM conversations (captures and summarizes)
-    #[command(alias = "proxy")]
+    #[command(alias = "proxy", hide = true)]
     Record {
         /// Bind address. Accepts either `port` or `ip:port`.
         /// Examples: `3000`, `0.0.0.0:3000`.
@@ -219,6 +220,12 @@ pub enum Command {
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
+    },
+
+    /// Replay/backfill agent transcripts into unlost
+    Replay {
+        #[command(subcommand)]
+        command: ReplayCommand,
     },
 
     /// Inspect stored capsules for this workspace

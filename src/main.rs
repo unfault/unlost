@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Default to "info" for shim (we want to see friction/emotion logs),
     // "warn" for everything else
-    let is_shim = matches!(&cli.command, Some(Command::Shim { .. }));
+    let is_shim = matches!(&cli.command, Some(Command::Shim { .. }) | Some(Command::Replay { .. }));
     let default_level = if is_shim { "info" } else { "warn" };
     let log_level = cli
         .log
@@ -200,6 +200,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Reindex { path, yes } => {
             unlost::commands::reindex::run(path, yes).await?;
         }
+        Command::Replay { command } => {
+            handle_replay(command).await?;
+        }
         Command::Emotion { text } => {
             unlost::commands::emotion::run(text).await?;
         }
@@ -216,51 +219,58 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 unlost::companion::shims::claude::run(embed_model, embed_cache_dir).await?;
             }
-            ShimCommand::Replay { command } => match command {
-                ReplayCommand::Claude {
-                    path,
-                    transcript_path,
-                    session_id,
-                    from_start,
-                    dedupe,
-                    no_llm,
-                    embed_model,
-                    embed_cache_dir,
-                } => {
-                    unlost::companion::shims::claude::replay(
-                        path,
-                        transcript_path,
-                        session_id,
-                        from_start,
-                        dedupe,
-                        no_llm,
-                        embed_model,
-                        embed_cache_dir,
-                    )
-                    .await?;
-                }
-                ReplayCommand::Opencode {
-                    path,
-                    dedupe,
-                    no_llm,
-                    embed_model,
-                    embed_cache_dir,
-                } => {
-                    unlost::companion::shims::opencode::replay(
-                        path,
-                        dedupe,
-                        no_llm,
-                        embed_model,
-                        embed_cache_dir,
-                    )
-                    .await?;
-                }
-            },
+            ShimCommand::Replay { command } => {
+                handle_replay(command).await?;
+            }
         },
         Command::Where { path } => {
             unlost::commands::where_cmd::run(path)?;
         }
     }
 
+    Ok(())
+}
+
+async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
+    match command {
+        ReplayCommand::Claude {
+            path,
+            transcript_path,
+            session_id,
+            from_start,
+            dedupe,
+            no_llm,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::companion::shims::claude::replay(
+                path,
+                transcript_path,
+                session_id,
+                from_start,
+                dedupe,
+                no_llm,
+                embed_model,
+                embed_cache_dir,
+            )
+            .await?;
+        }
+        ReplayCommand::Opencode {
+            path,
+            dedupe,
+            no_llm,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::companion::shims::opencode::replay(
+                path,
+                dedupe,
+                no_llm,
+                embed_model,
+                embed_cache_dir,
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
