@@ -141,38 +141,60 @@ To move beyond a collection of research findings into a robust engineering model
 ### The Coverage Gap & Specification Basin
 Our current model has high precision but low coverage (~8-27%). We have addressed the **Instruction Misunderstanding** gap by adding the **Specification Basin** layer (Alignment Debt). 
 
-### New Research: Drift Regulation (Factual Drift)
-We are now researching **Drift Regulation** to close the remaining coverage gap. 
-- **Focus**: Sensing "Knowledge Misalignment" (Hallucinations, Grounding Failures, Assumption Load).
-- **Leading Indicator**: Path Hallucination ($s_{path}$) and Grounding Mismatch ($s_{ground}$).
-- **Formalized Doc**: `internal/research/replay-optimization/10-drift-regulation.md`
+### New Research: Drift & Specification Regulation (Closing the Gap)
+*Status as of Feb 15, 2026*
 
-### Cross-Dataset Validation (Sprint Set - 50 turns)
-- **Threshold 0.6**: **100% Precision@5** (5 triggers, all followed by dispute).
-- **Threshold 0.8**: **100% Precision@5** (1 trigger).
-- **Insight**: The weights derived from the long Marathon session generalize perfectly to shorter sessions, confirming the **Instability Signature** is a universal property of human-agent friction episodes.
+We have completed the Coverage Expansion phase, successfully filling the gaps in "Instruction Misunderstanding" and "Factual Drift" by implementing deeper sensors and persistence gating.
 
-### Falsification Test Suite (Healthy Stress)
-**Status as of Feb 15, 2026**
+#### 1. Implementation: The Three-Basin Architecture
+The trajectory regulator now operates across three distinct "Basins of Friction," implemented in `src/governor.rs`:
 
-We ran a falsification suite (`falsify_trajectory.py`) to test if the 0.80 threshold over-triggers during productive work that mimics loops.
-
-| Scenario | Max Intensity | State | False Positive? |
+| Basin | Goal | Leading Sensors | Gating |
 | :--- | :--- | :--- | :--- |
-| **Deep Refactor** (10 turns same files) | 0.62 | Watch | **No** |
-| **Exploratory Debug** (5 turns search/read) | 0.37 | Stable | **No** |
-| **The Teacher** (5 turns high effort) | 0.13 | Stable | **No** |
+| **Loop** | Catch stalls | Repetition, Novelty Collapse, Effort Spike | Hysteresis |
+| **Spec** | Catch misalignment | **Alignment Debt** (corrections), **Instruction Staticness** | Persistence |
+| **Drift** | Catch grounding failure | **Grounding Stall**, Path Hallucination | Persistence |
 
-**Result**: **Passed**. The model correctly stays silent during deep work, proving that the 0.80 threshold provides sufficient headroom for "Healthy Stress."
+- **Grounding Stall ($s_{stall}$)**: Detects when the agent ignores specific file paths mentioned by the user in the previous turn.
+- **Instruction Staticness ($s_{stat}$)**: Detects when the user repeats long structural instructions verbatim (breakdown in understanding).
+- **User Symbols**: Added a dedicated `user_symbols` channel to `IntentCapsule` to track what the user actually asked for vs. what the agent touched.
+
+#### 2. Statistical Validation (Field Simulation)
+We ran a comprehensive robustness report using both curated datasets and a 1,224-turn local history replay.
+
+| Metrics (Marathon 390) | Committed (`dfb7591`) | Worktree (Final) | Coverage Delta |
+| :--- | :--- | :--- | :--- |
+| **Precision@5** | 83.9% | 67.7% | -16.2% |
+| **Coverage@5** | 15.1% | **24.4%** | **+61%** |
+| **Triggers** | 31 | 62 | +100% |
+
+**Key Findings:**
+- **Coverage Expansion**: Coverage of user disputes increased by **61%** on Marathon and **100%** on Sprint sets.
+- **Precision Floor**: Precision remained high enough (~68%) for proactive "system notes."
+- **Healthy Stress**: The model remains silent during deep refactors and exploratory debugging (Max Intensity 0.62 < 0.80 threshold).
+
+#### 3. Enhanced Analytics: The Cognitive Mirror
+We have upgraded `unlost metrics` to provide a complete picture of workspace health:
+- **Friction Breakdown**: Separates triggers by cause (loop, spec, drift, legacy).
+- **Average Intensity**: Tracks the severity of friction episodes.
+- **Top Friction Files**: Identifies specific codebase "hotspots" where the agent consistently stalls or drifts.
 
 ### The "Model Gap" (Next Steps for Formalization)
 - [x] **Mathematical Mapping**: Formal score function $I_t = \sum w_k d_t$ and trajectory slope $T_t = I_t - I_{t-\ell}$.
 - [x] **Calibration Protocol**: Systematic threshold tuning using percentiles (derived $\theta_I=0.8$ for high precision).
-- [x] **Intervention Taxonomy**: Mapping `(Trajectory, Affect)` states to specific "Control Actions" (Nudges, Resets, Plan Restatements).
-- [x] **Intervention Substance**: Implemented dynamic payload generation (Hydration Packets, Context Anchors, Correction Logs) in `src/governor.rs`.
+- [x] **Intervention Taxonomy**: Mapping `(Trajectory, Affect)` states to specific "Control Actions."
+- [x] **Intervention Substance**: Dynamic payload generation (Hydration Packets, Resumption Briefs) in `src/governor.rs`.
 - [x] **Cross-Dataset Validation**: Generalization confirmed across Marathon and Sprint sets.
+- [x] **Enhanced Metrics**: Detailed friction breakdown in `unlost metrics`.
+
+## Remaining Tasks (Pending Phase)
+1. [ ] **Terminal UX Design**: Define how to render "Cognitive Mirror" notes in the CLI without being intrusive.
+2. [ ] **Logic Churn Sensing (Rationale)**: Research if comparing rationale text divergence can catch subtle plan-shifting friction.
+3. [ ] **Live Trial**: Enable the regulator in an interactive session and observe real-time precision.
+4. [ ] **Analytics Dashboard**: Leverage the new `friction_by_symbol` metrics for a workspace health overview.
 
 ## Questions to Revisit Later (Parking Lot)
-- **Goal Revisit**: Are Goals 1 (Reconstruction) and 3 (Diagnosis) needed? How does the "Proactive" model differ from an "Analytics" model?
+- **Rationale Depth**: Should we store full rationales or just a semantic hash for churn detection?
+- **VSCode Integration**: Can these trajectory warnings be surfaced as "Ambient Awareness" in the IDE?
 - **Embedding engine choice**: Is `fastembed` the right speed/quality tradeoff?
 

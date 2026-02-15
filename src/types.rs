@@ -108,6 +108,9 @@ pub struct IntentCapsule {
     pub rationale: String,
     pub next_steps: Vec<String>,
     pub symbols: Vec<String>,
+    /// Symbols mentioned by the user in this turn
+    #[serde(default)]
+    pub user_symbols: Vec<String>,
     /// Detected failure mode: none, drift, rediscovery, decision_conflict, retry_spiral, false_progress, or unbounded_horizon
     #[serde(default)]
     #[schemars(schema_with = "failure_mode_schema")]
@@ -162,6 +165,7 @@ mod tests {
             rationale: "test_rationale".to_string(),
             next_steps: vec!["step1".to_string(), "step2".to_string()],
             symbols: vec!["symbol1".to_string(), "symbol2".to_string()],
+            user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
         };
@@ -194,6 +198,7 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec!["auth.rs".to_string()],
+            user_symbols: vec![],
             failure_mode: FailureMode::RetrySpiral,
             failure_signals: Some(
                 "User expressed frustration, same symbols touched 3 times".to_string(),
@@ -272,6 +277,7 @@ mod tests {
             rationale: "rationale1".to_string(),
             next_steps: vec!["action1".to_string()],
             symbols: vec!["symbol1".to_string()],
+            user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
         }];
@@ -328,6 +334,7 @@ mod tests {
             rationale: "test".to_string(),
             next_steps: vec![],
             symbols: vec![],
+            user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
         };
@@ -371,6 +378,7 @@ mod tests {
             rationale: "".to_string(),
             next_steps: vec![],
             symbols: vec![],
+            user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
         };

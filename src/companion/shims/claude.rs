@@ -719,7 +719,7 @@ async fn handle_user_prompt_submit(flow: &mut Flow, input: &HookInput) -> anyhow
             agent_session_id: Some(input.session_id.clone()),
         };
 
-    let result = flow.check(event).await;
+    let result = flow.check_friction(event).await;
 
     // Output hook response
     let output = if let Some(note) = result.note {

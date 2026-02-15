@@ -45,6 +45,39 @@ pub fn run(path: String) -> anyhow::Result<()> {
         "retry_spiral:     {} friction warnings injected",
         summary.friction_warnings
     );
+    if summary.friction_warnings > 0 {
+        println!(
+            "  loop:             {}",
+            summary.friction_by_cause.get("loop").unwrap_or(&0)
+        );
+        println!(
+            "  spec:             {}",
+            summary.friction_by_cause.get("spec").unwrap_or(&0)
+        );
+        println!(
+            "  drift:            {}",
+            summary.friction_by_cause.get("drift").unwrap_or(&0)
+        );
+        println!(
+            "  legacy:           {}",
+            summary.friction_by_cause.get("legacy").unwrap_or(&0)
+        );
+        if summary.friction_warnings > 0 {
+            println!(
+                "  avg intensity:    {:.2}",
+                summary.friction_intensity_total / (summary.friction_warnings as f32)
+            );
+        }
+
+        if !summary.friction_by_symbol.is_empty() {
+            println!("\n=== Top Friction Files ===");
+            let mut top: Vec<_> = summary.friction_by_symbol.iter().collect();
+            top.sort_by(|a, b| b.1.cmp(a.1));
+            for (sym, count) in top.iter().take(5) {
+                println!("  {:32}: {} warnings", sym, count);
+            }
+        }
+    }
     println!();
 
     println!("=== User Engagement ===");

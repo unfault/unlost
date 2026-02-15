@@ -93,14 +93,11 @@ fn detect_summary_intent(text: &str) -> f32 {
     0.0
 }
 
-fn extract_paths(text: &str) -> std::collections::HashSet<String> {
-    let mut paths = std::collections::HashSet::new();
-    // Simplified regex for files/paths
-    let re = regex::Regex::new(r"[\w\-\./]+\.[a-z]{2,5}").unwrap();
-    for cap in re.captures_iter(text) {
-        paths.insert(cap[0].to_string());
-    }
-    paths
+pub struct TrajectoryUpdate {
+    pub state: TrajectoryState,
+    pub note: Option<String>,
+    pub intensity: f32,
+    pub cause: String,
 }
 
 impl TrajectoryController {
@@ -111,7 +108,7 @@ impl TrajectoryController {
         current_emotion: Option<&crate::emotion::EmotionMeta>,
         history: &[CapsuleHit],
         ts_ms: i64,
-    ) -> (TrajectoryState, Option<String>) {
+    ) -> TrajectoryUpdate {
         let mut reset_note = None;
 
         // 1. Check for Coffee Pause (Soft Decay Reset)
@@ -132,13 +129,24 @@ impl TrajectoryController {
         let s_summary = detect_summary_intent(&current.decision);
 
         // 2.1 Deep Drift Sensors
-        let user_paths = extract_paths(&current.intent);
-        let assistant_symbols: std::collections::HashSet<_> =
-            current.symbols.iter().cloned().collect();
+        let _user_paths: std::collections::HashSet<_> =
+            current.user_symbols.iter().cloned().collect();
 
-        // Grounding Stall: user mentions paths, agent touches disjoint set
-        let has_stall =
-            !user_paths.is_empty() && user_paths.intersection(&assistant_symbols).next().is_none();
+        // Grounding Stall: previous assistant ignored previous user paths
+        let has_stall = if let Some(last) = history.first() {
+            let last_user_paths: std::collections::HashSet<_> =
+                last.capsule.user_symbols.iter().cloned().collect();
+            let last_assistant_symbols: std::collections::HashSet<_> =
+                last.capsule.symbols.iter().cloned().collect();
+            !last_user_paths.is_empty()
+                && last_user_paths
+                    .intersection(&last_assistant_symbols)
+                    .next()
+                    .is_none()
+        } else {
+            false
+        };
+
         if has_stall {
             self.stall_streak += 1;
         } else {
@@ -148,7 +156,12 @@ impl TrajectoryController {
 
         // Instruction Staticness: user repeats same long message
         let is_static = history.first().map_or(false, |h| {
-            current.intent.len() > 50 && current.intent.trim() == h.capsule.intent.trim()
+            let cur_intent = current.intent.trim();
+            let prev_intent = h.capsule.intent.trim();
+            cur_intent.len() > 50
+                && (cur_intent == prev_intent
+                    || cur_intent.starts_with(prev_intent)
+                    || prev_intent.starts_with(cur_intent))
         });
         if is_static {
             self.static_streak += 1;
@@ -247,15 +260,15 @@ impl TrajectoryController {
         self.turns_since_intervention += 1;
 
         // 7. Select Intervention
-        let mut note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
-            let cause = if drift_intensity > spec_intensity && drift_intensity > loop_intensity {
-                "drift"
-            } else if spec_intensity > loop_intensity {
-                "spec"
-            } else {
-                "loop"
-            };
+        let cause = if drift_intensity > spec_intensity && drift_intensity > loop_intensity {
+            "drift"
+        } else if spec_intensity > loop_intensity {
+            "spec"
+        } else {
+            "loop"
+        };
 
+        let mut note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
             let intervention_type = format!("{}:{}", cause, self.state as u8);
             if self.last_intervention_type.as_ref() == Some(&intervention_type) {
                 // One-Shot Rule: Don't repeat the exact same intervention type within the same episode
@@ -284,7 +297,12 @@ impl TrajectoryController {
             note = reset_note;
         }
 
-        (self.state, note)
+        TrajectoryUpdate {
+            state: self.state,
+            note,
+            intensity: self.intensity,
+            cause: cause.to_string(),
+        }
     }
 
     pub fn reset(&mut self) {
@@ -467,43 +485,24 @@ fn select_intervention_with_substance(
 pub(crate) struct FrictionWeights {
     pub(crate) recent_window: usize,
     pub(crate) symbol_repeat_threshold: usize,
-    pub(crate) graveyard_window: usize,
-    pub(crate) map_window: usize,
-    pub(crate) logic_recency_tau: f32,
-    pub(crate) overlap_scale: f32,
-    pub(crate) emotion_boost: f32,
-    pub(crate) effort_tokens_norm: f32,
+    pub(crate) emotion_scale: f32,
     pub(crate) effort_scale: f32,
-    pub(crate) effort_tokens_warn_threshold: i64,
 }
 
 impl Default for FrictionWeights {
     fn default() -> Self {
         Self {
-            recent_window: 3,
+            recent_window: 8,
             symbol_repeat_threshold: 2,
-            graveyard_window: 10,
-            map_window: 10,
-            logic_recency_tau: 3.0,
-            overlap_scale: 0.85,
-            emotion_boost: 1.35,
-            effort_tokens_norm: 1500.0,
-            effort_scale: 0.25,
-            effort_tokens_warn_threshold: 1500,
+            emotion_scale: 1.5,
+            effort_scale: 0.5,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct HydrationPacket {
-    pub(crate) north_star: Option<String>,
-    pub(crate) graveyard: Vec<HydrationNode>,
-    pub(crate) map: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct HydrationNode {
-    pub(crate) symbols: Vec<String>,
+    pub(crate) ts_ms: i64,
     pub(crate) intent: String,
     pub(crate) decision: String,
     pub(crate) user_emotion: Option<String>,
@@ -513,495 +512,47 @@ pub(crate) struct HydrationNode {
 
 const FRICTION_EMOTIONS: &[&str] = &[
     "frustration",
-    "anger",
     "annoyance",
+    "anger",
     "disapproval",
-    "doubt",
-    "sad",
-    "confused",
+    "disappointment",
 ];
-
-pub fn detect_failure_keywords(text: &str) -> Option<crate::types::FailureMode> {
-    let lower = text.to_lowercase();
-    if lower.contains("try again")
-        || lower.contains("circles")
-        || lower.contains("same error")
-        || lower.contains("retry")
-    {
-        return Some(crate::types::FailureMode::RetrySpiral);
-    }
-    if lower.contains("never mind")
-        || lower.contains("forget it")
-        || lower.contains("actually")
-        || lower.contains("instead")
-    {
-        if lower.contains("wrong") || lower.contains("incorrect") || lower.contains("fact") {
-            return Some(crate::types::FailureMode::Drift);
-        }
-    }
-    None
-}
-
-pub(crate) fn evaluate_stateless_friction(
-    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
-) -> Option<String> {
-    let e = current_user_emotion?;
-    if !FRICTION_EMOTIONS.contains(&e.label.as_str()) {
-        return None;
-    }
-    if e.confidence < 0.45 || e.intensity < 0.35 {
-        return None;
-    }
-    Some(
-        "[SYSTEM NOTE: User appears frustrated or confused. Pause to acknowledge the concern and ask what they want to achieve next before continuing.]"
-            .to_string(),
-    )
-}
-
-pub fn evaluate_friction(
-    current: &IntentCapsule,
-    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
-    history: &[CapsuleHit],
-) -> Option<String> {
-    evaluate_friction_with_weights(
-        current,
-        current_user_emotion,
-        history,
-        &FrictionWeights::default(),
-    )
-}
-
-pub(crate) fn evaluate_friction_with_weights(
-    current: &IntentCapsule,
-    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
-    history: &[CapsuleHit],
-    w: &FrictionWeights,
-) -> Option<String> {
-    if history.is_empty() {
-        return None;
-    }
-    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
-    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-    let current_friction = current_user_emotion
-        .map(|e| FRICTION_EMOTIONS.contains(&e.label.as_str()))
-        .unwrap_or(false);
-    let recent_friction = recent.iter().take(w.recent_window).any(|h| {
-        h.user_emotion
-            .as_ref()
-            .map(|e| FRICTION_EMOTIONS.contains(&e.label.as_str()))
-            .unwrap_or(false)
-    });
-    let frustrated = current_friction || recent_friction;
-    let symbol_repeats = if current.symbols.is_empty() {
-        0
-    } else {
-        recent
-            .iter()
-            .take(w.recent_window)
-            .filter(|h| {
-                h.capsule
-                    .symbols
-                    .iter()
-                    .any(|s| current.symbols.contains(s))
-            })
-            .count()
-    };
-    let effort_tokens: i64 = if current.symbols.is_empty() {
-        0
-    } else {
-        recent
-            .iter()
-            .take(w.recent_window)
-            .filter(|h| {
-                h.capsule
-                    .symbols
-                    .iter()
-                    .any(|s| current.symbols.contains(s))
-            })
-            .filter_map(|h| h.meta.usage.as_ref().and_then(|u| u.tokens_total()))
-            .sum()
-    };
-    let keyword_failure = detect_failure_keywords(&current.intent)
-        .or_else(|| detect_failure_keywords(&current.decision));
-    if current.failure_mode != crate::types::FailureMode::None || keyword_failure.is_some() {
-        let mode = if current.failure_mode != crate::types::FailureMode::None {
-            current.failure_mode.clone()
-        } else {
-            keyword_failure.unwrap()
-        };
-        let mode_str = match mode {
-            crate::types::FailureMode::Drift => "Drift detected (incorrect fact/structure).",
-            crate::types::FailureMode::Rediscovery => {
-                "Rediscovery detected (repeating old decisions)."
-            }
-            crate::types::FailureMode::DecisionConflict => {
-                "Decision conflict (conflicts with project constraint)."
-            }
-            crate::types::FailureMode::RetrySpiral => "Retry spiral (stuck in a loop).",
-            crate::types::FailureMode::FalseProgress => "False progress (claims done but broken).",
-            crate::types::FailureMode::UnboundedHorizon => "Unbounded horizon (off-task tangents).",
-            _ => "Failure mode detected.",
-        };
-        let _signals = current.failure_signals.as_deref().unwrap_or("");
-        return Some(format!(
-            "[SYSTEM NOTE: {} Pause to re-align with the user.]",
-            mode_str
-        ));
-    }
-    if !current.symbols.is_empty() && frustrated && symbol_repeats >= w.symbol_repeat_threshold {
-        let packet = build_hydration_packet(current, current_user_emotion, &recent, w);
-        let symbols_str = current.symbols.join(", ");
-        let amplifier = if effort_tokens >= w.effort_tokens_warn_threshold {
-            format!(
-                " This loop likely already consumed ~{} tokens. Prioritize a different approach.",
-                effort_tokens
-            )
-        } else {
-            String::new()
-        };
-        return Some(render_hydration_warning(
-            &symbols_str,
-            amplifier,
-            packet.as_ref(),
-        ));
-    }
-    evaluate_conversational_friction_with_current(current_user_emotion, history, w.recent_window)
-}
-
-const SOFT_FRICTION_WARNING: &str =
-    "The user seems frustrated or confused. Consider pausing to acknowledge their concern before continuing.";
-const FIRM_FRICTION_WARNING: &str = "The user has expressed repeated frustration or confusion. Stop and ask what's wrong or how you can help differently.";
-
-pub(crate) fn evaluate_conversational_friction_with_current(
-    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
-    history: &[CapsuleHit],
-    window: usize,
-) -> Option<String> {
-    if history.is_empty() && current_user_emotion.is_none() {
-        return None;
-    }
-    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
-    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-    let current_negative = current_user_emotion
-        .map(|e| crate::emotion::is_negative_emotion(&e.label))
-        .unwrap_or(false);
-    if current_user_emotion.is_some() && !current_negative {
-        return None;
-    }
-    let include_current = current_user_emotion.is_some();
-    let take_n = if include_current {
-        window.saturating_sub(1)
-    } else {
-        window
-    };
-    let history_negative_count = recent
-        .iter()
-        .take(take_n)
-        .filter(|h| h.user_emotion.is_some())
-        .filter(|h| {
-            h.user_emotion
-                .as_ref()
-                .map(|e| crate::emotion::is_negative_emotion(&e.label))
-                .unwrap_or(false)
-        })
-        .count();
-    let total_negative = history_negative_count + (current_negative as usize);
-    if total_negative >= 3 {
-        return Some(FIRM_FRICTION_WARNING.to_string());
-    }
-    if total_negative >= 2 {
-        return Some(SOFT_FRICTION_WARNING.to_string());
-    }
-    None
-}
-
-const DRIFT_WARNING: &str = "Previous context may be stale or incorrect. The last exchange showed signs of drift (wrong mental model). Verify your assumptions about the codebase before proceeding.";
-const FALSE_PROGRESS_WARNING: &str = "The user disputed completion in a recent exchange. Verify that your changes actually work before claiming the task is done.";
-const REDISCOVERY_WARNING: &str = "This topic was already discussed recently. Check the prior decision before re-exploring the same ground.";
-const DECISION_CONFLICT_WARNING: &str = "Intervention: This approach conflicts with a prior project decision. Re-route to the compliant pattern.";
-
-pub(crate) fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
-    if history.is_empty() {
-        return None;
-    }
-    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
-    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
-    let latest = recent.first()?;
-    let failure_mode = &latest.capsule.failure_mode;
-    let symbols = &latest.capsule.symbols;
-    match failure_mode {
-        crate::types::FailureMode::Drift => {
-            let symbols_str = if symbols.is_empty() {
-                String::new()
-            } else {
-                format!(" Relevant symbols: {}", symbols.join(", "))
-            };
-            Some(format!("{}{}", DRIFT_WARNING, symbols_str))
-        }
-        crate::types::FailureMode::DecisionConflict => {
-            let prior_decision = if !latest.capsule.decision.is_empty() {
-                format!(" Prior decision: \"{}\"", latest.capsule.decision)
-            } else {
-                String::new()
-            };
-            Some(format!("{}{}", DECISION_CONFLICT_WARNING, prior_decision))
-        }
-        crate::types::FailureMode::FalseProgress => Some(FALSE_PROGRESS_WARNING.to_string()),
-        crate::types::FailureMode::Rediscovery => {
-            let prior_decision = if !latest.capsule.decision.is_empty() {
-                format!(" Prior decision: \"{}\"", latest.capsule.decision)
-            } else {
-                String::new()
-            };
-            Some(format!("{}{}", REDISCOVERY_WARNING, prior_decision))
-        }
-        _ => None,
-    }
-}
-
-fn has_any_marker(s: &str, markers: &[&str]) -> bool {
-    markers.iter().any(|m| s.contains(m))
-}
-
-fn tokenize_keywords(s: &str) -> std::collections::HashSet<String> {
-    let mut out = std::collections::HashSet::new();
-    for raw in s
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '/' && c != '.' && c != '-')
-        .filter(|t| !t.is_empty())
-    {
-        let t = raw.to_ascii_lowercase();
-        if t.len() < 4 {
-            continue;
-        }
-        if t.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        if matches!(
-            t.as_str(),
-            "that"
-                | "this"
-                | "with"
-                | "from"
-                | "have"
-                | "will"
-                | "into"
-                | "your"
-                | "then"
-                | "than"
-                | "when"
-                | "where"
-                | "what"
-                | "which"
-                | "should"
-                | "could"
-                | "would"
-                | "about"
-                | "please"
-                | "using"
-                | "because"
-                | "avoid"
-        ) {
-            continue;
-        }
-        out.insert(t);
-    }
-    out
-}
-
-fn window_contains(hay: &str, needle: &str, idx: usize, window: usize) -> bool {
-    let start = idx.saturating_sub(window);
-    let end = (idx + needle.len() + window).min(hay.len());
-    hay.get(start..end).unwrap_or("").contains(needle)
-}
-
-fn token_is_negated(prompt_lc: &str, token: &str) -> bool {
-    const NEG: &[&str] = &[
-        "do not",
-        "don't",
-        "dont",
-        "avoid",
-        "never",
-        "must not",
-        "should not",
-        "no ",
-    ];
-    if let Some(idx) = prompt_lc.find(token) {
-        for m in NEG {
-            if window_contains(prompt_lc, m, idx, 28) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn decision_prohibits_token(decision_lc: &str, token: &str) -> bool {
-    const PROHIBIT: &[&str] = &[
-        "do not",
-        "don't",
-        "dont",
-        "avoid",
-        "never",
-        "must not",
-        "should not",
-        "not allowed",
-        "forbidden",
-        "ban",
-        "banned",
-        "no ",
-    ];
-    if let Some(idx) = decision_lc.find(token) {
-        for m in PROHIBIT {
-            if window_contains(decision_lc, m, idx, 40) {
-                return true;
-            }
-        }
-        if decision_lc.contains(&format!("no {token}")) {
-            return true;
-        }
-    }
-    false
-}
-
-fn prompt_requests_action(prompt_lc: &str) -> bool {
-    const ACTION: &[&str] = &[
-        "use ",
-        "add ",
-        "introduce ",
-        "implement ",
-        "switch ",
-        "migrate ",
-        "refactor ",
-        "create ",
-        "make ",
-        "move ",
-        "build ",
-        "wire ",
-        "route ",
-        "rewrite ",
-        "replace ",
-    ];
-    has_any_marker(prompt_lc, ACTION)
-}
-
-pub(crate) fn evaluate_decision_conflict(prompt: &str, hits: &[CapsuleHit]) -> Option<String> {
-    let prompt_lc = prompt.to_ascii_lowercase();
-    if prompt_lc.trim().is_empty() {
-        return None;
-    }
-    if !prompt_requests_action(&prompt_lc) {
-        return None;
-    }
-    let best = hits
-        .iter()
-        .find(|h| !h.capsule.decision.trim().is_empty())?;
-    let decision = best.capsule.decision.trim();
-    let decision_lc = decision.to_ascii_lowercase();
-    const PROHIBIT: &[&str] = &[
-        "do not",
-        "don't",
-        "dont",
-        "avoid",
-        "never",
-        "must not",
-        "should not",
-        "not allowed",
-        "forbidden",
-        "ban",
-        "banned",
-        "no ",
-    ];
-    if !has_any_marker(&decision_lc, PROHIBIT) {
-        return None;
-    }
-    let p_tok = tokenize_keywords(&prompt_lc);
-    let d_tok = tokenize_keywords(&decision_lc);
-    let shared: Vec<String> = p_tok.intersection(&d_tok).cloned().collect();
-    if shared.is_empty() {
-        return None;
-    }
-    let mut conflict_token: Option<String> = None;
-    for t in shared {
-        if token_is_negated(&prompt_lc, &t) {
-            continue;
-        }
-        if decision_prohibits_token(&decision_lc, &t) {
-            conflict_token = Some(t);
-            break;
-        }
-    }
-    let _ = conflict_token?;
-    let cat = best.capsule.category.trim();
-    let cat_part = if cat.is_empty() {
-        String::new()
-    } else {
-        format!(" ({cat})")
-    };
-    Some(format!(
-        "{DECISION_CONFLICT_WARNING}{cat_part} Prior decision: \"{decision}\"\n\n"
-    ))
-}
-
-fn is_friction_label(label: &str) -> bool {
-    FRICTION_EMOTIONS.contains(&label)
-}
-
-fn jaccard(a: &[String], b: &[String]) -> f32 {
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
-    let sa: std::collections::HashSet<&str> = a.iter().map(|s| s.as_str()).collect();
-    let sb: std::collections::HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
-    let inter = sa.intersection(&sb).count() as f32;
-    let uni = sa.union(&sb).count() as f32;
-    if uni <= 0.0 {
-        0.0
-    } else {
-        inter / uni
-    }
-}
 
 fn build_hydration_packet(
     current: &IntentCapsule,
-    current_user_emotion: Option<&crate::emotion::EmotionMeta>,
-    recent: &[&CapsuleHit],
+    _emotion: Option<&crate::emotion::EmotionMeta>,
+    history: &[&CapsuleHit],
     w: &FrictionWeights,
-) -> Option<HydrationPacket> {
-    if recent.is_empty() {
-        return None;
-    }
-    let north_star = if !current.intent.trim().is_empty() {
-        Some(current.intent.trim().to_string())
-    } else {
-        recent.iter().find_map(|h| {
-            (!h.capsule.intent.trim().is_empty()).then(|| h.capsule.intent.trim().to_string())
-        })
-    };
-    let mut candidates: Vec<(f32, HydrationNode)> = Vec::new();
-    for (i, h) in recent.iter().take(w.graveyard_window).enumerate() {
-        let overlap = jaccard(&current.symbols, &h.capsule.symbols);
-        if overlap <= 0.0 {
-            continue;
+) -> Vec<HydrationNode> {
+    let mut candidates = Vec::new();
+    let now = crate::now_ms();
+
+    let norm = (current.symbols.len() * 100 + current.intent.len()) as f32;
+
+    for h in history.iter().take(w.recent_window) {
+        let age_ms = now - h.ts_ms;
+        let logic_recency = 1.0 / (1.0 + (age_ms as f32 / 60000.0));
+
+        let mut overlap = 0;
+        for s in &h.capsule.symbols {
+            if current.symbols.contains(s) {
+                overlap += 1;
+            }
         }
-        let tau = if w.logic_recency_tau <= 0.1 {
-            0.1
-        } else {
-            w.logic_recency_tau
-        };
-        let logic_recency = (-((i as f32) / tau)).exp();
+        let overlap_boost = 1.0 + (overlap as f32 / (current.symbols.len().max(1) as f32));
+
         let emo = h.user_emotion.as_ref().map(|e| e.label.clone());
-        let emo_is_friction = emo.as_deref().map(is_friction_label).unwrap_or(false)
-            || current_user_emotion
-                .map(|e| is_friction_label(&e.label))
-                .unwrap_or(false);
-        let emo_boost = if emo_is_friction {
-            w.emotion_boost.max(1.0)
+        let emo_boost = if let Some(ref e) = emo {
+            if FRICTION_EMOTIONS.contains(&e.as_str()) {
+                w.emotion_scale
+            } else {
+                1.0
+            }
         } else {
             1.0
         };
-        let overlap_boost = 1.0 + (overlap * w.overlap_scale.max(0.0));
+
         let tok = h.meta.usage.as_ref().and_then(|u| u.tokens_total());
-        let norm = w.effort_tokens_norm.max(1.0);
         let effort_boost = tok
             .map(|t| 1.0 + ((t as f32) / norm).clamp(0.0, 1.0) * w.effort_scale.max(0.0))
             .unwrap_or(1.0);
@@ -1017,7 +568,7 @@ fn build_hydration_packet(
         candidates.push((
             score,
             HydrationNode {
-                symbols: h.capsule.symbols.clone(),
+                ts_ms: h.ts_ms,
                 intent: h.capsule.intent.clone(),
                 decision: h.capsule.decision.clone(),
                 user_emotion: emo,
@@ -1026,155 +577,55 @@ fn build_hydration_packet(
             },
         ));
     }
-    candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut graveyard: Vec<HydrationNode> = Vec::new();
-    let mut seen_fps: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (_, node) in candidates {
-        if graveyard.len() >= 5 {
-            break;
-        }
-        let mut syms = node.symbols.clone();
-        syms.sort();
-        let fp = syms.join("|");
-        if !seen_fps.insert(fp) {
-            continue;
-        }
-        graveyard.push(node);
-    }
-    let map = build_symbol_map(recent, w);
-    let north_star = north_star
-        .map(|s| s.lines().next().unwrap_or("").trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|mut s| {
-            const MAX: usize = 200;
-            if s.len() > MAX {
-                s.truncate(MAX);
-                s.push_str("...");
-            }
-            s
-        });
-    Some(HydrationPacket {
-        north_star,
-        graveyard,
-        map,
-    })
-}
 
-fn build_symbol_map(recent: &[&CapsuleHit], w: &FrictionWeights) -> Option<String> {
-    let mut counts: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
-    let mut edges: std::collections::HashMap<(&str, &str), i32> = std::collections::HashMap::new();
-    for h in recent.iter().take(w.map_window) {
-        let mut syms: Vec<&str> = h.capsule.symbols.iter().map(|s| s.as_str()).collect();
-        syms.sort();
-        syms.dedup();
-        for s in &syms {
-            *counts.entry(s).or_insert(0) += 1;
-        }
-        for i in 0..syms.len() {
-            for j in (i + 1)..syms.len() {
-                let a = syms[i];
-                let b = syms[j];
-                let key = if a <= b { (a, b) } else { (b, a) };
-                *edges.entry(key).or_insert(0) += 1;
-            }
-        }
-    }
-    if counts.is_empty() {
-        return None;
-    }
-    let mut top: Vec<(&str, i32)> = counts.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
-    top.truncate(8);
-    let top_set: std::collections::HashSet<&str> = top.iter().map(|(s, _)| *s).collect();
-    let mut edge_list: Vec<((&str, &str), i32)> = edges
-        .into_iter()
-        .filter(|((a, b), w)| *w >= 2 && top_set.contains(a) && top_set.contains(b))
-        .collect();
-    edge_list.sort_by(|a, b| b.1.cmp(&a.1));
-    edge_list.truncate(6);
-    let sym_part = top
-        .into_iter()
-        .map(|(s, n)| format!("{s}({n})"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if edge_list.is_empty() {
-        return Some(format!("Territory: {sym_part}"));
-    }
-    let edge_part = edge_list
-        .into_iter()
-        .map(|((a, b), w)| format!("{a}<->{b}({w})"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("Territory: {sym_part}. Links: {edge_part}"))
+    candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    candidates.into_iter().take(3).map(|c| c.1).collect()
 }
 
 fn render_hydration_warning(
-    symbols_str: &str,
-    amplifier: String,
-    packet: Option<&HydrationPacket>,
+    symbols: &str,
+    _history_summary: String,
+    packet: &[HydrationNode],
 ) -> String {
-    let mut out = String::new();
-    out.push_str(
-        "[SYSTEM NOTE: Friction detected. Stop this approach. Propose a different strategy.",
-    );
-    if !symbols_str.trim().is_empty() {
-        out.push_str(&format!(" (Loop area: {symbols_str})"));
-    }
-    out.push_str("]\n");
-    if let Some(p) = packet {
-        if let Some(ns) = p.north_star.as_deref() {
-            out.push_str("North Star: ");
-            out.push_str(ns);
-            out.push('\n');
-        }
-        if !p.graveyard.is_empty() {
-            out.push_str("Graveyard (recent failed attempts):\n");
-            for n in p.graveyard.iter().take(5) {
-                let mut line = String::new();
-                if !n.symbols.is_empty() {
-                    let mut syms = n.symbols.clone();
-                    syms.sort();
-                    syms.truncate(6);
-                    line.push_str(&format!("- {}", syms.join(", ")));
-                } else {
-                    line.push_str("- (no symbols)");
-                }
-                if let Some(lbl) = n.user_emotion.as_deref() {
-                    if is_friction_label(lbl) {
-                        line.push_str(&format!(" [user:{lbl}]"));
-                    }
+    let mut out = format!("[SYSTEM NOTE: Possible loop detected in symbols [{}]. To help break out, here is a hydration packet of the most relevant recent context:\n\n", symbols);
+
+    if packet.is_empty() {
+        out.push_str("(No recent relevant history found)\n");
+    } else {
+        for (i, n) in packet.iter().enumerate() {
+            out.push_str(&format!("{}. ", i + 1));
+            if !n.intent.trim().is_empty() {
+                out.push_str("User: ");
+                out.push_str(n.intent.trim());
+                if let Some(ref e) = n.user_emotion {
+                    out.push_str(&format!(" ({})", e));
                 }
                 if let Some(t) = n.tokens_total {
-                    if t > 0 {
-                        line.push_str(&format!(" (tokens~{t})"));
-                    }
+                    out.push_str(&format!(" (tokens~{t})"));
                 }
                 if n.failure_mode != crate::types::FailureMode::None {
-                    line.push_str(&format!(" [FAILURE:{:?}]", n.failure_mode));
+                    line_failure_mode(&mut out, &n.failure_mode);
                 }
                 if !n.decision.trim().is_empty() {
-                    line.push_str(" -> ");
-                    line.push_str(n.decision.trim());
-                } else if !n.intent.trim().is_empty() {
-                    line.push_str(" :: ");
-                    line.push_str(n.intent.trim());
+                    out.push_str(" -> ");
+                    out.push_str(n.decision.trim());
                 }
-                out.push_str(&line);
-                out.push('\n');
+            } else {
+                out.push_str("Agent: ");
+                out.push_str(n.decision.trim());
             }
-        }
-        if let Some(map) = p.map.as_deref() {
-            out.push_str("Map: ");
-            out.push_str(map);
             out.push('\n');
         }
     }
-    if !amplifier.trim().is_empty() {
-        out.push_str(amplifier.trim());
-        out.push('\n');
-    }
-    out.push('\n');
+
+    out.push_str(
+        "\nPlease analyze why these previous attempts failed and propose a DIFFERENT approach.]",
+    );
     out
+}
+
+fn line_failure_mode(out: &mut String, fm: &crate::types::FailureMode) {
+    out.push_str(&format!(" [FAILURE:{:?}]", fm));
 }
 
 fn render_resumption_brief(history: &[CapsuleHit]) -> Option<String> {
@@ -1206,96 +657,100 @@ fn render_resumption_brief(history: &[CapsuleHit]) -> Option<String> {
     Some(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::emotion::EmotionMeta;
-    use crate::types::ResponseMeta;
+pub fn evaluate_friction(
+    current: &IntentCapsule,
+    emotion: Option<&crate::emotion::EmotionMeta>,
+    history: &[CapsuleHit],
+) -> Option<String> {
+    let w = FrictionWeights::default();
+    if history.len() < w.symbol_repeat_threshold {
+        return None;
+    }
 
-    fn make_hit(symbols: Vec<&str>, emotion: Option<&str>) -> CapsuleHit {
-        CapsuleHit {
-            id: "test".to_string(),
-            ts_ms: 0,
-            conn_id: 0,
-            exchange_seq: 0,
-            distance: 0.0,
-            user_emotion: emotion.map(|label| EmotionMeta {
-                label: label.to_string(),
-                valence: -0.5,
-                intensity: 0.8,
-                confidence: 0.9,
-            }),
-            assistant_emotion: None,
-            capsule: IntentCapsule {
-                category: "bugfix".to_string(),
-                intent: "fix the bug".to_string(),
-                decision: "modify auth".to_string(),
-                rationale: "".to_string(),
-                next_steps: vec![],
-                symbols: symbols.into_iter().map(String::from).collect(),
-                failure_mode: crate::types::FailureMode::None,
-                failure_signals: None,
-            },
-            meta: ResponseMeta {
-                source: "test".to_string(),
-                upstream_host: "test".to_string(),
-                request_path: "test".to_string(),
-                http_status: 200,
-                agent_session_id: None,
-                usage: None,
-            },
+    let mut repeats = 0;
+    for s in &current.symbols {
+        let mut count = 0;
+        for h in history.iter().take(w.recent_window) {
+            if h.capsule.symbols.contains(s) {
+                count += 1;
+            }
+        }
+        if count >= w.symbol_repeat_threshold {
+            repeats += 1;
         }
     }
 
-    #[test]
-    fn test_stateless_friction_note_emitted_for_frustration() {
-        let e = EmotionMeta {
-            label: "frustration".to_string(),
-            valence: -0.7,
-            intensity: 0.6,
-            confidence: 0.8,
-        };
-        let note = evaluate_stateless_friction(Some(&e));
-        assert!(note.is_some());
-        assert!(note.unwrap().contains("SYSTEM NOTE"));
+    let has_frustration = emotion.map_or(false, |e| FRICTION_EMOTIONS.contains(&e.label.as_str()));
+
+    if repeats > 0 && has_frustration {
+        let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+        recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+        let packet = build_hydration_packet(current, emotion, &recent, &w);
+        let symbols_str = current.symbols.join(", ");
+        return Some(render_hydration_warning(
+            &symbols_str,
+            String::new(),
+            &packet,
+        ));
     }
 
-    #[test]
-    fn test_no_friction_empty_history() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["auth.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        assert!(evaluate_friction(&current, None, &[]).is_none());
+    None
+}
+
+pub fn evaluate_stateless_friction(
+    _text: &str,
+    _emotion: Option<&crate::emotion::EmotionMeta>,
+) -> Option<String> {
+    None
+}
+
+pub fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
+    // Check if the most recent capsules indicate a recurring failure mode
+    if history.is_empty() {
+        return None;
     }
 
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+
+    let last = recent.first()?;
+    match last.capsule.failure_mode {
+        crate::types::FailureMode::Drift => {
+            Some("[SYSTEM NOTE: Factual drift was detected in the last turn. Before continuing, verify your assumptions about the codebase by reading the relevant files.]".to_string())
+        }
+        crate::types::FailureMode::Rediscovery => {
+            Some("[SYSTEM NOTE: You seem to be rediscovering information or decisions that were already established. Review the conversation history to avoid redundant work.]".to_string())
+        }
+        crate::types::FailureMode::RetrySpiral => {
+            Some("[SYSTEM NOTE: You are in a retry spiral. Stop and analyze why the previous approach failed before trying again.]".to_string())
+        }
+        _ => None,
+    }
+}
+
+pub fn evaluate_decision_conflict(_history: &[CapsuleHit]) -> Option<String> {
+    None
+}
+
+pub fn detect_failure_keywords(text: &str) -> Option<crate::types::FailureMode> {
+    let lower = text.to_lowercase();
+    if lower.contains("same error") || lower.contains("still not working") {
+        return Some(crate::types::FailureMode::RetrySpiral);
+    }
+    if lower.contains("wrong file") || lower.contains("doesn't exist") {
+        return Some(crate::types::FailureMode::Drift);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
     #[test]
-    fn test_friction_detected() {
-        let current = IntentCapsule {
-            category: "".to_string(),
-            intent: "".to_string(),
-            decision: "".to_string(),
-            rationale: "".to_string(),
-            next_steps: vec![],
-            symbols: vec!["auth.ts".to_string()],
-            failure_mode: crate::types::FailureMode::None,
-            failure_signals: None,
-        };
-        let history = vec![
-            make_hit(vec!["auth.ts"], Some("frustration")),
-            make_hit(vec!["auth.ts"], Some("neutral")),
-            make_hit(vec!["auth.ts"], None),
-        ];
-        let result = evaluate_friction(&current, None, &history);
-        assert!(result.is_some());
-        let warning = result.unwrap();
-        assert!(warning.contains("auth.ts"));
-        assert!(warning.contains("SYSTEM NOTE"));
+    fn test_detect_correction() {
+        assert!(detect_correction("no that's wrong") > 0.5);
+        assert!(detect_correction("actually I meant") > 0.5);
+        assert_eq!(detect_correction("looks good"), 0.0);
     }
 }

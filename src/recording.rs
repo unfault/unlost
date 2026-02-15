@@ -331,6 +331,26 @@ impl WorkspaceChunker {
             let _ = self.flush_tx.send(j).await;
         }
     }
+
+    /// Force-flush all buffers for all workspaces.
+    pub(crate) async fn flush_all(&self) {
+        let now = Instant::now();
+        let mut jobs: Vec<FlushJob> = Vec::new();
+
+        {
+            let mut map = self.buffers.lock().await;
+            for (ws_id, buf) in map.iter_mut() {
+                if !buf.turns.is_empty() {
+                    jobs.push(build_flush_job(ws_id.clone(), buf));
+                    *buf = WorkspaceBuffer::new(now);
+                }
+            }
+        }
+
+        for j in jobs {
+            let _ = self.flush_tx.send(j).await;
+        }
+    }
 }
 
 fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob {
@@ -468,11 +488,13 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
         }).await.ok().flatten();
 
         let symbols = crate::net::extract_symbols_from_text(&job.input);
+        let user_symbols = crate::net::extract_symbols_from_text(&user_text);
         let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
 
         let mut capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
             Ok(mut c) => {
                 for s in symbols { if !c.symbols.contains(&s) { c.symbols.push(s); } }
+                c.user_symbols = user_symbols;
                 c
             }
             Err(_) => crate::IntentCapsule {
@@ -482,6 +504,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols,
+                user_symbols,
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
             },
@@ -543,11 +566,13 @@ pub(crate) async fn process_flush_jobs_proxy(
         }).await.ok().flatten();
 
         let symbols = crate::net::extract_symbols_from_text(&job.input);
+        let user_symbols = crate::net::extract_symbols_from_text(&user_text);
         let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
 
         let mut capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
             Ok(mut c) => {
                 for s in symbols { if !c.symbols.contains(&s) { c.symbols.push(s); } }
+                c.user_symbols = user_symbols;
                 c
             }
             Err(_) => crate::IntentCapsule {
@@ -557,6 +582,7 @@ pub(crate) async fn process_flush_jobs_proxy(
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols,
+                user_symbols,
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
             },

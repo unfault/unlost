@@ -244,7 +244,7 @@ pub async fn run(
             "check" => {
                 let params: CheckParams = serde_json::from_value(req.params).unwrap_or_default();
                 let event: CheckEvent = params.into();
-                let result = flow.check(event).await;
+                let result = flow.check_friction(event).await;
                 result.into()
             }
             "record" => {

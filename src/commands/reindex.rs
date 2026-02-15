@@ -155,7 +155,8 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             decision: capsule.capsule.decision,
             rationale: capsule.capsule.rationale,
             next_steps: capsule.capsule.next_steps,
-            symbols: capsule.capsule.symbols,
+            symbols: capsule.capsule.symbols.clone(),
+            user_symbols: vec![], // Can't recover from JSONL easily without parsing
             failure_mode,
             failure_signals: capsule.capsule.failure_signals,
         };

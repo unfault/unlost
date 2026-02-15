@@ -26,8 +26,10 @@ pub(crate) enum MetricsEvent {
         ts_ms: i64,
         conn_id: u64,
         workspace_id: String,
-        symbols_total: usize,
+        symbols: Vec<String>,
         user_emotion: Option<String>,
+        intensity: f32,
+        cause: String,
     },
     CommandQuery {
         ts_ms: i64,
@@ -113,8 +115,10 @@ pub(crate) fn record_capsule_saved(
 pub(crate) fn record_friction_warning_injected(
     workspace_id: &str,
     conn_id: u64,
-    symbols_total: usize,
+    symbols: Vec<String>,
     user_emotion: Option<&crate::emotion::EmotionMeta>,
+    intensity: f32,
+    cause: String,
 ) -> anyhow::Result<()> {
     let ws_dir = crate::unlost_workspace_dir(workspace_id);
     let path = ws_dir.join("metrics.jsonl");
@@ -122,8 +126,10 @@ pub(crate) fn record_friction_warning_injected(
         ts_ms: crate::now_ms(),
         conn_id,
         workspace_id: workspace_id.to_string(),
-        symbols_total,
+        symbols,
         user_emotion: user_emotion.map(|e| e.label.clone()),
+        intensity,
+        cause,
     };
     append_event(&path, &ev)
 }
@@ -193,6 +199,9 @@ pub(crate) struct MetricsSummary {
     pub(crate) drift_paths_checked: u64,
     pub(crate) drift_paths_missing: u64,
     pub(crate) friction_warnings: u64,
+    pub(crate) friction_intensity_total: f32,
+    pub(crate) friction_by_cause: std::collections::HashMap<String, u64>,
+    pub(crate) friction_by_symbol: std::collections::HashMap<String, u64>,
     pub(crate) query_commands: u64,
     pub(crate) recall_commands: u64,
     /// Failure modes detected via LLM semantic analysis
@@ -248,8 +257,18 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                     }
                 }
             }
-            MetricsEvent::FrictionWarningInjected { .. } => {
+            MetricsEvent::FrictionWarningInjected {
+                intensity,
+                cause,
+                symbols,
+                ..
+            } => {
                 out.friction_warnings += 1;
+                out.friction_intensity_total += intensity;
+                *out.friction_by_cause.entry(cause).or_insert(0) += 1;
+                for s in symbols {
+                    *out.friction_by_symbol.entry(s).or_insert(0) += 1;
+                }
             }
             MetricsEvent::CommandQuery { .. } => {
                 out.query_commands += 1;

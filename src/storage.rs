@@ -549,6 +549,7 @@ pub(crate) async fn query_capsules_lancedb(
                     rationale: r_text.to_string(),
                     next_steps: steps,
                     symbols: syms,
+                    user_symbols: vec![], // Not stored in DB yet
                     // Existing capsules in DB don't have failure_mode yet
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
@@ -895,6 +896,7 @@ async fn scan_capsules_lancedb_impl(
                     rationale: r_text.to_string(),
                     next_steps: steps,
                     symbols: syms,
+                    user_symbols: vec![], // Not stored in DB yet
                     // Existing capsules in DB don't have failure_mode yet
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,

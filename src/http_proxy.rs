@@ -170,7 +170,7 @@ async fn serve_request(
                 )
                 .await
                 {
-                    if let Some(note) = crate::governor::evaluate_decision_conflict(text, &hits) {
+                    if let Some(note) = crate::governor::evaluate_decision_conflict(&hits) {
                         info!(conn_id, %workspace_id, "decision conflict detected, injecting intervention");
                         crate::net::inject_warning(&req_body_bytes, &note, &stripped_pq)
                             .unwrap_or(req_body_bytes)
@@ -216,6 +216,7 @@ async fn serve_request(
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
+                user_symbols: vec![], // Can extract from user_text if needed
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
             };
@@ -250,8 +251,10 @@ async fn serve_request(
                         let _ = crate::metrics::record_friction_warning_injected(
                             &workspace_id,
                             conn_id,
-                            current_intent.symbols.len(),
+                            current_intent.symbols.clone(),
                             current_user_emotion.as_ref(),
+                            1.0, // Legacy warnings are high confidence
+                            "legacy".to_string(),
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
                             .unwrap_or(req_body_bytes)
@@ -429,6 +432,7 @@ async fn proxy_request(
                 rationale: String::new(),
                 next_steps: vec![],
                 symbols: current_symbols,
+                user_symbols: vec![], // Can extract from user_text if needed
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
             };
@@ -464,8 +468,10 @@ async fn proxy_request(
                         let _ = crate::metrics::record_friction_warning_injected(
                             &ws.id,
                             conn_id,
-                            current_intent.symbols.len(),
+                            current_intent.symbols.clone(),
                             current_user_emotion.as_ref(),
+                            1.0,
+                            "legacy".to_string(),
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &request_path)
                             .unwrap_or(req_body_bytes)

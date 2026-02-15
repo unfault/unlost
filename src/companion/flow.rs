@@ -11,8 +11,7 @@ use crate::IntentCapsule;
 use crate::embed::Embedder;
 use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
 use crate::governor::{
-    evaluate_decision_conflict, evaluate_failure_modes, evaluate_friction,
-    evaluate_stateless_friction,
+    evaluate_failure_modes, evaluate_friction,
 };
 use crate::recording::{ChunkInput, FlushJob, WorkspaceChunker, looks_like_commit_or_pr};
 use crate::storage::{ensure_capsules_table, insert_capsule_row};
@@ -224,72 +223,38 @@ impl FlowState {
     }
 }
 
-/// The main flow handler for agent integrations.
-///
-/// Owns the check + record_turn pipeline, chunking, and background worker.
 pub(crate) struct Flow {
     state: FlowState,
-    #[allow(dead_code)]
-    bg_state: Arc<Mutex<BackgroundState>>,
-    /// Sender half kept to control shutdown - dropping closes the channel
-    job_tx: kanal::AsyncSender<FlushJob>,
-    /// Handle to the background worker task
-    worker_handle: tokio::task::JoinHandle<()>,
+    background_state: Arc<Mutex<BackgroundState>>,
 }
 
 impl Flow {
-    /// Create a new flow with the given configuration.
-    /// Spawns a background worker for processing flush jobs.
     pub(crate) fn new(config: FlowConfig) -> Self {
-        let (job_tx, job_rx) = kanal::unbounded_async::<FlushJob>();
-        let state = FlowState::new(job_tx.clone());
-        let bg_state = Arc::new(Mutex::new(BackgroundState::new(
+        let (job_tx, job_rx) = kanal::bounded_async::<FlushJob>(64);
+        let background_state = Arc::new(Mutex::new(BackgroundState::new(
             config.embed_model,
             config.embed_cache_dir,
             config.no_llm,
         )));
 
-        // Spawn background worker
-        let bg_state_clone = bg_state.clone();
-        let worker_handle = tokio::spawn(async move {
-            background_worker(job_rx, bg_state_clone).await;
-        });
+        // Start background worker
+        tokio::spawn(background_worker(job_rx, background_state.clone()));
 
         Self {
-            state,
-            bg_state,
-            job_tx,
-            worker_handle,
+            state: FlowState::new(job_tx),
+            background_state,
         }
     }
 
-    /// Drain pending jobs and shut down the background worker.
-    ///
-    /// This closes the job channel (signaling the worker to exit after processing
-    /// remaining jobs) and waits for the worker to finish.
-    ///
-    /// Call this before dropping the Flow if you need to ensure all enqueued
-    /// jobs are processed (e.g., in short-lived processes like hooks).
-    pub(crate) async fn drain(self) {
-        // Drop our sender to close the channel - worker will exit after draining
-        drop(self.job_tx);
-        // Also drop the chunker's sender
-        drop(self.state);
-        // Wait for worker to finish processing remaining jobs
-        let _ = self.worker_handle.await;
+    /// Wait for all background jobs to finish.
+    pub(crate) async fn drain(&self) {
+        self.state.chunker.flush_all().await;
+        // background_worker will continue running until Flow is dropped,
+        // but it will process all queued jobs.
     }
 
     /// Check for friction before an LLM call.
-    ///
-    /// Returns a note to inject if friction is detected, or None otherwise.
-    pub(crate) async fn check(&mut self, event: CheckEvent) -> CheckResult {
-        tracing::info!(
-            directory = %event.directory,
-            text_len = event.text.len(),
-            session = event.agent_session_id.as_deref().unwrap_or("-"),
-            "check called"
-        );
-
+    pub(crate) async fn check_friction(&mut self, event: CheckEvent) -> CheckResult {
         if event.directory.is_empty() {
             return CheckResult {
                 note: None,
@@ -305,7 +270,6 @@ impl Flow {
             };
         }
 
-        // Get workspace paths
         let ws = match get_or_create_workspace_paths(dir_path) {
             Ok(ws) => ws,
             Err(e) => {
@@ -316,87 +280,26 @@ impl Flow {
             }
         };
 
-        // Decision/constraint intervention ("I told you NOT to")
-        // Runs before friction checks so it can interrupt immediately.
-        if !event.text.trim().is_empty() {
-            let embedder = {
-                let mut st = self.bg_state.lock().await;
-                st.ensure_embedder().await.ok()
-            };
-
-            if let Some(embedder) = embedder {
-                // Semantic search for relevant prior decisions.
-                let matches = crate::storage::query_capsules_lancedb(
-                    &event.text,
-                    8,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    embedder,
-                    &ws,
-                )
-                .await;
-
-                if let Ok(hits) = matches {
-                    if let Some(note) = evaluate_decision_conflict(&event.text, &hits) {
-                        tracing::info!(
-                            workspace = %ws.id,
-                            session = event.agent_session_id.as_deref().unwrap_or("-"),
-                            "decision conflict intervention will be injected"
-                        );
-                        return CheckResult {
-                            note: Some(note),
-                            error: None,
-                        };
-                    }
+        // Classify user emotion (fast, local)
+        let user_emotion = match self.state.ensure_emotion_model().await {
+            Ok(model) => match model.classify_one(&event.text) {
+                Ok((raw, score)) => {
+                    let meta = map_go_emotions(&raw, score);
+                    Some(apply_context_heuristics(&event.text, meta))
                 }
-            }
-        }
-
-        // Load recent capsules (most recent first)
-        let history = match crate::storage::scan_capsules_lancedb_recent(
-            &ws, 5, None, None, None, None, None,
-        )
-        .await
-        {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::debug!("scan_capsules_lancedb_recent failed: {e}");
-                vec![]
-            }
-        };
-
-        // Extract symbols from the text
-        let symbols = crate::net::extract_symbols_from_text(&event.text);
-
-        // Classify user emotion (used as a signal for friction warning injection).
-        let user_emotion = if !event.text.is_empty() {
-            match self.state.ensure_emotion_model().await {
-                Ok(model) => match model.classify_one(&event.text) {
-                    Ok((raw_label, score)) => {
-                        let model_meta = map_go_emotions(&raw_label, score);
-                        Some(apply_context_heuristics(&event.text, model_meta))
-                    }
-                    Err(_) => None,
-                },
                 Err(_) => None,
-            }
-        } else {
-            None
+            },
+            Err(_) => None,
         };
 
-        // If we have no history yet, we can't run repetition-based heuristics.
-        // Still inject a small stateless note when the user is clearly upset.
-        if history.is_empty() {
-            return CheckResult {
-                note: evaluate_stateless_friction(user_emotion.as_ref()),
-                error: None,
-            };
-        }
+        // Query recent history
+        let history = match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
+            Ok(h) => h,
+            Err(_) => vec![],
+        };
 
-        // Detect failure modes from keywords in the current message
+        let symbols = crate::net::extract_symbols_from_text(&event.text);
+        let user_symbols = symbols.clone();
         let failure_mode = crate::governor::detect_failure_keywords(&event.text).unwrap_or(crate::types::FailureMode::None);
 
         // Create current capsule for friction evaluation
@@ -407,12 +310,13 @@ impl Flow {
             rationale: String::new(),
             next_steps: vec![],
             symbols,
+            user_symbols,
             failure_mode,
             failure_signals: None,
         };
 
         // NEW: Trajectory-based proactive friction regulation
-        let (trajectory_state, trajectory_note) = {
+        let update = {
             let controller = self.state.controllers.entry(ws.id.clone()).or_default();
             controller.update(
                 &ws.id,
@@ -423,13 +327,26 @@ impl Flow {
             )
         };
 
-        if let Some(note) = trajectory_note {
+        if let Some(note) = update.note {
             tracing::info!(
                 workspace = %ws.id,
                 session = event.agent_session_id.as_deref().unwrap_or("-"),
-                state = ?trajectory_state,
+                state = ?update.state,
+                cause = %update.cause,
+                intensity = %update.intensity,
                 "trajectory controller returned proactive warning"
             );
+            
+            // Record the intervention metric
+            let _ = crate::metrics::record_friction_warning_injected(
+                &ws.id,
+                0, // conn_id not available in CheckEvent
+                current.symbols.clone(),
+                user_emotion.as_ref(),
+                update.intensity,
+                update.cause,
+            );
+
             return CheckResult { note: Some(note), error: None };
         }
 
@@ -607,7 +524,7 @@ async fn process_flush_job(
 - retry_spiral: Agent stuck in a loop. Signs: user frustration (\"same error\", \"you already tried that\", \"going in circles\"); same symbols appear repeatedly; agent apologizes then repeats similar approach.\n\
 - false_progress: Agent claims done but isn't. Signs: user says \"that's still not working\", \"the error is still there\"; agent declared completion but user disputes it.\n\
 - unbounded_horizon: Agent wandering off-task. Signs: \"while I'm here\" tangents; refactoring unrelated code; user redirects back to original task.\n\
-\n\
+ \n\
 Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
 
     // Extract user/assistant text for emotion classification
@@ -645,6 +562,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
 
     // Extract capsule metadata locally (fast, zero cost)
     let symbols = crate::net::extract_symbols_from_text(&job.input);
+    let user_symbols = crate::net::extract_symbols_from_text(&user_text);
     let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
 
     let no_llm = state.lock().await.no_llm;
@@ -659,6 +577,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                         c.symbols.push(s);
                     }
                 }
+                c.user_symbols = user_symbols;
                 c
             }
             Err(e) => {
@@ -670,6 +589,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                     rationale: String::new(),
                     next_steps: vec![],
                     symbols,
+                    user_symbols,
                     failure_mode,
                     failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
                 }
@@ -684,6 +604,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
             rationale: String::new(),
             next_steps: vec![],
             symbols,
+            user_symbols,
             failure_mode,
             failure_signals: Some("Ghost extraction (no-LLM)".to_string()),
         }
