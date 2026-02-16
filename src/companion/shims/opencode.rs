@@ -111,13 +111,13 @@ struct MessagePath {
 // Cursor state (persisted per workspace to track replayed messages)
 // ============================================================================
 
-fn replayed_path(workspace_id: &str) -> PathBuf {
+pub(crate) fn replayed_path(workspace_id: &str) -> PathBuf {
     crate::workspace::unlost_workspace_dir(workspace_id)
         .join("opencode")
         .join("replayed.txt")
 }
 
-fn load_replayed(workspace_id: &str) -> HashSet<String> {
+pub(crate) fn load_replayed(workspace_id: &str) -> HashSet<String> {
     let path = replayed_path(workspace_id);
     let data = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -130,7 +130,7 @@ fn load_replayed(workspace_id: &str) -> HashSet<String> {
         .collect()
 }
 
-fn append_replayed(workspace_id: &str, ids: &[String]) {
+pub(crate) fn append_replayed(workspace_id: &str, ids: &[String]) {
     if ids.is_empty() {
         return;
     }
@@ -292,6 +292,7 @@ struct ParsedTurn {
     usage: Option<UsageEvent>,
     touched_paths: Vec<String>,
     turn_key: String, // user_msg_id:assistant_msg_id
+    timestamp_ms: i64,
 }
 
 /// Read full message text from parts if available.
@@ -428,6 +429,7 @@ fn extract_turns(messages: Vec<MessageFile>) -> Vec<ParsedTurn> {
             usage,
             touched_paths,
             turn_key,
+            timestamp_ms: msg.time.created,
         });
     }
 
@@ -532,9 +534,12 @@ pub async fn replay(
     no_llm: bool,
     embed_model: String,
     embed_cache_dir: Option<String>,
+    git_grounding: bool,
 ) -> anyhow::Result<()> {
     let dir_path = Path::new(&path);
     let ws = get_or_create_workspace_paths(dir_path)?;
+
+    let repo_root = crate::workspace::git_toplevel(dir_path);
 
     let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
 
@@ -636,6 +641,7 @@ pub async fn replay(
         let sessions_done = sessions_done.clone();
         let semaphore = semaphore.clone();
         let session_id_clone = session_id.clone();
+        let repo_root_clone = repo_root.clone();
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore
@@ -651,6 +657,21 @@ pub async fn replay(
             let mut flow = Flow::new(config);
 
             let turns = extract_turns(messages);
+            
+            // If git grounding is enabled, fetch commits for the session range
+            let commits = if git_grounding {
+                if let Some(ref root) = repo_root_clone {
+                    let min_ts = turns.iter().map(|t| t.timestamp_ms).min().unwrap_or(0);
+                    let max_ts = turns.iter().map(|t| t.timestamp_ms).max().unwrap_or(0);
+                    // Look up to 15 minutes after the last turn
+                    crate::git::get_commits_for_range(root, min_ts, max_ts + 15 * 60 * 1000).ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let mut recorded = 0usize;
 
             let mut seen = if dedupe {
@@ -669,6 +690,24 @@ pub async fn replay(
                     new_keys.push(turn.turn_key.clone());
                 }
 
+                // Grounding from git logs
+                let grounding_note = if let Some(ref available) = commits {
+                    let matches = crate::git::find_corresponding_commits(
+                        turn.timestamp_ms,
+                        &turn.touched_paths,
+                        available,
+                        5 * 60 * 1000, // 5 minute window
+                    );
+                    if !matches.is_empty() {
+                        let hashes: Vec<_> = matches.iter().map(|c| &c.hash[..7]).collect();
+                        Some(format!("Verified via git: {}", hashes.join(", ")))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let event = RecordTurnEvent {
                     directory: path.clone(),
                     user_text: turn.user_text,
@@ -677,6 +716,7 @@ pub async fn replay(
                     agent_kind: AgentKind::OpenCode,
                     agent_session_id: Some(session_id_clone.clone()),
                     usage: turn.usage,
+                    grounding_note,
                 };
 
                 let result = flow.record_turn(event).await;

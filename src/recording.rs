@@ -180,6 +180,8 @@ pub(crate) struct ChunkInput {
     pub(crate) agent_session_id: Option<String>,
     /// Best-effort usage metrics (tokens/cost). Not always present.
     pub(crate) usage: Option<crate::types::UsageMeta>,
+    /// Optional grounding info (e.g. verified git commits)
+    pub(crate) grounding_note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +192,7 @@ pub(crate) struct FlushJob {
     pub(crate) ts_ms: i64,
     pub(crate) meta: crate::ResponseMeta,
     pub(crate) input: String,
+    pub(crate) grounding_note: Option<String>,
 }
 
 struct WorkspaceBuffer {
@@ -201,6 +204,7 @@ struct WorkspaceBuffer {
     last_http_status: u16,
     last_agent_session_id: Option<String>,
     last_usage: Option<crate::types::UsageMeta>,
+    last_grounding_note: Option<String>,
     total_chars: usize,
     turns: Vec<String>,
     saw_commit: bool,
@@ -217,6 +221,7 @@ impl WorkspaceBuffer {
             last_http_status: 0,
             last_agent_session_id: None,
             last_usage: None,
+            last_grounding_note: None,
             total_chars: 0,
             turns: Vec::new(),
             saw_commit: false,
@@ -267,6 +272,7 @@ impl WorkspaceChunker {
             buf.last_http_status = item.http_status;
             buf.last_agent_session_id = item.agent_session_id;
             buf.last_usage = item.usage;
+            buf.last_grounding_note = item.grounding_note;
             buf.saw_commit |= item.commit_mentioned;
 
             buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
@@ -384,6 +390,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         ts_ms,
         meta,
         input,
+        grounding_note: buf.last_grounding_note.clone(),
     }
 }
 
@@ -658,6 +665,7 @@ pub(crate) async fn analysis_worker_multiplex(
             commit_mentioned: looks_like_commit_or_pr(&input),
             agent_session_id: None,
             usage: None,
+            grounding_note: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -725,6 +733,7 @@ pub(crate) async fn analysis_worker(
             commit_mentioned: looks_like_commit_or_pr(&input),
             agent_session_id: None,
             usage: None,
+            grounding_note: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }

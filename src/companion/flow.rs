@@ -110,6 +110,8 @@ pub(crate) struct RecordTurnEvent {
     pub agent_session_id: Option<String>,
     /// Optional usage metrics
     pub usage: Option<UsageEvent>,
+    /// Optional grounding info (e.g. verified git commits)
+    pub grounding_note: Option<String>,
 }
 
 /// Result of a record operation.
@@ -474,6 +476,7 @@ impl Flow {
             commit_mentioned,
             agent_session_id: event.agent_session_id,
             usage,
+            grounding_note: event.grounding_note,
         };
 
         // Ingest into chunker (may or may not produce a flush job depending on boundaries).
@@ -613,6 +616,15 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
     };
 
     crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
+
+    if let Some(note) = job.grounding_note {
+        let current = capsule.failure_signals.unwrap_or_default();
+        if current.is_empty() {
+            capsule.failure_signals = Some(format!("Grounding: {}", note));
+        } else {
+            capsule.failure_signals = Some(format!("{} | Grounding: {}", current, note));
+        }
+    }
 
     // Log if a failure mode was detected by the LLM
     if capsule.failure_mode != crate::types::FailureMode::None {

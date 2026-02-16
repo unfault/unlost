@@ -427,6 +427,10 @@ pub enum ReplayCommand {
         /// Embedding cache directory (defaults to XDG data dir)
         #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
         embed_cache_dir: Option<String>,
+
+        /// Ground replayed turns with actual git logs (find corresponding commits)
+        #[arg(long, default_value_t = false)]
+        git_grounding: bool,
     },
 
     /// Replay OpenCode messages from disk storage into the current workspace
@@ -450,6 +454,10 @@ pub enum ReplayCommand {
         /// Embedding cache directory (defaults to XDG data dir)
         #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
         embed_cache_dir: Option<String>,
+
+        /// Ground replayed turns with actual git logs (find corresponding commits)
+        #[arg(long, default_value_t = false)]
+        git_grounding: bool,
     },
 }
 

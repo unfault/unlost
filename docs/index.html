@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>Unlost - Agent memory & orientation for OpenCode that spots friction and keeps agents on track</title>
+  <title>Unlost - Trajectory-based proactive regulator for human–AI coding collaboration</title>
 
-  <meta name="description" content="Unlost keeps your agents oriented. It detects friction, records decisions, and lets you recall and query what happened in a codebase.">
+  <meta name="description" content="Unlost keeps your agents oriented. It models trajectory across Loop, Spec, and Drift basins, detects friction, and lets you recall and query what happened in a codebase.">
 
   <meta property="og:title" content="Unlost">
-  <meta property="og:description" content="Keep your agents from going off track. Detect friction, record decisions, and recall/query what happened.">
+  <meta property="og:description" content="Stop paying the Babysitting Tax. Unlost models agent trajectory to catch stalls and drift before they burn your time.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://unlost.unfault.dev/">
   <meta property="og:image" content="https://unlost.unfault.dev/og.png">
@@ -111,12 +111,12 @@
   <section class="section pt-24 sm:pt-28 lg:pt-32">
     <div class="container-narrow">
       <h1 class="text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-4 sm:mb-6 leading-tight font-medium">
-        Keep your agents from going off track
+        Trajectory-based regulation for your AI agents
       </h1>
       
       <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-6 sm:mb-8 leading-relaxed">
-        Unlost intercepts before your agents drift. It spots friction, 
-        injects guidance, and records what actually happened.
+        Unlost is a local-first proactive regulator. It models collaboration trajectory 
+        across Loop, Spec, and Drift basins to catch stalls before they burn your time.
       </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-12 sm:mb-16">
@@ -174,7 +174,9 @@
         <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
       </h2>
       <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-8 sm:mb-12 leading-relaxed">
-        Agents are wonderful until they are not. They are as frustrating as they are exhilarating. Unlost is here to fix that (well try anyway).
+        Agents are wonderful until they are not. Research shows that as context load grows, 
+        frustration spikes and stability decays. Unlost models this "Trajectory" to intervene 
+        at the inflection point.
       </p>
       <div class="space-y-8 sm:space-y-10">
         <div>
@@ -331,22 +333,33 @@ unlost query "auth flow changes"</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Show workspace metrics (local, derived from metrics.jsonl).</p>
+          <p class="text-midnight-violet-950/60 mb-4">Show workspace trajectory metrics and friction hotspots.</p>
           <pre><code>unlost metrics</code></pre>
           <div class="terminal mt-4 overflow-x-auto">
-            <div class="text-white/40 mb-1"># Example output</div>
-            <div class="text-white/80 whitespace-nowrap">workspace: wks_83ae697ac0204117</div>
-            <div class="text-white/80 whitespace-nowrap">metrics: /home/mcfly/.local/share/unlost/workspaces/wks_83ae697ac0204117/metrics.jsonl</div>
-            <div class="text-white/60 mt-2 whitespace-nowrap">=== Overview ===</div>
-            <div class="text-white/80 whitespace-nowrap">capsules: 1138</div>
-            <div class="text-white/80 whitespace-nowrap">tokens: 1049826</div>
-            <div class="text-white/80 whitespace-nowrap">cost: $8.3937</div>
-            <div class="text-white/60 mt-2 whitespace-nowrap">=== Failure Modes (LLM-detected) ===</div>
-            <div class="text-white/80 whitespace-nowrap">total: 56/1138 capsules (4.9%)</div>
-            <div class="text-white/80 whitespace-nowrap">drift: 15 | rediscovery: 1 | retry_spiral: 9</div>
-            <div class="text-white/80 whitespace-nowrap">false_progress: 15 | unbounded_horizon: 15</div>
-            <div class="text-white/60 mt-2 whitespace-nowrap">=== User Engagement ===</div>
-            <div class="text-white/80 whitespace-nowrap">recall commands: 32 | query commands: 7</div>
+            <div class="text-white/40 mb-1"># Cognitive Mirror (v0.3.0)</div>
+            <div class="text-white/80 whitespace-nowrap">friction rate:  12.4 warnings / 1M tokens</div>
+            <div class="text-white/80 whitespace-nowrap">avg interval:   42,100 tokens</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">=== Heuristic Signals ===</div>
+            <div class="text-white/80 whitespace-nowrap">loop: 12 | spec: 8 | drift: 4</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">=== Friction vs Context Size ===</div>
+            <div class="text-white/80 whitespace-nowrap">Bucket | Turns | Rate (Warnings/100 Turns)</div>
+            <div class="text-white/80 whitespace-nowrap">0-4k   | 45    | 2.2%</div>
+            <div class="text-white/80 whitespace-nowrap">8k-12k | 12    | 16.6% (Inflection)</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost replay</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Replay and backfill agent transcripts to analyze past sessions. Use <code>--git-grounding</code> to verify agent claims against actual commits.</p>
+          <pre><code>unlost replay opencode --git-grounding --no-llm
+unlost replay claudecode --transcript-path history.json</code></pre>
+          <div class="terminal mt-4 overflow-x-auto">
+            <div class="text-white/40 mb-1"># Example: bulk backfill with git verification</div>
+            <div class="text-white/80 whitespace-nowrap">$ unlost replay opencode --git-grounding --no-llm</div>
+            <div class="text-white/80 whitespace-nowrap">✓ Replay complete: 2 sessions, 604 capsules recorded</div>
           </div>
         </div>
 
@@ -458,98 +471,98 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
       </h2>
       
        <div class="space-y-12 sm:space-y-16">
-         <!-- Step 1 -->
-         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
-           <div class="sm:col-span-2">
-              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
-           </div>
-           <div class="sm:col-span-10">
-             <h3 class="text-lg sm:text-xl font-semibold mb-3">Intercept & Record</h3>
-             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-               Hooks into agent events and writes everything to an append-only JSONL journal. 
-               Non-blocking; returns immediately while processing continues in the background.
-             </p>
-             <div class="terminal">
-               <div class="text-white/40 mb-1"># Journal entry</div>
-               <div class="text-white/80">{timestamp: "2025-02-09T14:23:00Z", event: "message", role: "assistant", content: "..."}</div>
-             </div>
-           </div>
-         </div>
- 
-         <!-- Step 2 -->
-         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
-           <div class="sm:col-span-2">
-              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
-           </div>
-           <div class="sm:col-span-10">
-             <h3 class="text-lg sm:text-xl font-semibold mb-3">Summarize & Store</h3>
-             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-               LLM extracts structured capsules (intent, decision, rationale, next_steps). 
-               FastEmbed generates local embeddings. Everything stored in LanceDB; no data leaves your machine.
-             </p>
-             <div class="terminal">
-               <div class="text-white/40 mb-1"># Capsule + embedding</div>
-               <div class="text-white/80">{intent: "Fix auth", decision: "Use middleware", rationale: "...", embedding: [0.23, -0.45, ...]}</div>
-             </div>
-           </div>
-         </div>
- 
-         <!-- Step 3 -->
-         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
-           <div class="sm:col-span-2">
-              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
-           </div>
-           <div class="sm:col-span-10">
-             <h3 class="text-lg sm:text-xl font-semibold mb-3">Friction & Failure Mode Detection</h3>
-             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-               Analyzes conversation patterns in real-time: drift, retry spirals, false progress, 
-               unbounded horizons. Detects when the agent is about to go off the rails.
-             </p>
-             <div class="terminal">
-               <div class="text-white/40 mb-1"># Friction detected</div>
-               <div class="text-fiery-terracotta">retry spiral after 3 failed attempts</div>
-               <div class="text-white/50">pattern: "The Apology Loop" | confidence: 0.87</div>
-             </div>
-           </div>
-         </div>
- 
-         <!-- Step 4 -->
-         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
-           <div class="sm:col-span-2">
-              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
-           </div>
-           <div class="sm:col-span-10">
-             <h3 class="text-lg sm:text-xl font-semibold mb-3">Injection Decision</h3>
-             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-               Automatic intervention when friction is detected. Injects contextual guidance 
-               into the conversation before the agent sends its next prompt. No manual intervention.
-             </p>
-             <div class="terminal">
-               <div class="text-white/40 mb-1"># System message injected</div>
-               <div class="text-white/80">[SYSTEM: You've attempted this fix 3 times. Consider a different approach.]</div>
-             </div>
-           </div>
-         </div>
- 
-         <!-- Step 5 -->
-         <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
-           <div class="sm:col-span-2">
-              <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
-           </div>
-           <div class="sm:col-span-10">
-             <h3 class="text-lg sm:text-xl font-semibold mb-3">Recall & Query</h3>
-             <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-               Async semantic search across your workspace memory. Query by natural language, 
-               symbols, or file paths. Returns relevant capsules with context; why did we do X?
-             </p>
-             <div class="terminal">
-               <div class="text-white/40 mb-1"># User query</div>
-               <div class="text-white/80">$ unlost query "why did we switch to postgres?"</div>
-               <div class="text-white/40 mt-2 mb-1"># Result</div>
-               <div class="text-white/80">→ Found: 3 capsules | Intent: "Improve analytics performance"</div>
-             </div>
-           </div>
-         </div>
+          <!-- Step 1 -->
+          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+            <div class="sm:col-span-2">
+               <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
+            </div>
+            <div class="sm:col-span-10">
+              <h3 class="text-lg sm:text-xl font-semibold mb-3">Intercept & Sense</h3>
+              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+                Hooks into agent events in real-time. It monitors leading indicators: 
+                symbol repetition, novelty collapse, logic churn, and grounding failure.
+              </p>
+              <div class="terminal">
+                <div class="text-white/40 mb-1"># Symptom channels (local)</div>
+                <div class="text-white/80">loop: 0.82 | spec: 0.15 | drift: 0.05</div>
+              </div>
+            </div>
+          </div>
+  
+          <!-- Step 2 -->
+          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+            <div class="sm:col-span-2">
+               <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
+            </div>
+            <div class="sm:col-span-10">
+              <h3 class="text-lg sm:text-xl font-semibold mb-3">Model Trajectory</h3>
+              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+                We model collaboration across three basins: <strong>Loop</strong> (stalls), 
+                <strong>Spec</strong> (misunderstanding), and <strong>Drift</strong> (hallucination). 
+                The controller moves from Stable → Watch → Intervene.
+              </p>
+              <div class="terminal">
+                <div class="text-white/40 mb-1"># Controller state</div>
+                <div class="text-yellow-400">STATE: Watch | Intensity: 0.65 | Persistence: 2/3</div>
+              </div>
+            </div>
+          </div>
+  
+          <!-- Step 3 -->
+          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+            <div class="sm:col-span-2">
+               <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
+            </div>
+            <div class="sm:col-span-10">
+              <h3 class="text-lg sm:text-xl font-semibold mb-3">Proactive Regulation</h3>
+              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+                When intensity crosses the intervention threshold, Unlost injects guidance 
+                directly into the conversation. It forces factual grounding or planning 
+                before the agent proceeds.
+              </p>
+              <div class="terminal">
+                <div class="text-fiery-terracotta">Intervention Triggered (Spec Basin)</div>
+                <div class="text-white/80">[SYSTEM: You've repeated this instruction 3 times. Verify current symbols.]</div>
+              </div>
+            </div>
+          </div>
+  
+          <!-- Step 4 -->
+          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+            <div class="sm:col-span-2">
+               <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
+            </div>
+            <div class="sm:col-span-10">
+              <h3 class="text-lg sm:text-xl font-semibold mb-3">Extract & Localize</h3>
+              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+                Summarizes the exchange into a queryable "Capsule" (intent, decision, symbols). 
+                All embeddings and storage stay local in LanceDB for private, fast recall.
+              </p>
+              <div class="terminal">
+                <div class="text-white/40 mb-1"># Local Memory</div>
+                <div class="text-white/80">{decision: "Retain raw text for search", symbols: ["src/storage.rs"]}</div>
+              </div>
+            </div>
+          </div>
+  
+          <!-- Step 5 -->
+          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+            <div class="sm:col-span-2">
+               <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
+            </div>
+            <div class="sm:col-span-10">
+              <h3 class="text-lg sm:text-xl font-semibold mb-3">Cognitive Mirror (Metrics)</h3>
+              <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+                Unlost tracks your "friction rate" vs context size. It identifies codebase hotspots 
+                and context thresholds where collaboration begins to break down.
+              </p>
+              <div class="terminal">
+                <div class="text-white/40 mb-1"># Metrics insight</div>
+                <div class="text-white/80">Inflection detected at 12k tokens (Rate: 15 warnings / 100 turns)</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
     </div>
@@ -627,43 +640,31 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           </div>
         </div>
 
-        <!-- Frictions -->
+        <!-- The Three Basins of Friction -->
         <div>
-          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">Frictions We Compute</h3>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-4">The Three Basins of Friction</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-            Real-time detection of failure patterns computed locally to identify when agents are about to go off track:
+            Unlost models interaction dynamics across three distinct "Basins of Friction" to provide proactive regulation:
           </p>
-          <div class="space-y-6 text-midnight-violet-950/60">
+          <div class="space-y-6 text-midnight-violet-950/60 mb-6">
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">1. Drift Detection</h4>
-              <p class="leading-relaxed">
-                Measures semantic divergence between the original intent and current conversation trajectory. When the agent's focus shifts away from the stated goal beyond a threshold, we flag potential drift.
-              </p>
+              <h4 class="font-semibold text-midnight-violet-950 mb-1">Loop Basin (The Stall)</h4>
+              <p>Detects repetitive failures, symbol stalls, and logic churn. Triggered by high EMA-smoothed repetition and low novelty.</p>
             </div>
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">2. Retry Spiral</h4>
-              <p class="leading-relaxed">
-                Detects repeated attempts to solve the same problem with similar approaches. Algorithm: track consecutive failures on the same task, increment counter on each retry, flag when exceeding threshold (typically 3+ attempts).
-              </p>
+              <h4 class="font-semibold text-midnight-violet-950 mb-1">Spec Basin (Misunderstanding)</h4>
+              <p>Detects alignment debt (user corrections) and instruction staticness (verbatim repeats). Triggered by persistent alignment failures.</p>
             </div>
             <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">3. False Progress</h4>
-              <p class="leading-relaxed">
-                Identifies when the agent reports success but metrics don't improve. We compare claimed outcomes against actual test results, build status, or lint errors to detect phantom progress.
-              </p>
-            </div>
-            <div>
-              <h4 class="font-semibold text-midnight-violet-950 mb-2 text-sm sm:text-base">4. Unbounded Horizon</h4>
-              <p class="leading-relaxed">
-                Flags when the scope of work expands uncontrollably. Algorithm: monitor the number of files touched, new dependencies introduced, or architectural changes—trigger when growth exceeds 2x the original scope estimate.
-              </p>
+              <h4 class="font-semibold text-midnight-violet-950 mb-1">Drift Basin (Grounding Failure)</h4>
+              <p>Detects grounding stalls (ignoring user file mentions) and symbol hallucinations. Validated against a live codebase graph via `unfault-core`.</p>
             </div>
           </div>
-          <div class="terminal mt-6 overflow-x-auto">
-            <div class="text-white/40 mb-1"># Friction detection in action</div>
-            <div class="text-fiery-terracotta whitespace-nowrap">retry spiral detected: 4 consecutive failures on auth fix</div>
-            <div class="text-white/80 whitespace-nowrap">confidence: 0.87 | pattern: "The Apology Loop"</div>
-            <div class="text-white/60 mt-2 whitespace-nowrap">→ Injecting guidance: "Consider reviewing the middleware order"</div>
+          <div class="terminal overflow-x-auto">
+            <div class="text-white/40 mb-1"># Proactive Intervention Example</div>
+            <div class="text-white/80 whitespace-nowrap">Basin: Drift | Intensity: 0.95 | persistence: 3/3</div>
+            <div class="text-white/80 whitespace-nowrap">Cause: Agent hallucinated `AuthValidator` symbol (missing in src/)</div>
+            <div class="text-fiery-terracotta whitespace-nowrap">Action: Inject Hard Reset requiring 3 verified facts.</div>
           </div>
         </div>
 
@@ -714,6 +715,40 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             <div class="text-white/60 whitespace-nowrap">→ Top match: "Prevent API abuse" (score: 0.89)</div>
             <div class="text-white/60 whitespace-nowrap">→ Related: auth middleware, redis cache, 429 responses</div>
           </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Research & Philosophy -->
+  <section class="section">
+    <div class="container-narrow">
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        Research-First Discipline 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
+
+      <p class="text-midnight-violet-950/60 leading-relaxed mb-6">
+        Unlost isn't just a collection of heuristics. It is built on a research-first discipline 
+        where every sensor and basin is validated against real-world "Marathon" datasets.
+      </p>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-8 text-sm">
+        <div>
+          <h4 class="font-semibold text-midnight-violet-950 mb-2">Precision-First</h4>
+          <p class="text-midnight-violet-950/60">We only intervene when the trajectory signal is unambiguous. We favor silence over noise to protect your flow.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-midnight-violet-950 mb-2">Temporal Awareness</h4>
+          <p class="text-midnight-violet-950/60">The controller respects "Coffee Pauses." It decays state across breaks to avoid misattributing human pauses to agent stalls.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-midnight-violet-950 mb-2">Academic Alignment</h4>
+          <p class="text-midnight-violet-950/60">Our basins are aligned with EASE'25 research on emotional strain in SE, specifically targeting "Logic Churn" and "Alignment Debt."</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-midnight-violet-950 mb-2">Codebase Grounding</h4>
+          <p class="text-midnight-violet-950/60">We use `unfault-core` for sub-second symbol graph validation, ensuring drift detection is backed by factual codebase state.</p>
         </div>
       </div>
     </div>

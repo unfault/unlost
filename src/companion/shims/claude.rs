@@ -191,6 +191,7 @@ struct ParsedTurn {
     touched_paths: Vec<String>,
     user_uuid: Option<String>,
     assistant_uuid: Option<String>,
+    timestamp_ms: i64,
 }
 
 fn turn_key(turn: &ParsedTurn) -> Option<String> {
@@ -471,6 +472,7 @@ fn parse_transcript_from_cursor(
     let mut current_user_uuid: Option<String> = None;
     let mut current_assistant_text = String::new();
     let mut current_last_assistant_uuid: Option<String> = None;
+    let mut current_timestamp_ms = 0i64;
 
     // Best-effort: collect touched paths during a turn.
     let mut pending_touched: HashSet<String> = HashSet::new();
@@ -494,6 +496,11 @@ fn parse_transcript_from_cursor(
             Ok(p) => p,
             Err(_) => continue,
         };
+
+        // Extract timestamp if available
+        if let Some(ts) = parsed.extra.get("time").and_then(|v| v.as_i64()) {
+            current_timestamp_ms = ts;
+        }
 
         // Best-effort: some tool outputs include structured fields outside `message.content`
         // (e.g. `toolUseResult.filePath`). Collect any path-like strings.
@@ -587,6 +594,7 @@ fn parse_transcript_from_cursor(
                         touched_paths: pending_touched.drain().collect(),
                         user_uuid: current_user_uuid.take(),
                         assistant_uuid: current_last_assistant_uuid.take(),
+                        timestamp_ms: current_timestamp_ms,
                     });
                 }
 
@@ -595,6 +603,7 @@ fn parse_transcript_from_cursor(
                 current_assistant_text.clear();
                 current_last_assistant_uuid = None;
                 current_usage = None;
+                // Don't reset current_timestamp_ms here, keep the last seen one for the turn
             }
             ("assistant", "assistant") => {
                 let text = extract_text_content(content);
@@ -640,6 +649,7 @@ fn parse_transcript_from_cursor(
             touched_paths: pending_touched.drain().collect(),
             user_uuid: current_user_uuid,
             assistant_uuid: current_last_assistant_uuid,
+            timestamp_ms: current_timestamp_ms,
         });
     }
 
@@ -798,6 +808,7 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
             agent_kind: AgentKind::Claude,
             agent_session_id: Some(input.session_id.clone()),
             usage: turn.usage,
+            grounding_note: None,
         };
 
         let result = flow.record_turn(event).await;
@@ -938,6 +949,7 @@ pub async fn replay(
     no_llm: bool,
     embed_model: String,
     embed_cache_dir: Option<String>,
+    git_grounding: bool,
 ) -> anyhow::Result<()> {
     let transcript_path = PathBuf::from(transcript_path);
     if !transcript_path.exists() {
@@ -946,6 +958,8 @@ pub async fn replay(
 
     let dir_path = Path::new(&path);
     let ws = get_or_create_workspace_paths(dir_path)?;
+
+    let repo_root = crate::workspace::git_toplevel(dir_path);
 
     // Collect transcript files to process
     let transcript_files: Vec<PathBuf> = if transcript_path.is_file() {
@@ -1036,6 +1050,7 @@ pub async fn replay(
         let embed_cache_dir = embed_cache_dir.clone();
         let files_done = files_done.clone();
         let semaphore = semaphore.clone();
+        let repo_root_clone = repo_root.clone();
         
         let handle = tokio::spawn(async move {
             let _permit = semaphore
@@ -1077,6 +1092,26 @@ pub async fn replay(
             };
 
             let (turns, new_cursor) = parse_transcript_from_cursor(&file_path, &cursor, &dir_path)?;
+            
+            // If git grounding is enabled, fetch commits for the session range
+            let commits = if git_grounding {
+                if let Some(ref root) = repo_root_clone {
+                    let min_ts = turns.iter().filter(|t| t.timestamp_ms > 0).map(|t| t.timestamp_ms).min().unwrap_or(0);
+                    let max_ts = turns.iter().filter(|t| t.timestamp_ms > 0).map(|t| t.timestamp_ms).max().unwrap_or(0);
+                    
+                    if min_ts > 0 {
+                        // Look up to 15 minutes after the last turn
+                        crate::git::get_commits_for_range(root, min_ts, max_ts + 15 * 60 * 1000).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let mut recorded = 0usize;
 
             let mut seen = if dedupe {
@@ -1097,6 +1132,28 @@ pub async fn replay(
                     }
                 }
 
+                // Grounding from git logs
+                let grounding_note = if let Some(ref available) = commits {
+                    if turn.timestamp_ms > 0 {
+                        let matches = crate::git::find_corresponding_commits(
+                            turn.timestamp_ms,
+                            &turn.touched_paths,
+                            available,
+                            5 * 60 * 1000, // 5 minute window
+                        );
+                        if !matches.is_empty() {
+                            let hashes: Vec<_> = matches.iter().map(|c| &c.hash[..7]).collect();
+                            Some(format!("Verified via git: {}", hashes.join(", ")))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let event = RecordTurnEvent {
                     directory: path.clone(),
                     user_text: turn.user_text,
@@ -1105,6 +1162,7 @@ pub async fn replay(
                     agent_kind: AgentKind::Claude,
                     agent_session_id: Some(sid.clone()),
                     usage: turn.usage,
+                    grounding_note,
                 };
                 let result = flow.record_turn(event).await;
                 if result.error.is_none() {

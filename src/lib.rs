@@ -6,6 +6,7 @@ pub mod config;
 pub mod constants;
 pub mod embed;
 pub mod emotion;
+pub mod git;
 pub mod governor;
 pub mod http_proxy;
 pub mod llm;

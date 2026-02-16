@@ -242,6 +242,7 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
             no_llm,
             embed_model,
             embed_cache_dir,
+            git_grounding,
         } => {
             unlost::companion::shims::claude::replay(
                 path,
@@ -252,6 +253,7 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
                 no_llm,
                 embed_model,
                 embed_cache_dir,
+                git_grounding,
             )
             .await?;
         }
@@ -261,6 +263,7 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
             no_llm,
             embed_model,
             embed_cache_dir,
+            git_grounding,
         } => {
             unlost::companion::shims::opencode::replay(
                 path,
@@ -268,6 +271,7 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
                 no_llm,
                 embed_model,
                 embed_cache_dir,
+                git_grounding,
             )
             .await?;
         }

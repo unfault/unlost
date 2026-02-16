@@ -20,8 +20,10 @@
 use crate::companion::flow::{
     AgentKind, CheckEvent, CheckResult, Flow, FlowConfig, RecordResult, RecordTurnEvent, UsageEvent,
 };
+use crate::workspace::get_or_create_workspace_paths;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
+use std::path::Path;
 
 // ============================================================================
 // Wire protocol types (JSON-RPC style, but simplified)
@@ -42,6 +44,9 @@ struct CheckParams {
     /// Workspace directory (absolute path)
     #[serde(default)]
     directory: String,
+    /// Agent session ID (e.g., OpenCode session) for grouping conversations
+    #[serde(default)]
+    agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -64,6 +69,9 @@ struct RecordParams {
     /// Best-effort assistant usage metrics (tokens/cost). Optional.
     #[serde(default)]
     usage: Option<UsageParams>,
+    /// OpenCode turn key (user_msg_id:assistant_msg_id) for deduplication
+    #[serde(default)]
+    turn_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -131,7 +139,7 @@ impl From<CheckParams> for CheckEvent {
             directory: p.directory,
             text: p.text,
             agent_kind: AgentKind::OpenCode,
-            agent_session_id: None,
+            agent_session_id: p.agent_session_id,
         }
     }
 }
@@ -165,6 +173,7 @@ impl From<RecordParams> for RecordTurnEvent {
             agent_kind: AgentKind::OpenCode,
             agent_session_id: p.agent_session_id,
             usage,
+            grounding_note: None,
         }
     }
 }
@@ -249,9 +258,35 @@ pub async fn run(
             }
             "record" => {
                 let params: RecordParams = serde_json::from_value(req.params).unwrap_or_default();
-                let event: RecordTurnEvent = params.into();
-                let result = flow.record_turn(event).await;
-                result.into()
+                let dir_path = Path::new(&params.directory);
+                
+                // Try deduplication if turn_key is provided
+                let should_record = if let Some(ref tk) = params.turn_key {
+                    if let Ok(ws) = get_or_create_workspace_paths(dir_path) {
+                        let seen = crate::companion::shims::opencode::load_replayed(&ws.id);
+                        if seen.contains(tk) {
+                            false
+                        } else {
+                            crate::companion::shims::opencode::append_replayed(&ws.id, &[tk.clone()]);
+                            true
+                        }
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if should_record {
+                    let event: RecordTurnEvent = params.into();
+                    let result = flow.record_turn(event).await;
+                    result.into()
+                } else {
+                    Response::Record(RecordResponse {
+                        ok: true,
+                        error: None,
+                    })
+                }
             }
             _ => Response::Error {
                 error: format!("unknown method: {}", req.method),
