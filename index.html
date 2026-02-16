@@ -339,6 +339,7 @@ unlost query "auth flow changes"</code></pre>
             <div class="text-white/40 mb-1"># Cognitive Mirror (v0.3.0)</div>
             <div class="text-white/80 whitespace-nowrap">friction rate:  12.4 warnings / 1M tokens</div>
             <div class="text-white/80 whitespace-nowrap">avg interval:   42,100 tokens</div>
+            <div class="text-white/80 whitespace-nowrap">avg verbosity:  14.2x (assistant/user)</div>
             <div class="text-white/60 mt-2 whitespace-nowrap">=== Heuristic Signals ===</div>
             <div class="text-white/80 whitespace-nowrap">loop: 12 | spec: 8 | drift: 4</div>
             <div class="text-white/60 mt-2 whitespace-nowrap">=== Friction vs Context Size ===</div>
@@ -744,7 +745,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
         </div>
         <div>
           <h4 class="font-semibold text-midnight-violet-950 mb-2">Academic Alignment</h4>
-          <p class="text-midnight-violet-950/60">Our basins are aligned with <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="text-fiery-terracotta hover:underline">EASE'25</a> research on emotional strain in SE, specifically targeting "Logic Churn" and "Alignment Debt."</p>
+          <p class="text-midnight-violet-950/60">Our basins are aligned with <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="text-fiery-terracotta hover:underline">EASE'25</a> research on emotional strain, and <a href="https://www.nature.com/articles/s41598-024-67829-6" class="text-fiery-terracotta hover:underline">Nature Scientific Reports</a> on how conversational fluency can mask inaccuracy.</p>
         </div>
         <div>
           <h4 class="font-semibold text-midnight-violet-950 mb-2">Codebase Grounding</h4>
@@ -754,11 +755,18 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
 
       <div class="mt-12 pt-8 border-t border-midnight-violet-950/5">
         <h4 class="text-xs font-semibold text-midnight-violet-950/30 mb-4 uppercase tracking-wider">Scientific References</h4>
-        <p class="text-[11px] sm:text-xs text-midnight-violet-950/40 leading-relaxed italic">
-          Cristina Martinez Montes and Ranim Khojah. 2025. <b>Emotional Strain and Frustration in LLM Interactions in Software Engineering.</b> 
-          In Proceedings of the 29th International Conference on Evaluation and Assessment in Software Engineering (EASE '25). 
-          <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="hover:text-fiery-terracotta underline">DOI: 10.1145/3756681.3756951</a>
-        </p>
+        <div class="space-y-4">
+          <p class="text-[11px] sm:text-xs text-midnight-violet-950/40 leading-relaxed italic">
+            Cristina Martinez Montes and Ranim Khojah. 2025. <b>Emotional Strain and Frustration in LLM Interactions in Software Engineering.</b> 
+            In Proceedings of the 29th International Conference on Evaluation and Assessment in Software Engineering (EASE '25). 
+            <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="hover:text-fiery-terracotta underline">DOI: 10.1145/3756681.3756951</a>
+          </p>
+          <p class="text-[11px] sm:text-xs text-midnight-violet-950/40 leading-relaxed italic">
+            Zhu, Y., Wu, Y., & Miller, J. 2024. <b>Conversational presentation mode increases credibility judgements during information search with ChatGPT.</b> 
+            Scientific Reports (Nature). 
+            <a href="https://www.nature.com/articles/s41598-024-67829-6" class="hover:text-fiery-terracotta underline">DOI: 10.1038/s41598-024-67829-6</a>
+          </p>
+        </div>
       </div>
     </div>
   </section>
