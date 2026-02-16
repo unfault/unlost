@@ -280,7 +280,7 @@ unlost config llm openai --model gpt-4o-mini</code></pre>
 
       <div class="space-y-10 sm:space-y-12">
         <!-- Memory -->
-        <div>
+        <div id="recall">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost recall</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
@@ -305,7 +305,7 @@ unlost recall src/</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="query">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost query</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
@@ -328,7 +328,7 @@ unlost query "auth flow changes"</code></pre>
         </div>
 
         <!-- Monitor -->
-        <div>
+        <div id="metrics">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
@@ -349,7 +349,7 @@ unlost query "auth flow changes"</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="replay">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost replay</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
@@ -364,7 +364,7 @@ unlost replay claudecode --transcript-path history.json</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="inspect">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost inspect</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
@@ -389,7 +389,7 @@ unlost replay claudecode --transcript-path history.json</code></pre>
         </div>
 
         <!-- Manage -->
-        <div>
+        <div id="reindex">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost reindex</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
@@ -406,7 +406,7 @@ unlost replay claudecode --transcript-path history.json</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="clear">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost clear</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
@@ -423,7 +423,7 @@ unlost replay claudecode --transcript-path history.json</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="where">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost where</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
@@ -439,7 +439,7 @@ unlost replay claudecode --transcript-path history.json</code></pre>
           </div>
         </div>
 
-        <div>
+        <div id="config">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost config</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#9856ca]/10 text-[#9856ca] w-fit">Manage</span>
@@ -473,7 +473,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
       
        <div class="space-y-12 sm:space-y-16">
           <!-- Step 1 -->
-          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div id="step-01" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
             <div class="sm:col-span-2">
                <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">01</div>
             </div>
@@ -491,7 +491,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           </div>
   
           <!-- Step 2 -->
-          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div id="step-02" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
             <div class="sm:col-span-2">
                <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">02</div>
             </div>
@@ -510,7 +510,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           </div>
   
           <!-- Step 3 -->
-          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div id="step-03" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
             <div class="sm:col-span-2">
                <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">03</div>
             </div>
@@ -529,7 +529,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           </div>
   
           <!-- Step 4 -->
-          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div id="step-04" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
             <div class="sm:col-span-2">
                <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
             </div>
@@ -547,7 +547,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           </div>
   
           <!-- Step 5 -->
-          <div class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div id="step-05" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
             <div class="sm:col-span-2">
                <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">05</div>
             </div>
