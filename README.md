@@ -129,8 +129,23 @@ unlost metrics
 
 This reveals:
 - **Friction vs Context Size**: See how the warning rate spikes as your input tokens grow (the "Lost in Context" threshold).
+- **Average Verbosity**: Measures "Fluency" — how much the assistant is dominating the token share (a leading indicator for over-trust and blind acceptance).
 - **Average Interval**: How many tokens of productive work you get between trajectory breakdowns.
 - **Top Friction Files**: Codebase "hotspots" that are consistently causing the agent to stall or drift.
+
+## Replay & Grounding
+
+Did an agent session happen while Unlost was off? Or do you want to analyze a past transcript?
+
+```bash
+# Replay OpenCode sessions from your current repo
+unlost replay opencode --git-grounding
+
+# Replay a Claude transcript file
+unlost replay claude --transcript-path history.json --git-grounding
+```
+
+The `--git-grounding` flag verifies agent claims against actual commits in your history, marking capsules as "Verified via Git" when a match is found.
 
 ## Install
 
