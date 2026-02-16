@@ -20,6 +20,7 @@ const WEIGHT_PATH_HALLUCINATION: f32 = 0.60;
 const WEIGHT_GROUNDING_STALL: f32 = 0.30;
 const WEIGHT_INSTRUCTION_STATICNESS: f32 = 0.25;
 const WEIGHT_LOGIC_CHURN: f32 = 0.20;
+const WEIGHT_FLUENCY: f32 = 0.15;
 
 const THRESHOLD_WATCH: f32 = 0.5;
 const THRESHOLD_INTERVENE: f32 = 0.8;
@@ -156,6 +157,7 @@ impl TrajectoryController {
         let s_hallucination = calculate_drift_hallucination(workspace_id, current);
         let s_summary = detect_summary_intent(&current.decision);
         let s_churn = calculate_logic_churn(&current.decision, &self.last_decision);
+        let s_fluency = calculate_fluency(history);
         self.last_decision = Some(current.decision.clone());
 
         // 2.1 Deep Drift Sensors
@@ -234,6 +236,8 @@ impl TrajectoryController {
             EMA_ALPHA * s_stat + (1.0 - EMA_ALPHA) * self.smoothed_channels.instruction_staticness;
         self.smoothed_channels.logic_churn =
             EMA_ALPHA * s_churn + (1.0 - EMA_ALPHA) * self.smoothed_channels.logic_churn;
+        self.smoothed_channels.fluency =
+            EMA_ALPHA * s_fluency + (1.0 - EMA_ALPHA) * self.smoothed_channels.fluency;
 
         // 4. Intensity Calculation
         let loop_intensity = WEIGHT_REPETITION * self.smoothed_channels.repetition
@@ -243,7 +247,8 @@ impl TrajectoryController {
             + WEIGHT_LOGIC_CHURN * self.smoothed_channels.logic_churn;
 
         let spec_intensity = WEIGHT_ALIGNMENT_DEBT * self.smoothed_channels.alignment_debt
-            + WEIGHT_INSTRUCTION_STATICNESS * self.smoothed_channels.instruction_staticness;
+            + WEIGHT_INSTRUCTION_STATICNESS * self.smoothed_channels.instruction_staticness
+            + WEIGHT_FLUENCY * self.smoothed_channels.fluency;
 
         let drift_intensity = WEIGHT_PATH_HALLUCINATION * self.smoothed_channels.path_hallucination
             + WEIGHT_GROUNDING_STALL * self.smoothed_channels.grounding_stall;
@@ -254,6 +259,14 @@ impl TrajectoryController {
         // the agent is stubbornly repeating a failed approach.
         if self.smoothed_channels.alignment_debt > 0.5 && self.smoothed_channels.logic_churn < 0.2 {
             raw_intensity = (raw_intensity + 0.2).min(1.0);
+        }
+
+        // NEW: "Blind Acceptance" Risk (Feb 16, 2026)
+        // High fluency in previous turn + short/passive current user input indicates
+        // the user might be blindly accepting verbose output without structural verification.
+        let is_passive_user = current.intent.len() < 30 && current.user_symbols.is_empty();
+        if self.smoothed_channels.fluency > 0.6 && is_passive_user {
+            raw_intensity = (raw_intensity + 0.15).min(1.0);
         }
 
         // NEW: Summary Intent Damping (Prevents false positives during consolidation)
@@ -389,6 +402,30 @@ impl TrajectoryController {
         self.last_intervention_type = None;
         self.last_decision = None;
         self.user_symbol_history.clear();
+    }
+}
+
+fn calculate_fluency(history: &[CapsuleHit]) -> f32 {
+    if let Some(last) = history.first() {
+        let user_toks = last
+            .meta
+            .usage
+            .as_ref()
+            .and_then(|u| u.tokens_input)
+            .unwrap_or((last.capsule.intent.len() / 4) as i64)
+            .max(1);
+        let assistant_toks = last
+            .meta
+            .usage
+            .as_ref()
+            .and_then(|u| u.tokens_output)
+            .unwrap_or((last.capsule.decision.len() / 4) as i64);
+
+        let ratio = assistant_toks as f32 / user_toks as f32;
+        // 10x verbosity is our "high fluency" signal baseline
+        (ratio / 10.0).min(1.0)
+    } else {
+        0.0
     }
 }
 

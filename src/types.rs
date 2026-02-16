@@ -100,6 +100,8 @@ pub struct SymptomChannels {
     pub instruction_staticness: f32,
     /// Measure of rapid plan/decision changes without progress.
     pub logic_churn: f32,
+    /// Measure of assistant verbosity vs user input (fluency/blind acceptance signal).
+    pub fluency: f32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]

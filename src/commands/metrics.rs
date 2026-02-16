@@ -54,6 +54,11 @@ pub fn run(path: String) -> anyhow::Result<()> {
         )
         .bold()
     );
+    println!(
+        "{:18} {}",
+        "avg verbosity:".dimmed(),
+        format!("{:.1}x (assistant/user)", summary.avg_fluency).bold()
+    );
     println!();
 
     if summary.recent_capsules > 0 {

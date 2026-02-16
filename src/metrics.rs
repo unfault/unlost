@@ -162,6 +162,9 @@ pub(crate) fn record_friction_warning_injected(
         if c.logic_churn > 0.01 {
             top_channels.insert("churn".to_string(), c.logic_churn);
         }
+        if c.fluency > 0.01 {
+            top_channels.insert("fluency".to_string(), c.fluency);
+        }
     }
 
     let ev = MetricsEvent::FrictionWarningInjected {
@@ -274,6 +277,8 @@ pub(crate) struct MetricsSummary {
     pub(crate) recent_friction_warnings: u64,
     /// Contributions of individual symptom channels to all warnings
     pub(crate) channel_contributions: std::collections::HashMap<String, f32>,
+    /// Average verbosity ratio (assistant tokens / user tokens)
+    pub(crate) avg_fluency: f32,
 }
 
 pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<MetricsSummary> {
@@ -288,6 +293,9 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
 
     let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =
         std::collections::HashMap::new();
+
+    let mut total_fluency = 0.0;
+    let mut turns_with_fluency = 0;
 
     let now = crate::now_ms();
     let day_ms = 24 * 60 * 60 * 1000;
@@ -306,6 +314,7 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
             MetricsEvent::CapsuleSaved {
                 ts_ms,
                 tokens_total,
+                tokens_input,
                 cost,
                 paths_checked,
                 paths_missing,
@@ -319,6 +328,14 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 }
                 if let Some(t) = tokens_total {
                     out.tokens_total = out.tokens_total.saturating_add(*t);
+
+                    if let Some(input) = tokens_input {
+                        let output = t - input;
+                        if *input > 0 {
+                            total_fluency += output as f32 / *input as f32;
+                            turns_with_fluency += 1;
+                        }
+                    }
                 }
                 if let Some(c) = cost {
                     out.cost_total += c;
@@ -484,6 +501,10 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
     if total_spacing_segments > 0 {
         out.avg_tokens_between_interventions =
             total_spacing_tokens as f64 / total_spacing_segments as f64;
+    }
+
+    if turns_with_fluency > 0 {
+        out.avg_fluency = total_fluency / turns_with_fluency as f32;
     }
 
     Ok(out)
