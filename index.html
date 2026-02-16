@@ -353,9 +353,14 @@ unlost query "auth flow changes"</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost replay</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Replay and backfill agent transcripts to analyze past sessions.</p>
-          <pre><code>unlost replay claudecode --transcript-path history.json
-unlost replay opencode --path .</code></pre>
+          <p class="text-midnight-violet-950/60 mb-4">Replay and backfill agent transcripts to analyze past sessions. Use <code>--git-grounding</code> to verify agent claims against actual commits.</p>
+          <pre><code>unlost replay opencode --git-grounding --no-llm
+unlost replay claudecode --transcript-path history.json</code></pre>
+          <div class="terminal mt-4 overflow-x-auto">
+            <div class="text-white/40 mb-1"># Example: bulk backfill with git verification</div>
+            <div class="text-white/80 whitespace-nowrap">$ unlost replay opencode --git-grounding --no-llm</div>
+            <div class="text-white/80 whitespace-nowrap">✓ Replay complete: 2 sessions, 604 capsules recorded</div>
+          </div>
         </div>
 
         <div>
