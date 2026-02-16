@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.2] - 2026-02-16
+
+### Fixed
+- Sync `Cargo.lock` to fix failed release workflow
+
 ## [0.4.1] - 2026-02-16
 
 ### Fixed
@@ -136,6 +141,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.4.2]: https://github.com/unfault/unlost/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/unfault/unlost/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/unfault/unlost/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/unfault/unlost/compare/v0.2.7...v0.3.0
