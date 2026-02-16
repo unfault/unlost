@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.0] - 2026-02-16
+
+### Added
+- **Git Grounding**: Verify agent claims against actual commit history with `--git-grounding` flag during replay
+- **Fluency Sensor**: Measure assistant verbosity vs user input to detect "Blind Acceptance" risk (Nature Scientific Reports alignment)
+- **Cognitive Mirror Enhancements**: `unlost metrics` now shows average verbosity and context-load inflection diagnostics
+- **Turn Key Deduplication**: Fixed state gap between live recording and transcript replay using persistent turn keys
+
+### Changed
+- Promoted Trajectory-based regulator framing across documentation and website
+- Removed `internal/bench` from cargo workspace members
+
+## [0.3.0] - 2026-02-15
+
+### Added
+- **TrajectoryController**: Proactive regulator with `Stable → Watch → Intervene` state machine
+- **Basin Architecture**: Classification of friction into Loop (stalls), Spec (misunderstanding), and Drift (hallucination)
+- **Codebase Grounding**: Integration with `unfault-core` for sub-second symbol graph validation
+- **Temporal Awareness**: "Coffee pause" logic that decays controller state across inactivity to avoid misattributions
+- **Symptom Channels**: Logic churn, instruction staticness, and grounding stall sensors
+- First-class `unlost replay` command for transcript backfilling
+- Semantic coloring for terminal output
+
+### Changed
+- Hid internal-only commands `serve` and `record`
+- Enhanced `unlost metrics` with basin-specific breakdowns and high-cost window rankings
+
 ## [0.2.7] - 2026-02-13
 
 ### Added
@@ -104,6 +131,9 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.4.0]: https://github.com/unfault/unlost/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/unfault/unlost/compare/v0.2.7...v0.3.0
+[0.2.7]: https://github.com/unfault/unlost/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/unfault/unlost/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/unfault/unlost/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/unfault/unlost/compare/v0.2.3...v0.2.4
