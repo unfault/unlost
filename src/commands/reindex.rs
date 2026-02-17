@@ -159,6 +159,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             user_symbols: vec![], // Can't recover from JSONL easily without parsing
             failure_mode,
             failure_signals: capsule.capsule.failure_signals,
+            extraction_mode: crate::types::ExtractionMode::None,
         };
 
         crate::storage::insert_capsule_row(

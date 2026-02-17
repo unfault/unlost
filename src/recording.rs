@@ -514,6 +514,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
                 user_symbols,
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                extraction_mode: crate::types::ExtractionMode::None,
             },
         };
 
@@ -592,6 +593,7 @@ pub(crate) async fn process_flush_jobs_proxy(
                 user_symbols,
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                extraction_mode: crate::types::ExtractionMode::None,
             },
         };
 

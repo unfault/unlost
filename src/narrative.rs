@@ -561,7 +561,8 @@ Rules:
 - Do NOT quote or excerpt the conversation.
 - When scoped to a specific file or symbol, the narrative MUST be primarily ABOUT that scope. Only mention cross-scope impacts if they directly and significantly affect the scoped item. Do not include general workspace context unless it specifically relates to the scoped item.
 - Keep it high-signal: intent, decisions, rationale, and what's next.
-- **Weight recency**: Capsules are ordered from most recent to oldest (by ts_ms). Focus on the most recent capsules (#1, #2, #3...) to determine the current state and "next steps".
+- **Weight recency**: Capsules are ordered from most recent to oldest (by ts_ms). Focus HEAVILY on the most recent capsules (#1, #2, #3...) and the LATEST session to determine the current state and "next steps". If newer capsules describe productive work (like release prep), do not let older historical context (like research from days ago) dominate the first paragraph.
+- **Session Transitions**: If the most recent capsules belong to a new session and older capsules belong to a different session, prioritize the story of the new session. Only use the old session to provide relevant background, not as the primary topic.
 - Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the capsules. If present, use this to paint the emotional context.
 - If there are no mood lines, do NOT infer or guess emotion; leave it out entirely.
 

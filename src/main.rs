@@ -239,18 +239,29 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
             session_id,
             from_start,
             dedupe,
-            no_llm,
+            no_extraction,
+            full_extraction,
+            clear,
             embed_model,
             embed_cache_dir,
             git_grounding,
         } => {
+            let mode = if no_extraction {
+                unlost::types::ExtractionMode::None
+            } else if full_extraction {
+                unlost::types::ExtractionMode::Full
+            } else {
+                unlost::types::ExtractionMode::Hybrid
+            };
+
             unlost::companion::shims::claude::replay(
                 path,
                 transcript_path,
                 session_id,
                 from_start,
                 dedupe,
-                no_llm,
+                clear,
+                mode,
                 embed_model,
                 embed_cache_dir,
                 git_grounding,
@@ -260,15 +271,26 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
         ReplayCommand::Opencode {
             path,
             dedupe,
-            no_llm,
+            no_extraction,
+            full_extraction,
+            clear,
             embed_model,
             embed_cache_dir,
             git_grounding,
         } => {
+            let mode = if no_extraction {
+                unlost::types::ExtractionMode::None
+            } else if full_extraction {
+                unlost::types::ExtractionMode::Full
+            } else {
+                unlost::types::ExtractionMode::Hybrid
+            };
+
             unlost::companion::shims::opencode::replay(
                 path,
                 dedupe,
-                no_llm,
+                clear,
+                mode,
                 embed_model,
                 embed_cache_dir,
                 git_grounding,

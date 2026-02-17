@@ -416,9 +416,17 @@ pub enum ReplayCommand {
         #[arg(long, default_value_t = true)]
         dedupe: bool,
 
-        /// Disable LLM extraction (fast mode)
+        /// Disable LLM extraction (fast, zero cost)
         #[arg(long, default_value_t = false)]
-        no_llm: bool,
+        no_extraction: bool,
+
+        /// Enable full LLM extraction for every turn (slow, expensive)
+        #[arg(long, default_value_t = false)]
+        full_extraction: bool,
+
+        /// Clear existing database and replayed-tracking for this workspace before starting
+        #[arg(long, default_value_t = false)]
+        clear: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
@@ -443,9 +451,17 @@ pub enum ReplayCommand {
         #[arg(long, default_value_t = true)]
         dedupe: bool,
 
-        /// Disable LLM extraction (fast mode)
+        /// Disable LLM extraction (fast, zero cost)
         #[arg(long, default_value_t = false)]
-        no_llm: bool,
+        no_extraction: bool,
+
+        /// Enable full LLM extraction for every turn (slow, expensive)
+        #[arg(long, default_value_t = false)]
+        full_extraction: bool,
+
+        /// Clear existing database and replayed-tracking for this workspace before starting
+        #[arg(long, default_value_t = false)]
+        clear: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]

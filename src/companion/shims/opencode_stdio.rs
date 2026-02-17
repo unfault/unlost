@@ -214,7 +214,7 @@ pub async fn run(
     let config = FlowConfig {
         embed_model,
         embed_cache_dir,
-        no_llm: false, // stdio shim is for live, so no_llm defaults to false
+        extraction_mode: crate::types::ExtractionMode::Hybrid, // stdio shim is for live, so use hybrid by default
     };
     let mut flow = Flow::new(config);
 

@@ -51,6 +51,12 @@ This file serves as the "living memory" of our research to ensure continuity and
 *   **Symbol decision**: Acknowledged that high-fidelity symbol extraction (discussed symbols) is hard for regex. However, since Raw Text captures them for search, we can accept low Symbol F1 for --fast mode.
 *   **Decision**: For historical replay, the default should be **Ghost Replay** (Raw Text + Keyword Friction). Users can opt-in to **Hybrid Replay** for high-quality narratives.
 
+### Feb 17, 2026
+*   **Hybrid Replay Implementation**: Transitions `unlost replay` from binary `--no-llm` to research-backed Hybrid default.
+*   **Selective Extraction**: Implemented `is_pivotal` heuristic in `flow.rs` using emotional valence (< -0.3), correction keywords ("actually", "wait"), symbol churn (>3), and substantial length (>1500 chars).
+*   **Search Optimization**: Defaulted to embedding ALL turns using raw text, matching the 88.5% Recall@5 finding from research.
+*   **CLI Clean-up**: Replaced `--no-llm` with `--no-extraction` and `--full-extraction` for clarity.
+
 ## Next Steps
 1. [ ] **Terminal UX Design**: Define non-intrusive rendering for "Ambient" vs "Structural" notes.
 2. [ ] **Simulate/Test Batching**: Measure efficiency of processing 10 turns in one Cloud LLM call.

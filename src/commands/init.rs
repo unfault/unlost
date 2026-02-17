@@ -428,6 +428,7 @@ pub async fn run(
             user_symbols: vec![],
             failure_mode: crate::types::FailureMode::None,
             failure_signals: None,
+            extraction_mode: crate::types::ExtractionMode::None,
         },
         crate::ResponseMeta {
             source: "init".to_string(),
@@ -481,6 +482,7 @@ pub async fn run(
                 user_symbols: vec![],
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
+                extraction_mode: crate::types::ExtractionMode::None,
             },
             crate::ResponseMeta {
                 source: "init".to_string(),

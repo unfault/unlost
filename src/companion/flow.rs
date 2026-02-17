@@ -9,7 +9,10 @@
 
 use crate::IntentCapsule;
 use crate::embed::Embedder;
-use crate::emotion::{EmotionConfig, EmotionModel, apply_context_heuristics, map_go_emotions};
+use crate::emotion::{
+    apply_context_heuristics, extract_user_and_assistant_text, map_go_emotions, EmotionConfig,
+    EmotionModel,
+};
 use crate::governor::{
     evaluate_failure_modes, evaluate_friction,
 };
@@ -129,7 +132,7 @@ pub(crate) struct RecordResult {
 pub(crate) struct FlowConfig {
     pub embed_model: String,
     pub embed_cache_dir: Option<String>,
-    pub no_llm: bool,
+    pub extraction_mode: crate::types::ExtractionMode,
 }
 
 /// Shared state for background processing (accessed from the worker task).
@@ -139,18 +142,24 @@ struct BackgroundState {
     db_cache: HashMap<String, Connection>,
     embed_model: String,
     embed_cache_dir: Option<String>,
-    no_llm: bool,
+    extraction_mode: crate::types::ExtractionMode,
+    pub(crate) llm_calls: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl BackgroundState {
-    fn new(embed_model: String, embed_cache_dir: Option<String>, no_llm: bool) -> Self {
+    fn new(
+        embed_model: String,
+        embed_cache_dir: Option<String>,
+        extraction_mode: crate::types::ExtractionMode,
+    ) -> Self {
         Self {
             emotion_model: None,
             embedder: None,
             db_cache: HashMap::new(),
             embed_model,
             embed_cache_dir,
-            no_llm,
+            extraction_mode,
+            llm_calls: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -238,7 +247,7 @@ impl Flow {
         let background_state = Arc::new(Mutex::new(BackgroundState::new(
             config.embed_model,
             config.embed_cache_dir,
-            config.no_llm,
+            config.extraction_mode,
         )));
 
         // Start background worker
@@ -255,6 +264,10 @@ impl Flow {
         self.state.chunker.flush_all().await;
         // background_worker will continue running until Flow is dropped,
         // but it will process all queued jobs.
+    }
+
+    pub(crate) async fn llm_calls(&self) -> u64 {
+        self._background_state.lock().await.llm_calls.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Check for friction before an LLM call.
@@ -317,6 +330,7 @@ impl Flow {
             user_symbols,
             failure_mode,
             failure_signals: None,
+            extraction_mode: crate::types::ExtractionMode::None,
         };
 
         // NEW: Trajectory-based proactive friction regulation
@@ -506,40 +520,54 @@ async fn background_worker(rx: kanal::AsyncReceiver<FlushJob>, state: Arc<Mutex<
             Err(_) => break, // channel closed
         };
 
-        if let Err(e) = process_flush_job(&state, job).await {
+        if let Err(e) = process_flush_job(job, state.clone()).await {
             tracing::warn!("background flush job failed: {e}");
         }
     }
 }
 
+fn is_pivotal(
+    user_text: &str,
+    user_emotion: Option<&crate::emotion::EmotionMeta>,
+    symbols: &[String],
+) -> bool {
+    // 1. Emotional Friction
+    if let Some(e) = user_emotion {
+        if e.valence < -0.3 {
+            return true;
+        }
+        match e.label.as_str() {
+            "frustration" | "anger" | "doubt" | "disapproval" | "confused" => return true,
+            _ => {}
+        }
+    }
+
+    // 2. Corrective Keywords
+    if crate::governor::detect_correction(user_text, user_emotion) > 0.1 {
+        return true;
+    }
+
+    // 3. Structural Signal (high churn)
+    if symbols.len() > 3 {
+        return true;
+    }
+
+    // 4. Substantial content (long turns often carry complex intent)
+    if user_text.len() > 1500 {
+        return true;
+    }
+
+    false
+}
+
 async fn process_flush_job(
-    state: &Arc<Mutex<BackgroundState>>,
     job: FlushJob,
+    state: Arc<Mutex<BackgroundState>>,
 ) -> anyhow::Result<()> {
-    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
- Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\
- \n\
- Rules:\n\
- - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
- - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
- - Keep each field concise; next_steps max 3.\n\
- - symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned. If a 'Touched paths:' section is present, include those paths in symbols.\n\
- \n\
- Failure mode detection - set failure_mode to one of:\n\
-- none: No failure mode detected, conversation is productive.\n\
-- drift: Agent has wrong mental model of the codebase. Signs: user corrects factual errors about code structure, APIs, or file locations; agent references non-existent symbols/paths.\n\
-- rediscovery: Same ground being covered again. Signs: user re-explains constraints or decisions from earlier; \"we already discussed this\"; \"remember when we decided\".\n\
-- decision_conflict: Agent proposes or starts an approach that conflicts with an established project decision/constraint. Signs: user says \"we decided against that\", \"I told you not to\", \"that's not how we do it\"; a prior decision capsule forbids the approach.\n\
-- retry_spiral: Agent stuck in a loop. Signs: user frustration (\"same error\", \"you already tried that\", \"going in circles\"); same symbols appear repeatedly; agent apologizes then repeats similar approach.\n\
-- false_progress: Agent claims done but isn't. Signs: user says \"that's still not working\", \"the error is still there\"; agent declared completion but user disputes it.\n\
-- unbounded_horizon: Agent wandering off-task. Signs: \"while I'm here\" tangents; refactoring unrelated code; user redirects back to original task.\n\
- \n\
-Set failure_signals to a brief explanation (1 sentence) if failure_mode is not 'none', otherwise null.";
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\nThen provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\nStructure the capsule as an IntentCapsule: category, intent (why), decision (what), rationale (why that), next_steps, and symbols (file paths).";
 
-    // Extract user/assistant text for emotion classification
-    let (user_text, assistant_text) = crate::emotion::extract_user_and_assistant_text(&job.input);
+    let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
 
-    // Classify emotions (requires mutable access to state)
     let user_emotion = if !user_text.trim().is_empty() {
         let mut st = state.lock().await;
         match st.ensure_emotion_model().await {
@@ -572,12 +600,25 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
     // Extract capsule metadata locally (fast, zero cost)
     let symbols = crate::net::extract_symbols_from_text(&job.input);
     let user_symbols = crate::net::extract_symbols_from_text(&user_text);
-    let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
+    let failure_mode =
+        crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
 
-    let no_llm = state.lock().await.no_llm;
+    let extraction_mode = state.lock().await.extraction_mode;
+
+    let use_llm = match extraction_mode {
+        crate::types::ExtractionMode::Full => true,
+        crate::types::ExtractionMode::None => false,
+        crate::types::ExtractionMode::Hybrid => {
+            is_pivotal(&user_text, user_emotion.as_ref(), &symbols)
+        }
+    };
+
+    if use_llm {
+        state.lock().await.llm_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 
     // Extract capsule using LLM (this is the expensive network call)
-    let mut capsule = if !no_llm {
+    let mut capsule = if use_llm {
         match crate::llm_extract::<IntentCapsule>(None, PREAMBLE, &job.input).await {
             Ok(mut c) => {
                 // Augment LLM capsule with local symbols if LLM missed any
@@ -587,6 +628,7 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                     }
                 }
                 c.user_symbols = user_symbols;
+                c.extraction_mode = extraction_mode;
                 c
             }
             Err(e) => {
@@ -601,11 +643,12 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
                     user_symbols,
                     failure_mode,
                     failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                    extraction_mode: crate::types::ExtractionMode::None, // Effectively none if it failed
                 }
             }
         }
     } else {
-        // Ghost Mode (Option B)
+        // Ghost Mode (Option B) or skipped by Hybrid
         IntentCapsule {
             category: "replay".to_string(),
             intent: user_text.lines().next().unwrap_or("").to_string(),
@@ -615,7 +658,12 @@ Set failure_signals to a brief explanation (1 sentence) if failure_mode is not '
             symbols,
             user_symbols,
             failure_mode,
-            failure_signals: Some("Ghost extraction (no-LLM)".to_string()),
+            failure_signals: if extraction_mode == crate::types::ExtractionMode::Hybrid {
+                Some("Ghost extraction (Hybrid: non-pivotal)".to_string())
+            } else {
+                Some("Ghost extraction (no-LLM)".to_string())
+            },
+            extraction_mode: crate::types::ExtractionMode::None,
         }
     };
 

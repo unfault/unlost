@@ -553,6 +553,7 @@ pub(crate) async fn query_capsules_lancedb(
                     // Existing capsules in DB don't have failure_mode yet
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
+                    extraction_mode: crate::types::ExtractionMode::None,
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -900,6 +901,7 @@ async fn scan_capsules_lancedb_impl(
                     // Existing capsules in DB don't have failure_mode yet
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
+                    extraction_mode: crate::types::ExtractionMode::None,
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0] - 2026-02-17
+
+### Added
+- **Hybrid Replay Default**: Implemented research-backed tiered extraction. Replay now auto-detects "pivotal" turns (emotional friction, corrective keywords, high structural churn) for LLM analysis while always indexing raw text locally for maximum recall at minimum cost.
+- **Selective Extraction Heuristics**: New `is_pivotal` sensor in `flow.rs` that identifies high-signal conversation branches using emotional valence, symbol churn, and message complexity.
+- **Replay Statistical Summary**: The replay CLI now reports "pivotal moment" analysis percentages, providing transparency into LLM usage and signal density.
+- **CLI Replay Refactor**: Replaced ambiguous `--no-llm` flag with a clear trinary choice: `--no-extraction` (zero-cost), default (Hybrid), and `--full-extraction` (high-fidelity).
+- **Maintenance Tools**: Added `--clear` flag to `unlost replay` to safely wipe existing workspace database and deduplication trackers for a fresh backfill.
+
+### Changed
+- **Optimized Search recall**: Defaulted replay to local raw text embeddings for all turns, ensuring 88.5% Recall@5 (per internal research) without requiring any API calls for "routine" turns.
+- **Improved Recall Recency**: Adjusted `unlost recall` selection logic to prioritize absolute recency (last 30 mins) and latest session context, preventing older replayed historical work from drowning out current progress.
+
 ## [0.5.0] - 2026-02-17
 
 ### Added
@@ -154,6 +167,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.6.0]: https://github.com/unfault/unlost/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/unfault/unlost/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/unfault/unlost/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/unfault/unlost/compare/v0.4.0...v0.4.1

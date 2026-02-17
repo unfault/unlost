@@ -475,7 +475,7 @@ fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'stati
 }
 
 /// Print a cost warning before replay starts.
-fn print_cost_warning(turn_count: usize, use_color: bool) {
+fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use_color: bool) {
     use crate::workspace::load_workspace_config;
     
     let cfg = load_workspace_config();
@@ -487,35 +487,56 @@ fn print_cost_warning(turn_count: usize, use_color: bool) {
         Some(crate::config::LlmConfig::Custom { model, .. }) => ("custom", model.as_str()),
         None => {
             if use_color {
-                println!("\x1b[33m!\x1b[0m No LLM configured. Run: unlost config llm --help");
+                println!("\x1b[33m!\x1b[0m No LLM provider configured. Replay will proceed with heuristic extraction.");
             } else {
-                println!("! No LLM configured. Run: unlost config llm --help");
+                println!("! No LLM provider configured. Replay will proceed with heuristic extraction.");
             }
             return;
         }
     };
-    
-    // Always show what we're about to do
-    if use_color {
-        println!(
-            "\x1b[36mi\x1b[0m Replay will process ~{} turns using \x1b[1m{}/{}\x1b[0m",
-            turn_count, provider, model
-        );
-    } else {
-        println!("Replay will process ~{} turns using {}/{}", turn_count, provider, model);
+
+    // Only warn for cloud providers
+    if provider == "ollama" {
+        return;
     }
+
+    let is_expensive = is_expensive_model(model);
     
-    // Warn about expensive models and suggest alternatives
-    if is_expensive_model(model) {
-        if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
-            if use_color {
-                println!(
-                    "\x1b[33m!\x1b[0m This model may be expensive for bulk replay. Consider using \x1b[1m{}\x1b[0m:",
-                    suggested
-                );
-                println!("  {}", cmd);
-            } else {
-                println!("! This model may be expensive for bulk replay. Consider using {}:", suggested);
+    if use_color {
+        println!("\x1b[34m?\x1b[0m Replaying \x1b[1m{}\x1b[0m turns using \x1b[32m{}/{}\x1b[0m", turn_count, provider, model);
+        match mode {
+            crate::types::ExtractionMode::Hybrid => {
+                println!("  \x1b[34m*\x1b[0m Hybrid Mode: Extracting only pivotal turns to reduce API usage.");
+            }
+            crate::types::ExtractionMode::Full => {
+                println!("  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost).");
+            }
+            _ => {}
+        }
+    } else {
+        println!("? Replaying {} turns using {}/{}", turn_count, provider, model);
+        match mode {
+            crate::types::ExtractionMode::Hybrid => {
+                println!("  * Hybrid Mode: Extracting only pivotal turns to reduce API usage.");
+            }
+            crate::types::ExtractionMode::Full => {
+                println!("  ! Full Extraction: Extracting every turn (highest quality, highest cost).");
+            }
+            _ => {}
+        }
+    }
+
+    if is_expensive {
+        if use_color {
+            println!("\x1b[33m!\x1b[0m \x1b[1mWarning:\x1b[0m This model is expensive for bulk replay.");
+            if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
+                println!("  Consider using \x1b[32m{}\x1b[0m for faster, cheaper replays:", suggested);
+                println!("  \x1b[36m{}\x1b[0m", cmd);
+            }
+        } else {
+            println!("! Warning: This model is expensive for bulk replay.");
+            if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
+                println!("  Consider using {} for faster, cheaper replays:", suggested);
                 println!("  {}", cmd);
             }
         }
@@ -531,13 +552,18 @@ fn print_cost_warning(turn_count: usize, use_color: bool) {
 pub async fn replay(
     path: String,
     dedupe: bool,
-    no_llm: bool,
+    clear: bool,
+    extraction_mode: crate::types::ExtractionMode,
     embed_model: String,
     embed_cache_dir: Option<String>,
     git_grounding: bool,
 ) -> anyhow::Result<()> {
     let dir_path = Path::new(&path);
     let ws = get_or_create_workspace_paths(dir_path)?;
+
+    if clear {
+        clear_replay_data(&ws, "opencode", None)?;
+    }
 
     let repo_root = crate::workspace::git_toplevel(dir_path);
 
@@ -573,8 +599,8 @@ pub async fn replay(
         .sum();
 
     // Show cost warning before processing
-    if total_turns > 0 && !no_llm {
-        print_cost_warning(total_turns, use_color);
+    if total_turns > 0 && extraction_mode != crate::types::ExtractionMode::None {
+        print_cost_warning(total_turns, extraction_mode, use_color);
     }
 
     // Spinner setup
@@ -652,7 +678,7 @@ pub async fn replay(
             let config = FlowConfig {
                 embed_model,
                 embed_cache_dir,
-                no_llm,
+                extraction_mode,
             };
             let mut flow = Flow::new(config);
 
@@ -734,7 +760,7 @@ pub async fn replay(
 
             sessions_done.fetch_add(1, Ordering::Relaxed);
 
-            Ok::<_, anyhow::Error>((session_id_clone, recorded))
+            Ok::<_, anyhow::Error>((session_id_clone, recorded, flow.llm_calls().await))
         });
 
         handles.push(handle);
@@ -755,12 +781,14 @@ pub async fn replay(
     // Aggregate results
     let mut grand_recorded = 0usize;
     let mut sessions_processed = 0usize;
+    let mut total_llm_calls = 0u64;
 
     for result in results {
         match result {
-            Ok(Ok((_session_id, recorded))) => {
+            Ok(Ok((_session_id, recorded, llm_calls))) => {
                 grand_recorded += recorded;
                 sessions_processed += 1;
+                total_llm_calls += llm_calls;
             }
             Ok(Err(e)) => {
                 eprintln!("Error processing session: {}", e);
@@ -773,16 +801,48 @@ pub async fn replay(
 
     println!();
     if use_color {
-        println!(
+        print!(
             "\x1b[1;32m✓\x1b[0m Replay complete: \x1b[1;36m{}\x1b[0m sessions, \x1b[1;32m{}\x1b[0m capsules recorded",
             sessions_processed, grand_recorded
         );
+        if total_llm_calls > 0 && grand_recorded > 0 {
+            let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
+            print!(" (analyzed \x1b[1;33m{}\x1b[0m pivotal moments, \x1b[1;36m{:.1}%\x1b[0m)", total_llm_calls, pct);
+        }
+        println!();
     } else {
-        println!(
+        print!(
             "Replay complete: {} sessions, {} capsules recorded",
             sessions_processed, grand_recorded
         );
+        if total_llm_calls > 0 && grand_recorded > 0 {
+            let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
+            print!(" (extracted {} pivotal moments, {:.1}%)", total_llm_calls, pct);
+        }
+        println!();
     }
 
+    Ok(())
+}
+
+fn clear_replay_data(ws: &crate::WorkspacePaths, _kind: &str, _session_id: Option<&str>) -> anyhow::Result<()> {
+    println!("Clearing existing replay data for workspace: {}", ws.id);
+    
+    // 1. Clear LanceDB
+    if ws.db_dir.exists() {
+        std::fs::remove_dir_all(&ws.db_dir)?;
+    }
+    
+    // 2. Clear JSONL
+    if ws.capsules_jsonl.exists() {
+        std::fs::remove_file(&ws.capsules_jsonl)?;
+    }
+    
+    // 3. Clear replayed trackers
+    let opencode_dir = crate::workspace::unlost_workspace_dir(&ws.id).join("opencode");
+    if opencode_dir.exists() {
+        std::fs::remove_dir_all(&opencode_dir)?;
+    }
+    
     Ok(())
 }

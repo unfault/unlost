@@ -104,6 +104,18 @@ pub struct SymptomChannels {
     pub fluency: f32,
 }
 
+#[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionMode {
+    /// Skip all LLM extraction (fast, zero cost)
+    None,
+    /// LLM extract only pivotal turns (default research-backed mode)
+    #[default]
+    Hybrid,
+    /// LLM extract every turn (slow, high quality)
+    Full,
+}
+
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone)]
 pub struct IntentCapsule {
     pub category: String,
@@ -122,6 +134,9 @@ pub struct IntentCapsule {
     /// Brief explanation of why this failure mode was detected (null if failure_mode is none)
     #[serde(default)]
     pub failure_signals: Option<String>,
+    /// The extraction mode used for this capsule
+    #[serde(default)]
+    pub extraction_mode: ExtractionMode,
 }
 
 fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
@@ -172,6 +187,7 @@ mod tests {
             user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
+            extraction_mode: ExtractionMode::None,
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -341,6 +357,7 @@ mod tests {
             user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
+            extraction_mode: ExtractionMode::None,
         };
 
         let meta = ResponseMeta {
@@ -385,6 +402,7 @@ mod tests {
             user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
+            extraction_mode: ExtractionMode::None,
         };
 
         let json = serde_json::to_string(&capsule).unwrap();

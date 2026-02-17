@@ -219,6 +219,7 @@ async fn serve_request(
                 user_symbols: vec![], // Can extract from user_text if needed
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
+                extraction_mode: crate::types::ExtractionMode::None,
             };
 
             let current_user_emotion = if let Some(ref text) = current_user_text {
@@ -440,6 +441,7 @@ async fn proxy_request(
                 user_symbols: vec![], // Can extract from user_text if needed
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
+                extraction_mode: crate::types::ExtractionMode::None,
             };
 
             let current_user_emotion = if let Some(ref text) = current_user_text {

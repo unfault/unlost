@@ -81,10 +81,15 @@ fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec
     // We want a mix:
     // 1. High recency (the absolute latest things, even if repetitive)
     // 2. Historical breadth (decisions from older sessions)
-    let recent_threshold = (limit / 3).max(5);
-    let max_per_old_session = 5;
+    
+    // Increase recency priority: take more from the absolute latest window.
+    let recent_threshold = (limit / 2).max(10); 
+    let max_per_old_session = 3; // Reduce historical crowding
 
     let mut selected = Vec::with_capacity(limit);
+    let now = crate::workspace::now_ms();
+    let thirty_mins_ms = 30 * 60 * 1000;
+
     for h in hits {
         if selected.len() >= limit {
             break;
@@ -94,9 +99,11 @@ fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec
         let fp = hit_fingerprint(&h);
         let k = format!("{sk}|{fp}");
 
-        // If we are in the "high recency" window, we are less strict about repetition
-        // and session limits, but we still collapse exact duplicates (same fingerprint).
-        if selected.len() < recent_threshold {
+        // Absolute recency: things from the last 30 minutes get a pass
+        // regardless of the recent_threshold index, but still deduplicated.
+        let is_very_recent = (now - h.ts_ms).abs() < thirty_mins_ms;
+
+        if is_very_recent || selected.len() < recent_threshold {
             if seen_fp.contains(&k) {
                 continue;
             }
