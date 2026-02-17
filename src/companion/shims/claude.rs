@@ -1227,14 +1227,12 @@ pub async fn replay(
 
     // Aggregate results
     let mut grand_recorded = 0usize;
-    let mut files_processed = 0usize;
     let mut total_llm_calls = 0u64;
 
     for result in results {
         match result {
             Ok(Ok((_file_path, recorded, llm_calls))) => {
                 grand_recorded += recorded;
-                files_processed += 1;
                 total_llm_calls += llm_calls;
             }
             Ok(Err(e)) => {
@@ -1249,22 +1247,32 @@ pub async fn replay(
     println!();
     if use_color {
         print!(
-            "\x1b[1;32m✓\x1b[0m Replay complete: \x1b[1;36m{}\x1b[0m sessions, \x1b[1;32m{}\x1b[0m capsules recorded",
-            files_processed, grand_recorded
+            "\x1b[1;32m✓\x1b[0m Replay complete: \x1b[1;36m{}\x1b[0m turns indexed locally",
+            grand_recorded
         );
         if total_llm_calls > 0 && grand_recorded > 0 {
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
-            print!(" (analyzed \x1b[1;33m{}\x1b[0m pivotal moments, \x1b[1;36m{:.1}%\x1b[0m)", total_llm_calls, pct);
+            let saved = 100.0 - pct;
+            if saved > 0.1 {
+                print!(" (LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments, saving \x1b[1;36m{:.1}%\x1b[0m in API calls)", total_llm_calls, saved);
+            } else {
+                print!(" (LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments)", total_llm_calls);
+            }
         }
         println!();
     } else {
         print!(
-            "Replay complete: {} sessions, {} capsules recorded",
-            files_processed, grand_recorded
+            "Replay complete: {} turns indexed locally",
+            grand_recorded
         );
         if total_llm_calls > 0 && grand_recorded > 0 {
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
-            print!(" (extracted {} pivotal moments, {:.1}%)", total_llm_calls, pct);
+            let saved = 100.0 - pct;
+            if saved > 0.1 {
+                print!(" (LLM analyzed {} pivotal moments, saving {:.1}% in API calls)", total_llm_calls, saved);
+            } else {
+                print!(" (LLM analyzed {} pivotal moments)", total_llm_calls);
+            }
         }
         println!();
     }
