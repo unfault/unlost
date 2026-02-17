@@ -223,6 +223,7 @@ mod tests {
             failure_signals: Some(
                 "User expressed frustration, same symbols touched 3 times".to_string(),
             ),
+            extraction_mode: ExtractionMode::None,
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -300,6 +301,7 @@ mod tests {
             user_symbols: vec![],
             failure_mode: FailureMode::None,
             failure_signals: None,
+            extraction_mode: ExtractionMode::None,
         }];
 
         let output = InitCapsulesOutput {
