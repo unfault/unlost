@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] - 2026-02-17
+
+### Fixed
+- **Test Stability**: Fixed compilation errors in `src/types.rs` tests due to missing `extraction_mode` field in `IntentCapsule` initializers.
+
 ## [0.6.0] - 2026-02-17
 
 ### Added
@@ -167,6 +172,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.6.1]: https://github.com/unfault/unlost/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/unfault/unlost/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/unfault/unlost/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/unfault/unlost/compare/v0.4.1...v0.4.2
