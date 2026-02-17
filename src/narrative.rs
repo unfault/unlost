@@ -527,16 +527,25 @@ pub(crate) async fn llm_recall_narrative(
                 .single()
                 .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
                 .unwrap_or_else(|| format!("{}ms", iv.ts_ms));
-            context.push_str(&format!("#{} time={} intensity={:.0}% cause={}\n", 
-                i + 1, ts_str, iv.intensity * 100.0, iv.cause));
+
+            let diagnosis = crate::metrics::get_diagnosis(&iv.cause, &iv.top_channels);
+            let severity = crate::metrics::get_severity_label(iv.intensity);
+            
+            let duration_str = if let Some(start) = iv.watch_start_ts {
+                let dur_mins = (iv.ts_ms - start) / 60000;
+                format!("intervened after {}m", dur_mins)
+            } else {
+                "intervened".to_string()
+            };
+
+            context.push_str(&format!("#{} time={} {} {} {}\n", 
+                i + 1, ts_str, duration_str, severity, diagnosis));
+            
+            if let Some(ref topic) = iv.topic {
+                context.push_str(&format!("  topic: \"{}\"\n", topic.replace('\n', " ")));
+            }
             if !iv.symbols.is_empty() {
                 context.push_str(&format!("  symbols: {}\n", iv.symbols.join(", ")));
-            }
-            if !iv.top_channels.is_empty() {
-                let channels: Vec<String> = iv.top_channels.iter()
-                    .map(|(k, v)| format!("{}:{:.2}", k, v))
-                    .collect();
-                context.push_str(&format!("  symptoms: {}\n", channels.join(", ")));
             }
         }
         context.push('\n');
@@ -547,18 +556,19 @@ pub(crate) async fn llm_recall_narrative(
 Rules:
 - Base your output ONLY on the provided capsules.
 - If a "Workspace snapshot (non-capsule evidence)" section is present, you MAY use it only to describe current uncommitted work (e.g., which files are being edited). Do not treat it as decisions/intent; do not infer beyond what it shows.
-- If a "Recent friction interventions" section is present, use it to understand where the system detected workflow friction (repetition, confusion, effort spikes). Briefly acknowledge significant friction in the narrative if it helps explain the current state, but do not let it dominate the story.
+- If a "Recent friction interventions" section is present, use it to understand where the system detected workflow friction (duration of the build-up, diagnosis, and topic). Briefly acknowledge significant friction in the narrative if it helps explain the current state, but do not let it dominate the story. Mentioning the topic of the friction (e.g., "Work on the benchmark harness hit a grounding failure...") provides good context.
+- **Handle stale next steps/interventions**: If an older capsule (#10, #20...) or friction intervention describes a blocker or problem (like a broken build or grounding failure) that is NOT mentioned or repeated in any subsequent (newer) capsules or interventions despite multiple intervening productive exchanges, assume it has been addressed, resolved, or deprioritized. Do NOT include it in your "suggested next steps" unless newer evidence explicitly reaffirms it as an ongoing issue.
 - Do NOT quote or excerpt the conversation.
 - When scoped to a specific file or symbol, the narrative MUST be primarily ABOUT that scope. Only mention cross-scope impacts if they directly and significantly affect the scoped item. Do not include general workspace context unless it specifically relates to the scoped item.
 - Keep it high-signal: intent, decisions, rationale, and what's next.
-- **Weight recency**: Capsules are ordered from most recent to oldest (by ts_ms). When describing "recent work" or "current focus", emphasize decisions and intent from the earliest capsule numbers (#1, #2, #3...). Older capsules provide historical context but should NOT be presented as current priority unless there are no recent capsules.
+- **Weight recency**: Capsules are ordered from most recent to oldest (by ts_ms). Focus on the most recent capsules (#1, #2, #3...) to determine the current state and "next steps".
 - Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the capsules. If present, use this to paint the emotional context.
 - If there are no mood lines, do NOT infer or guess emotion; leave it out entirely.
 
 Output format:
 - 2-3 sentences: overall state of the work focused on the scope (if scoped).
 - Then 3-6 short bullets: key decisions (with 1-2 backticked tokens each).
-- Then 2-4 short bullets: suggested next steps (as actions).
+- Then 2-4 short bullets: suggested next steps (actions for the near future).
 - If the evidence is thin, say so plainly and recommend ONE follow-up `unlost query ...`.
 "#;
 

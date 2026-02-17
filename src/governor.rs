@@ -38,6 +38,7 @@ pub struct TrajectoryController {
     pub intensity: f32,
     pub smoothed_channels: SymptomChannels,
     pub last_ts_ms: i64,
+    pub watch_start_ts: Option<i64>,
     pub turns_since_intervention: usize,
     /// History of intensity values for persistence checking.
     pub intensity_history: std::collections::VecDeque<f32>,
@@ -129,6 +130,7 @@ pub struct TrajectoryUpdate {
     pub intensity: f32,
     pub cause: String,
     pub channels: SymptomChannels,
+    pub watch_start_ts: Option<i64>,
 }
 
 impl TrajectoryController {
@@ -146,6 +148,7 @@ impl TrajectoryController {
         if self.last_ts_ms > 0 && (ts_ms - self.last_ts_ms) > COFFEE_PAUSE_MS {
             self.state = TrajectoryState::Stable;
             self.intensity *= COFFEE_PAUSE_DECAY;
+            self.watch_start_ts = None;
             reset_note = render_resumption_brief(history);
         }
         self.last_ts_ms = ts_ms;
@@ -311,6 +314,7 @@ impl TrajectoryController {
             TrajectoryState::Stable => {
                 if self.intensity > THRESHOLD_WATCH && slope > 0.0 {
                     self.state = TrajectoryState::Watch;
+                    self.watch_start_ts = Some(ts_ms);
                 }
             }
             TrajectoryState::Watch => {
@@ -318,6 +322,7 @@ impl TrajectoryController {
                     self.state = TrajectoryState::Intervene;
                 } else if self.intensity < THRESHOLD_STABLE_OFF {
                     self.state = TrajectoryState::Stable;
+                    self.watch_start_ts = None;
                 }
             }
             TrajectoryState::Intervene => {
@@ -392,6 +397,7 @@ impl TrajectoryController {
             intensity: self.intensity,
             cause: cause.to_string(),
             channels: self.smoothed_channels.clone(),
+            watch_start_ts: self.watch_start_ts,
         }
     }
 
@@ -404,6 +410,7 @@ impl TrajectoryController {
         self.last_intervention_type = None;
         self.last_decision = None;
         self.user_symbol_history.clear();
+        self.watch_start_ts = None;
     }
 }
 

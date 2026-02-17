@@ -221,16 +221,17 @@ async fn serve_request(
                 failure_signals: None,
             };
 
-            let current_user_emotion = if let Some(text) = current_user_text {
+            let current_user_emotion = if let Some(ref text) = current_user_text {
                 let emotion_handle = state.emotion.clone();
+                let text_clone = text.clone();
                 tokio::task::spawn_blocking(move || {
                     let mut model = emotion_handle.lock().ok()?;
-                    if text.trim().is_empty() {
+                    if text_clone.trim().is_empty() {
                         return None;
                     }
-                    let (raw, score) = model.classify_one(&text).ok()?;
+                    let (raw, score) = model.classify_one(&text_clone).ok()?;
                     let meta = crate::emotion::map_go_emotions(&raw, score);
-                    Some(crate::emotion::apply_context_heuristics(&text, meta))
+                    Some(crate::emotion::apply_context_heuristics(&text_clone, meta))
                 })
                 .await
                 .ok()
@@ -256,6 +257,8 @@ async fn serve_request(
                             current_user_emotion.as_ref(),
                             1.0, // Legacy warnings are high confidence
                             "legacy".to_string(),
+                            None,
+                            current_user_text,
                             None,
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &stripped_pq)
@@ -439,16 +442,17 @@ async fn proxy_request(
                 failure_signals: None,
             };
 
-            let current_user_emotion = if let Some(text) = current_user_text {
+            let current_user_emotion = if let Some(ref text) = current_user_text {
                 let emotion_handle = emotion.clone();
+                let text_clone = text.clone();
                 tokio::task::spawn_blocking(move || {
                     let mut model = emotion_handle.lock().ok()?;
-                    if text.trim().is_empty() {
+                    if text_clone.trim().is_empty() {
                         return None;
                     }
-                    let (raw, score) = model.classify_one(&text).ok()?;
+                    let (raw, score) = model.classify_one(&text_clone).ok()?;
                     let meta = crate::emotion::map_go_emotions(&raw, score);
-                    Some(crate::emotion::apply_context_heuristics(&text, meta))
+                    Some(crate::emotion::apply_context_heuristics(&text_clone, meta))
                 })
                 .await
                 .ok()
@@ -475,6 +479,8 @@ async fn proxy_request(
                             current_user_emotion.as_ref(),
                             1.0,
                             "legacy".to_string(),
+                            None,
+                            current_user_text,
                             None,
                         );
                         crate::net::inject_warning(&req_body_bytes, &warning, &request_path)

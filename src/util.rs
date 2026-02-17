@@ -331,9 +331,52 @@ pub(crate) fn augment_capsule_symbols_from_input(capsule: &mut crate::IntentCaps
     capsule.symbols = merged;
 }
 
+pub(crate) fn format_elapsed_time(ts_ms: i64, now_ms: i64) -> String {
+    let diff_ms = now_ms - ts_ms;
+    if diff_ms < 0 {
+        return "in the future".to_string();
+    }
+
+    let secs = diff_ms / 1000;
+    if secs < 60 {
+        return "just now".to_string();
+    }
+
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{}m ago", mins);
+    }
+
+    let hours = mins / 60;
+    let rem_mins = mins % 60;
+    if hours < 24 {
+        if rem_mins == 0 {
+            return format!("{}h ago", hours);
+        }
+        return format!("{}h {}m ago", hours, rem_mins);
+    }
+
+    let days = hours / 24;
+    if days == 1 {
+        return "yesterday".to_string();
+    }
+    format!("{}d ago", days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_elapsed_time() {
+        let now = 1000000000000;
+        assert_eq!(format_elapsed_time(now - 30000, now), "just now");
+        assert_eq!(format_elapsed_time(now - 120000, now), "2m ago");
+        assert_eq!(format_elapsed_time(now - 3600000, now), "1h ago");
+        assert_eq!(format_elapsed_time(now - 3660000, now), "1h 1m ago");
+        assert_eq!(format_elapsed_time(now - 86400000, now), "yesterday");
+        assert_eq!(format_elapsed_time(now - 172800000, now), "2d ago");
+    }
 
     #[test]
     fn test_escape_sql_string() {

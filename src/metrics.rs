@@ -36,6 +36,12 @@ pub(crate) enum MetricsEvent {
         /// Top contributing symptom channels at trigger time
         #[serde(default)]
         top_channels: std::collections::HashMap<String, f32>,
+        /// The user's intent that triggered the intervention
+        #[serde(default)]
+        topic: Option<String>,
+        /// When the controller first entered the "Watch" state
+        #[serde(default)]
+        watch_start_ts: Option<i64>,
     },
     CommandQuery {
         ts_ms: i64,
@@ -128,6 +134,8 @@ pub(crate) fn record_friction_warning_injected(
     intensity: f32,
     cause: String,
     channels: Option<&crate::types::SymptomChannels>,
+    topic: Option<String>,
+    watch_start_ts: Option<i64>,
 ) -> anyhow::Result<()> {
     let ws_dir = crate::unlost_workspace_dir(workspace_id);
     let path = ws_dir.join("metrics.jsonl");
@@ -177,6 +185,8 @@ pub(crate) fn record_friction_warning_injected(
         intensity,
         cause,
         top_channels,
+        topic,
+        watch_start_ts,
     };
     append_event(&path, &ev)
 }
@@ -256,7 +266,50 @@ pub(crate) struct Intervention {
     pub(crate) cause: String,
     pub(crate) intensity: f32,
     pub(crate) symbols: Vec<String>,
+    pub(crate) user_emotion: Option<String>,
     pub(crate) top_channels: std::collections::HashMap<String, f32>,
+    pub(crate) topic: Option<String>,
+    pub(crate) watch_start_ts: Option<i64>,
+}
+
+pub(crate) fn get_diagnosis(
+    cause: &str,
+    channels: &std::collections::HashMap<String, f32>,
+) -> String {
+    let mut best_chan = "";
+    let mut best_score = -1.0;
+    for (chan, score) in channels {
+        if *score > best_score {
+            best_score = *score;
+            best_chan = chan;
+        }
+    }
+
+    match best_chan {
+        "hallucination" => "Factual drift (hallucinating paths)".to_string(),
+        "stall" => "Grounding failure (ignoring user files)".to_string(),
+        "repetition" => "Repetitive stall".to_string(),
+        "churn" => "Logic churn (circular editing)".to_string(),
+        "alignment" => "Alignment divergence".to_string(),
+        "staticness" => "Instruction freeze".to_string(),
+        "fluency" => "Blind acceptance (assistant verbosity)".to_string(),
+        _ => match cause {
+            "drift" => "Factual drift".to_string(),
+            "loop" => "Repetitive loop".to_string(),
+            "spec" => "Alignment divergence".to_string(),
+            _ => format!("Trajectory friction ({})", cause),
+        },
+    }
+}
+
+pub(crate) fn get_severity_label(intensity: f32) -> &'static str {
+    if intensity >= 0.95 {
+        "Acute"
+    } else if intensity >= 0.88 {
+        "Strong"
+    } else {
+        "Significant"
+    }
 }
 
 /// Read the last N friction warning interventions from metrics
@@ -288,7 +341,10 @@ pub(crate) fn get_recent_interventions(
             cause,
             intensity,
             symbols,
+            user_emotion,
             top_channels,
+            topic,
+            watch_start_ts,
             ..
         } = ev
         {
@@ -297,7 +353,10 @@ pub(crate) fn get_recent_interventions(
                 cause,
                 intensity,
                 symbols,
+                user_emotion,
                 top_channels,
+                topic,
+                watch_start_ts,
             });
         }
     }

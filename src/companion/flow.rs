@@ -33,6 +33,7 @@ pub(crate) enum AgentKind {
 }
 
 impl AgentKind {
+    #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             AgentKind::OpenCode => "opencode",
@@ -105,6 +106,7 @@ pub(crate) struct RecordTurnEvent {
     /// Best-effort list of touched paths (workspace-relative). Optional.
     pub touched_paths: Vec<String>,
     /// Which agent platform this came from
+    #[allow(dead_code)]
     pub agent_kind: AgentKind,
     /// Optional session ID for grouping conversations
     pub agent_session_id: Option<String>,
@@ -357,6 +359,8 @@ impl Flow {
                 update.intensity,
                 update.cause,
                 Some(&update.channels),
+                Some(current.intent.clone()),
+                update.watch_start_ts,
             );
 
             return CheckResult { note: Some(note), error: None };

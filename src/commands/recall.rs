@@ -75,40 +75,43 @@ fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec
 
     // Keep recency, but collapse repetitive capsules so we don't crowd out
     // older-but-important decisions.
-    // Only de-dup within a session/connection. Cross-session repetition can still be useful
-    // evidence (e.g., the same decision reaffirmed later).
     let mut seen_fp: HashSet<String> = HashSet::new();
     let mut per_session: HashMap<String, usize> = HashMap::new();
-    let max_per_session = (limit / 3).clamp(2, 8);
+    
+    // We want a mix:
+    // 1. High recency (the absolute latest things, even if repetitive)
+    // 2. Historical breadth (decisions from older sessions)
+    let recent_threshold = (limit / 3).max(5);
+    let max_per_old_session = 5;
 
     let mut selected = Vec::with_capacity(limit);
-
-    // Always keep the most recent capsule as an anchor.
-    let mut it = hits.into_iter();
-    let Some(first) = it.next() else {
-        return Vec::new();
-    };
-    {
-        let sk = hit_session_key(&first);
-        let fp = hit_fingerprint(&first);
-        seen_fp.insert(format!("{sk}|{fp}"));
-        *per_session.entry(sk).or_insert(0) += 1;
-        selected.push(first);
-    }
-
-    for h in it {
+    for h in hits {
         if selected.len() >= limit {
             break;
         }
 
         let sk = hit_session_key(&h);
-        let cnt = per_session.entry(sk.clone()).or_insert(0);
-        if *cnt >= max_per_session {
+        let fp = hit_fingerprint(&h);
+        let k = format!("{sk}|{fp}");
+
+        // If we are in the "high recency" window, we are less strict about repetition
+        // and session limits, but we still collapse exact duplicates (same fingerprint).
+        if selected.len() < recent_threshold {
+            if seen_fp.contains(&k) {
+                continue;
+            }
+            seen_fp.insert(k);
+            *per_session.entry(sk).or_insert(0) += 1;
+            selected.push(h);
             continue;
         }
 
-        let fp = hit_fingerprint(&h);
-        let k = format!("{sk}|{fp}");
+        // For older history, we are stricter to ensure variety.
+        let cnt = per_session.entry(sk.clone()).or_insert(0);
+        if *cnt >= max_per_old_session {
+            continue;
+        }
+
         if seen_fp.contains(&k) {
             continue;
         }
@@ -324,8 +327,18 @@ pub async fn run(
     }
 
     // Fetch recent interventions to include in context
-    let recent_interventions =
+    let mut recent_interventions =
         crate::metrics::get_recent_interventions(&ws.metrics_jsonl, 3).unwrap_or_default();
+
+    // Backfill topics from hits if missing
+    for iv in &mut recent_interventions {
+        if iv.topic.is_none() {
+            iv.topic = hits
+                .iter()
+                .find(|h| (h.ts_ms - iv.ts_ms).abs() < 30000)
+                .map(|h| h.capsule.intent.clone());
+        }
+    }
 
     let narrative = crate::narrative::llm_recall_narrative(
         llm_model.as_deref(),
@@ -351,25 +364,97 @@ pub async fn run(
     if !recent_interventions.is_empty() {
         println!();
         println!("\x1b[2mRecent friction interventions:\x1b[0m");
+        let now = crate::workspace::now_ms();
         for (i, iv) in recent_interventions.iter().enumerate() {
             let ts_str = chrono::Utc
                 .timestamp_millis_opt(iv.ts_ms)
                 .single()
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| format!("{}ms", iv.ts_ms));
-            let symbols_str = if iv.symbols.is_empty() {
-                "—".to_string()
+                .map(|dt| dt.format("%H:%M").to_string())
+                .unwrap_or_else(|| "--:--".to_string());
+            
+            let ago_str = crate::util::format_elapsed_time(iv.ts_ms, now);
+
+            let duration_str = if let Some(start) = iv.watch_start_ts {
+                let dur_mins = (iv.ts_ms - start) / 60000;
+                format!("Intervened after {}m", dur_mins)
             } else {
-                iv.symbols.join(", ")
+                "Intervened".to_string()
             };
+
+            let diagnosis = crate::metrics::get_diagnosis(&iv.cause, &iv.top_channels);
+            let severity = crate::metrics::get_severity_label(iv.intensity);
+            
+            let emotion_str = if let Some(ref e) = iv.user_emotion {
+                if crate::governor::FRICTION_EMOTIONS.contains(&e.as_str()) {
+                    format!(" (user {})", e)
+                } else {
+                    "".to_string()
+                }
+            } else {
+                "".to_string()
+            };
+
+            let mut clean_symbols = Vec::new();
+            let blacklist = [
+                "NOTE", "REASON", "DECISION", "INTENT", "NEXT_STEPS", "RATIONALE", "SYMBOLS",
+                "USER", "ASSISTANT", "SYSTEM", "SUCCESS", "FAILURE", "ERROR", "WARNING",
+            ];
+            for s in &iv.symbols {
+                let trimmed = s.trim_matches(|c: char| c == ':' || c == '.' || c == ',');
+                if blacklist.iter().any(|&b| b == trimmed.to_uppercase()) {
+                    continue;
+                }
+                if trimmed.contains('/') && !trimmed.contains('.') {
+                    let parts: Vec<&str> = trimmed.split('/').collect();
+                    if parts.iter().any(|&p| {
+                        p == "read" || p == "write" || p == "inspect" || p == "call" || p == "tool"
+                    }) {
+                        continue;
+                    }
+                }
+                if !trimmed.is_empty() {
+                    clean_symbols.push(trimmed.to_string());
+                }
+            }
+
+            let symbols_str = if clean_symbols.is_empty() {
+                "—".to_string()
+            } else if clean_symbols.len() > 3 {
+                format!("{}, {} and {} others", clean_symbols[0], clean_symbols[1], clean_symbols.len() - 2)
+            } else {
+                clean_symbols.join(", ")
+            };
+
             println!(
-                "\x1b[2m  {}. {} | intensity: {:.0}% | {} | symbols: {}\x1b[0m",
+                "\x1b[2m  {}. {} ({}) | {}: {} - {}{} \x1b[0m",
                 i + 1,
                 ts_str,
-                iv.intensity * 100.0,
-                iv.cause,
-                symbols_str
+                ago_str,
+                duration_str,
+                severity,
+                diagnosis,
+                emotion_str
             );
+
+            // Try to find topic in existing hits if not in intervention record (backfill)
+            let topic = iv.topic.as_ref().or_else(|| {
+                // Look for a hit within 30s of the intervention
+                hits.iter()
+                    .find(|h| (h.ts_ms - iv.ts_ms).abs() < 30000)
+                    .map(|h| &h.capsule.intent)
+            });
+
+            if let Some(topic) = topic {
+                let clean_topic = topic.replace('\n', " ");
+                let truncated = if clean_topic.len() > 80 {
+                    format!("{}...", &clean_topic[..77])
+                } else {
+                    clean_topic
+                };
+                println!("\x1b[2m     Topic: \"{}\"\x1b[0m", truncated);
+            }
+            
+            println!("\x1b[2m     Symbols: {}\x1b[0m", symbols_str);
         }
     }
 

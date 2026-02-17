@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] - 2026-02-17
+
+### Added
+- **Trajectory-Aware Interventions**: Moved from raw percentages to descriptive severity labels (Significant, Strong, Acute) and plain-English diagnoses (e.g., "Grounding failure", "Repetitive stall").
+- **Intervention Duration**: Track and display the build-up phase ("Intervened after Xm") to better reflect the trajectory slope.
+- **Contextual Topics**: Automatically capture the conversation topic (user intent) during interventions and display it in `unlost recall`.
+- **Intelligent Backfilling**: Added support for backfilling topics and diagnoses for historical intervention logs by matching timestamps against conversation history.
+- **Improved Time Formatting**: Human-centric elapsed time representation (e.g., "1h 11m ago", "yesterday") in recall output.
+
+### Changed
+- **Cleaner Symbol Display**: Truncated and filtered symbol lists in recall to prioritize signal over noise (e.g., "src/main.rs and 22 others").
+- **Enhanced Narrative Context**: The LLM generating the recall summary now receives detailed intervention metadata (duration, diagnosis, topic) to weave friction points into the workspace story.
+
 ## [0.4.2] - 2026-02-16
 
 ### Fixed
@@ -141,6 +154,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.5.0]: https://github.com/unfault/unlost/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/unfault/unlost/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/unfault/unlost/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/unfault/unlost/compare/v0.3.0...v0.4.0
