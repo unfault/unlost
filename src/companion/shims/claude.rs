@@ -893,7 +893,7 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
         );
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  \x1b[34m*\x1b[0m Hybrid Mode: Extracting only pivotal turns to reduce API usage.");
+                println!("  \x1b[34m*\x1b[0m Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
             }
             crate::types::ExtractionMode::Full => {
                 println!("  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost).");
@@ -904,7 +904,7 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
         println!("Replaying ~{} turns using {}/{}", turn_count, provider, model);
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  * Hybrid Mode: Extracting only pivotal turns to reduce API usage.");
+                println!("  * Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
             }
             crate::types::ExtractionMode::Full => {
                 println!("  ! Full Extraction: Extracting every turn (highest quality, highest cost).");
@@ -1254,9 +1254,9 @@ pub async fn replay(
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(" (LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments, saving \x1b[1;36m{:.1}%\x1b[0m in API calls)", total_llm_calls, saved);
+                print!(". The LLM was only needed for \x1b[1;33m{}\x1b[0m pivotal moments (saving \x1b[1;36m{:.1}%\x1b[0m in API calls)", total_llm_calls, saved);
             } else {
-                print!(" (LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments)", total_llm_calls);
+                print!(". The LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments", total_llm_calls);
             }
         }
         println!();
@@ -1269,9 +1269,9 @@ pub async fn replay(
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(" (LLM analyzed {} pivotal moments, saving {:.1}% in API calls)", total_llm_calls, saved);
+                print!(". The LLM was only needed for {} pivotal moments (saving {:.1}% in API calls)", total_llm_calls, saved);
             } else {
-                print!(" (LLM analyzed {} pivotal moments)", total_llm_calls);
+                print!(". The LLM analyzed {} pivotal moments", total_llm_calls);
             }
         }
         println!();

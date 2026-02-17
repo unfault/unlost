@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.4] - 2026-02-17
+
+### Changed
+- **CLI Replay Clarity**: Rephrased Hybrid Mode description and summary output to explicitly state that local indexing happens for all turns, while LLM analysis is reserved for pivotal moments.
+
 ## [0.6.3] - 2026-02-17
 
 ### Changed
@@ -182,6 +187,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.6.4]: https://github.com/unfault/unlost/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/unfault/unlost/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/unfault/unlost/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/unfault/unlost/compare/v0.6.0...v0.6.1
