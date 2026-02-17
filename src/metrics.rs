@@ -249,6 +249,66 @@ pub(crate) struct ExpensiveIntervention {
     pub(crate) tokens_next_5: i64,
 }
 
+/// A friction warning intervention for display in recall
+#[derive(Debug, Clone)]
+pub(crate) struct Intervention {
+    pub(crate) ts_ms: i64,
+    pub(crate) cause: String,
+    pub(crate) intensity: f32,
+    pub(crate) symbols: Vec<String>,
+    pub(crate) top_channels: std::collections::HashMap<String, f32>,
+}
+
+/// Read the last N friction warning interventions from metrics
+pub(crate) fn get_recent_interventions(
+    path: &std::path::Path,
+    n: usize,
+) -> anyhow::Result<Vec<Intervention>> {
+    use std::io::BufRead;
+
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let reader = std::io::BufReader::new(f);
+    let mut interventions = Vec::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(ev) = serde_json::from_str::<MetricsEvent>(&line) else {
+            continue;
+        };
+
+        if let MetricsEvent::FrictionWarningInjected {
+            ts_ms,
+            cause,
+            intensity,
+            symbols,
+            top_channels,
+            ..
+        } = ev
+        {
+            interventions.push(Intervention {
+                ts_ms,
+                cause,
+                intensity,
+                symbols,
+                top_channels,
+            });
+        }
+    }
+
+    // Sort by timestamp descending and take last N
+    interventions.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+    interventions.truncate(n);
+
+    Ok(interventions)
+}
+
 #[derive(Default, Debug, Clone)]
 pub(crate) struct MetricsSummary {
     pub(crate) capsules: u64,
@@ -291,14 +351,28 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
     let mut out = MetricsSummary::default();
     let reader = std::io::BufReader::new(f);
 
-    let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =
-        std::collections::HashMap::new();
-
-    let mut total_fluency = 0.0;
-    let mut turns_with_fluency = 0;
+    let mut all_events = Vec::new();
+    let blacklist = [
+        "NOTE",
+        "REASON",
+        "DECISION",
+        "INTENT",
+        "NEXT_STEPS",
+        "RATIONALE",
+        "SYMBOLS",
+        "USER",
+        "ASSISTANT",
+        "SYSTEM",
+        "SUCCESS",
+        "FAILURE",
+        "ERROR",
+        "WARNING",
+    ];
 
     let now = crate::now_ms();
     let day_ms = 24 * 60 * 60 * 1000;
+    let mut total_fluency = 0.0;
+    let mut turns_with_fluency = 0;
 
     for line in reader.lines() {
         let Ok(line) = line else { continue };
@@ -309,7 +383,6 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
             continue;
         };
 
-        // Pass 1: Global totals and session grouping
         match &ev {
             MetricsEvent::CapsuleSaved {
                 ts_ms,
@@ -319,7 +392,6 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 paths_checked,
                 paths_missing,
                 failure_mode,
-                agent_session_id,
                 ..
             } => {
                 out.capsules += 1;
@@ -328,7 +400,6 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 }
                 if let Some(t) = tokens_total {
                     out.tokens_total = out.tokens_total.saturating_add(*t);
-
                     if let Some(input) = tokens_input {
                         let output = t - input;
                         if *input > 0 {
@@ -357,20 +428,12 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                         _ => {}
                     }
                 }
-
-                if let Some(sid) = agent_session_id {
-                    session_events
-                        .entry(sid.clone())
-                        .or_default()
-                        .push(ev.clone());
-                }
             }
             MetricsEvent::FrictionWarningInjected {
                 ts_ms,
                 intensity,
                 cause,
                 symbols,
-                agent_session_id,
                 top_channels,
                 ..
             } => {
@@ -381,16 +444,26 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 out.friction_intensity_total += *intensity;
                 *out.friction_by_cause.entry(cause.clone()).or_insert(0) += 1;
                 for s in symbols {
-                    *out.friction_by_symbol.entry(s.clone()).or_insert(0) += 1;
+                    let cleaned = s.trim_matches(|c: char| c == ':' || c == '.').to_string();
+                    if blacklist.iter().any(|&b| b == cleaned.to_uppercase()) {
+                        continue;
+                    }
+                    if cleaned.contains('/') && !cleaned.contains('.') {
+                        let parts: Vec<&str> = cleaned.split('/').collect();
+                        if parts.iter().any(|&p| {
+                            p == "read"
+                                || p == "write"
+                                || p == "inspect"
+                                || p == "call"
+                                || p == "tool"
+                        }) {
+                            continue;
+                        }
+                    }
+                    *out.friction_by_symbol.entry(cleaned).or_insert(0) += 1;
                 }
                 for (chan, val) in top_channels {
                     *out.channel_contributions.entry(chan.clone()).or_insert(0.0) += *val;
-                }
-                if let Some(sid) = agent_session_id {
-                    session_events
-                        .entry(sid.clone())
-                        .or_default()
-                        .push(ev.clone());
                 }
             }
             MetricsEvent::CommandQuery { .. } => {
@@ -400,21 +473,68 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                 out.recall_commands += 1;
             }
         }
+        all_events.push(ev);
     }
 
-    // Pass 2: Session-level spacing and bucket analysis
+    // Pass 2: Attributing Orphan Warnings & Grouping by Session
+    // We sort everything by timestamp first.
+    all_events.sort_by_key(|e| match e {
+        MetricsEvent::CapsuleSaved { ts_ms, .. } => *ts_ms,
+        MetricsEvent::FrictionWarningInjected { ts_ms, .. } => *ts_ms,
+        MetricsEvent::CommandQuery { ts_ms, .. } => *ts_ms,
+        MetricsEvent::CommandRecall { ts_ms, .. } => *ts_ms,
+    });
+
+    let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =
+        std::collections::HashMap::new();
+    let mut last_sid: Option<String> = None;
+    let mut last_sid_ts: i64 = 0;
+
+    for ev in all_events {
+        let sid = match &ev {
+            MetricsEvent::CapsuleSaved {
+                agent_session_id,
+                ts_ms,
+                ..
+            } => {
+                let s = agent_session_id
+                    .clone()
+                    .unwrap_or_else(|| "__unknown__".to_string());
+                last_sid = Some(s.clone());
+                last_sid_ts = *ts_ms;
+                s
+            }
+            MetricsEvent::FrictionWarningInjected {
+                agent_session_id,
+                ts_ms,
+                ..
+            } => {
+                if let Some(s) = agent_session_id {
+                    last_sid = Some(s.clone());
+                    last_sid_ts = *ts_ms;
+                    s.clone()
+                } else if let Some(ref s) = last_sid {
+                    // Orphan warning: attribute to last session if close (within 30s)
+                    if (*ts_ms - last_sid_ts).abs() < 30000 {
+                        s.clone()
+                    } else {
+                        "__unknown__".to_string()
+                    }
+                } else {
+                    "__unknown__".to_string()
+                }
+            }
+            _ => "__unknown__".to_string(),
+        };
+        session_events.entry(sid).or_default().push(ev);
+    }
+
+    // Pass 3: Session-level analysis
     let mut total_spacing_tokens = 0i64;
     let mut total_spacing_segments = 0u64;
     let mut all_expensive_interventions = Vec::new();
 
-    for events in session_events.values_mut() {
-        events.sort_by_key(|e| match e {
-            MetricsEvent::CapsuleSaved { ts_ms, .. } => *ts_ms,
-            MetricsEvent::FrictionWarningInjected { ts_ms, .. } => *ts_ms,
-            MetricsEvent::CommandQuery { ts_ms, .. } => *ts_ms,
-            MetricsEvent::CommandRecall { ts_ms, .. } => *ts_ms,
-        });
-
+    for events in session_events.values() {
         let mut tokens_since_last_warning = 0i64;
         let mut had_warning = false;
         let mut last_capsule_bucket = 0i64;
@@ -430,13 +550,12 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                     let total = tokens_total.unwrap_or(0);
                     tokens_since_last_warning += total;
 
-                    // Bucket analysis (using tokens_input as the real context proxy)
                     last_capsule_bucket = (input / 4000) * 4000;
                     let b = out
                         .friction_by_input_bucket
                         .entry(last_capsule_bucket)
                         .or_default();
-                    b.1 += 1; // Increment turn count N
+                    b.1 += 1;
                 }
                 MetricsEvent::FrictionWarningInjected {
                     ts_ms,
@@ -452,7 +571,6 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                     had_warning = true;
                     tokens_since_last_warning = 0;
 
-                    // Mark warning in the current bucket
                     let b = out
                         .friction_by_input_bucket
                         .entry(last_capsule_bucket)
@@ -481,11 +599,32 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
                         }
                     }
 
+                    let mut cleaned_symbols = Vec::new();
+                    for s in symbols {
+                        let cleaned = s.trim_matches(|c: char| c == ':' || c == '.').to_string();
+                        if blacklist.iter().any(|&b| b == cleaned.to_uppercase()) {
+                            continue;
+                        }
+                        if cleaned.contains('/') && !cleaned.contains('.') {
+                            let parts: Vec<&str> = cleaned.split('/').collect();
+                            if parts.iter().any(|&p| {
+                                p == "read"
+                                    || p == "write"
+                                    || p == "inspect"
+                                    || p == "call"
+                                    || p == "tool"
+                            }) {
+                                continue;
+                            }
+                        }
+                        cleaned_symbols.push(cleaned);
+                    }
+
                     all_expensive_interventions.push(ExpensiveIntervention {
                         ts_ms: *ts_ms,
                         cause: cause.clone(),
                         intensity: *intensity,
-                        symbols: symbols.clone(),
+                        symbols: cleaned_symbols,
                         cost_next_5,
                         tokens_next_5,
                     });

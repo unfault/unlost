@@ -318,21 +318,29 @@ impl Flow {
         };
 
         // NEW: Trajectory-based proactive friction regulation
-        let update = {
+        let (update, final_session_id) = {
             let controller = self.state.controllers.entry(ws.id.clone()).or_default();
-            controller.update(
+            
+            // If event has a session ID, stick it. Otherwise try to use the last one.
+            if let Some(ref sid) = event.agent_session_id {
+                controller.last_agent_session_id = Some(sid.clone());
+            }
+            let sid = event.agent_session_id.clone().or_else(|| controller.last_agent_session_id.clone());
+
+            let update = controller.update(
                 &ws.id,
                 &current,
                 user_emotion.as_ref(),
                 &history,
                 crate::workspace::now_ms(),
-            )
+            );
+            (update, sid)
         };
 
         if let Some(note) = update.note {
             tracing::info!(
                 workspace = %ws.id,
-                session = event.agent_session_id.as_deref().unwrap_or("-"),
+                session = final_session_id.as_deref().unwrap_or("-"),
                 state = ?update.state,
                 cause = %update.cause,
                 intensity = %update.intensity,
@@ -343,7 +351,7 @@ impl Flow {
             let _ = crate::metrics::record_friction_warning_injected(
                 &ws.id,
                 0, // conn_id not available in CheckEvent
-                event.agent_session_id.clone(),
+                final_session_id,
                 current.symbols.clone(),
                 user_emotion.as_ref(),
                 update.intensity,
@@ -448,34 +456,26 @@ impl Flow {
         let commit_mentioned = looks_like_commit_or_pr(&exchange_text);
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        let usage = event.usage.map(|u| {
-            tracing::debug!(
-                "record_turn usage: provider={:?} model={:?} cost={:?} tokens_input={:?} tokens_output={:?}",
-                u.provider_id,
-                u.model_id,
-                u.cost,
-                u.tokens_input,
-                u.tokens_output,
-            );
-            u.into()
-        });
-
-        if usage.is_none() {
-            tracing::debug!("record_turn has no usage data");
-        }
-
-        let upstream_host = format!("shim-{}", event.agent_kind.as_str());
-        let request_path = format!("/{}/record", event.agent_kind.as_str());
+        // Sticky session ID for the controller
+        let final_session_id = {
+            let controller = self.state.controllers.entry(ws.id.clone()).or_default();
+            if let Some(ref sid) = event.agent_session_id {
+                controller.last_agent_session_id = Some(sid.clone());
+            }
+            event.agent_session_id
+                .clone()
+                .or_else(|| controller.last_agent_session_id.clone())
+        };
 
         let item = ChunkInput {
             conn_id,
-            upstream_host,
-            request_path,
+            upstream_host: String::new(),
+            request_path: String::new(),
             http_status: 200,
             exchange_text,
             commit_mentioned,
-            agent_session_id: event.agent_session_id,
-            usage,
+            agent_session_id: final_session_id,
+            usage: event.usage.map(UsageMeta::from),
             grounding_note: event.grounding_note,
         };
 

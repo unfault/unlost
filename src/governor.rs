@@ -53,6 +53,8 @@ pub struct TrajectoryController {
     pub user_symbol_history: std::collections::VecDeque<(std::collections::HashSet<String>, i64)>,
     /// The last assistant decision for churn calculation.
     pub last_decision: Option<String>,
+    /// The last agent session ID seen in this workspace.
+    pub last_agent_session_id: Option<String>,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -74,7 +76,7 @@ const CORRECTION_PATTERNS: &[&str] = &[
     "false",
 ];
 
-fn detect_correction(text: &str, emotion: Option<&crate::emotion::EmotionMeta>) -> f32 {
+pub fn detect_correction(text: &str, emotion: Option<&crate::emotion::EmotionMeta>) -> f32 {
     let lower = text.to_lowercase();
     let mut score = 0.0;
     for p in CORRECTION_PATTERNS {
@@ -675,7 +677,7 @@ pub(crate) struct HydrationNode {
     pub(crate) failure_mode: crate::types::FailureMode,
 }
 
-const FRICTION_EMOTIONS: &[&str] = &[
+pub const FRICTION_EMOTIONS: &[&str] = &[
     "frustration",
     "annoyance",
     "anger",
@@ -894,6 +896,38 @@ pub fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
 
 pub fn evaluate_decision_conflict(_history: &[CapsuleHit]) -> Option<String> {
     None
+}
+
+const FAILURE_REPORT_PATTERNS: &[&str] = &[
+    "failed",
+    "failing",
+    "error",
+    "doesn't work",
+    "does not work",
+    "build",
+    "tests",
+    "ci",
+    "workflow",
+    "exception",
+    "crash",
+    "panic",
+    "exit code",
+    "status 1",
+];
+
+pub fn detect_failure_report(text: &str) -> f32 {
+    let lower = text.to_lowercase();
+    let mut count = 0;
+    for p in FAILURE_REPORT_PATTERNS {
+        if lower.contains(p) {
+            count += 1;
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        (0.4 + (count as f32 * 0.2)).min(1.0)
+    }
 }
 
 pub fn detect_failure_keywords(text: &str) -> Option<crate::types::FailureMode> {

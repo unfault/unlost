@@ -291,29 +291,52 @@ pub(crate) fn extract_symbols_from_body(body: &[u8], path: &str) -> Vec<String> 
 pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
     let mut out = vec![];
 
+    let blacklist = [
+        "NOTE", "REASON", "DECISION", "INTENT", "NEXT_STEPS", "RATIONALE", "SYMBOLS",
+        "USER", "ASSISTANT", "SYSTEM", "SUCCESS", "FAILURE", "ERROR", "WARNING",
+    ];
+
     // File paths: src/foo.rs, ./lib/bar.py, auth.ts
-    // Match patterns like word/word.ext or ./word.ext
     for word in text.split_whitespace() {
         let word = word.trim_matches(|c: char| {
-            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ','
+            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ',' || c == ':' || c == '.'
         });
+
+        if word.is_empty() {
+            continue;
+        }
+
+        // Ignore if all caps and in blacklist
+        if blacklist.iter().any(|&b| b == word.to_uppercase()) {
+            continue;
+        }
+
         // Check if it looks like a file path
-        if (word.contains('.') || word.contains('/'))
+        let looks_like_path = (word.contains('.') || word.contains('/'))
             && (word.contains('/')
-                || word.ends_with(".rs")
-                || word.ends_with(".ts")
-                || word.ends_with(".tsx")
-                || word.ends_with(".py")
-                || word.ends_with(".js")
-                || word.ends_with(".jsx")
-                || word.ends_with(".go")
-                || word.ends_with(".astro")
-                || word.ends_with(".md")
-                || word.ends_with(".toml")
-                || word.ends_with(".yaml")
-                || word.ends_with(".yml")
-                || word.ends_with(".json"))
-        {
+                || word.ends_with("rs")
+                || word.ends_with("ts")
+                || word.ends_with("tsx")
+                || word.ends_with("py")
+                || word.ends_with("js")
+                || word.ends_with("jsx")
+                || word.ends_with("go")
+                || word.ends_with("astro")
+                || word.ends_with("md")
+                || word.ends_with("toml")
+                || word.ends_with("yaml")
+                || word.ends_with("yml")
+                || word.ends_with("json"));
+
+        if looks_like_path {
+            // Exclude common tool-call noise: read/inspect, write/file, etc.
+            if word.contains('/') && !word.contains('.') {
+                let parts: Vec<&str> = word.split('/').collect();
+                if parts.iter().any(|&p| p == "read" || p == "write" || p == "inspect" || p == "call" || p == "tool") {
+                    continue;
+                }
+            }
+
             // Basic sanity: not too long, has reasonable characters
             if word.len() < 200
                 && word

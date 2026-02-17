@@ -1,4 +1,5 @@
 use crate::cli::OutputFormat;
+use chrono::TimeZone;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -321,12 +322,18 @@ pub async fn run(
     if let Some(pb) = spinner.as_ref() {
         pb.set_message(format!("Weaving threads with {}...", model_name));
     }
+
+    // Fetch recent interventions to include in context
+    let recent_interventions =
+        crate::metrics::get_recent_interventions(&ws.metrics_jsonl, 3).unwrap_or_default();
+
     let narrative = crate::narrative::llm_recall_narrative(
         llm_model.as_deref(),
         scope_opt.as_deref(),
         &ws.id,
         &workspace_root,
         &hits,
+        &recent_interventions,
     )
     .await?;
 
@@ -338,6 +345,34 @@ pub async fn run(
     if wrap {
         out = crate::util::wrap_plain_text(&out, 80);
     }
-    println!("{}\n", out);
+    println!("{}", out);
+
+    // Display recent interventions after the narrative
+    if !recent_interventions.is_empty() {
+        println!();
+        println!("\x1b[2mRecent friction interventions:\x1b[0m");
+        for (i, iv) in recent_interventions.iter().enumerate() {
+            let ts_str = chrono::Utc
+                .timestamp_millis_opt(iv.ts_ms)
+                .single()
+                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| format!("{}ms", iv.ts_ms));
+            let symbols_str = if iv.symbols.is_empty() {
+                "—".to_string()
+            } else {
+                iv.symbols.join(", ")
+            };
+            println!(
+                "\x1b[2m  {}. {} | intensity: {:.0}% | {} | symbols: {}\x1b[0m",
+                i + 1,
+                ts_str,
+                iv.intensity * 100.0,
+                iv.cause,
+                symbols_str
+            );
+        }
+    }
+
+    println!();
     Ok(())
 }
