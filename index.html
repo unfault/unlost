@@ -333,7 +333,7 @@ unlost query "auth flow changes"</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost metrics</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Monitor</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Show workspace trajectory metrics and friction hotspots.</p>
+          <p class="text-midnight-violet-950/60 mb-4">Show workspace trajectory metrics and friction hotspots. <a href="#metrics-guide" class="text-fiery-terracotta hover:underline">See detailed guide</a>.</p>
           <pre><code>unlost metrics</code></pre>
           <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Cognitive Mirror (v0.3.0)</div>
@@ -766,6 +766,142 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             Scientific Reports (Nature). 
             <a href="https://www.nature.com/articles/s41598-024-67829-6" class="hover:text-fiery-terracotta underline">DOI: 10.1038/s41598-024-67829-6</a>
           </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Metrics Guide -->
+  <section id="metrics-guide" class="section border-t border-midnight-violet-950/5">
+    <div class="container-narrow">
+      <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
+        Interpreting the Cognitive Mirror 
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
+
+      <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-12 leading-relaxed">
+        The <code>unlost metrics</code> command generates a <strong>Cognitive Mirror</strong>: a diagnostic 
+        report that reveals the structural health of your collaboration with AI agents.
+      </p>
+
+      <div class="space-y-16">
+        <!-- At a Glance -->
+        <div>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-6 uppercase tracking-wider text-sm">At a Glance</h3>
+          <div class="grid grid-cols-1 gap-8">
+            <div>
+              <div class="font-mono text-xs text-fiery-terracotta mb-2">friction rate</div>
+              <p class="text-midnight-violet-950/60 leading-relaxed">
+                Measured in <strong>warnings per 1M tokens</strong>. This is your primary "Babysitting Tax" indicator. 
+                A rate under 5 is healthy exploration; over 10 indicates a session that is likely 
+                stalling or drifting.
+              </p>
+            </div>
+            <div>
+              <div class="font-mono text-xs text-fiery-terracotta mb-2">avg interval</div>
+              <p class="text-midnight-violet-950/60 leading-relaxed">
+                The average number of tokens processed between proactive interventions. Short intervals 
+                suggest you are fighting the agent's mental model turn-by-turn.
+              </p>
+            </div>
+            <div>
+              <div class="font-mono text-xs text-fiery-terracotta mb-2">avg verbosity</div>
+              <p class="text-midnight-violet-950/60 leading-relaxed">
+                The ratio of assistant tokens to user tokens. If this hits <strong>14x</strong> or higher, 
+                you have transitioned from Architect to Passive Observer—the "Blind Acceptance" zone.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Failure Modes -->
+        <div>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-6 uppercase tracking-wider text-sm">Failure Modes (LLM-detected)</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-6">
+            These represent the agent's own retrospective analysis of where it failed, categorized during capsule extraction:
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-6 text-sm">
+            <div>
+              <div class="font-bold mb-1">Retry Spiral</div>
+              <p class="text-midnight-violet-950/60">Agent is stuck in a loop, repeatedly attempting the same failing approach.</p>
+            </div>
+            <div>
+              <div class="font-bold mb-1">Factual Drift</div>
+              <p class="text-midnight-violet-950/60">Agent is operating on a wrong mental model of the codebase structure.</p>
+            </div>
+            <div>
+              <div class="font-bold mb-1">Spec Debt</div>
+              <p class="text-midnight-violet-950/60">Misunderstanding user instructions or ignoring established constraints.</p>
+            </div>
+            <div>
+              <div class="font-bold mb-1">False Progress</div>
+              <p class="text-midnight-violet-950/60">Agent claims completion while the underlying issue remains unresolved.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Context Inflection -->
+        <div>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-6 uppercase tracking-wider text-sm">Friction vs Context Size</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-6">
+            Unlost buckets friction by input token count to identify your agent's <strong>Context Inflection Point</strong>.
+          </p>
+          <div class="bg-midnight-violet-950/5 p-6 rounded-2xl border border-midnight-violet-950/5">
+            <p class="text-sm italic text-midnight-violet-950/70 mb-4 leading-relaxed">
+              "For most current models, we observe a stability collapse between 8k and 12k tokens. 
+              The friction rate typically doubles past this point as the 'lost in the middle' phenomenon 
+              degrades grounding."
+            </p>
+            <div class="text-[10px] font-mono uppercase tracking-widest text-midnight-violet-950/30 text-center">Typical Inflection Pattern</div>
+          </div>
+        </div>
+
+        <!-- Trigger Drivers -->
+        <div>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-6 uppercase tracking-wider text-sm">Trigger Drivers (Symptom Breakdown)</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-6">
+            This section reveals the underlying "physics" that triggered proactive interventions:
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-8 text-sm">
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-bold mb-1">Alignment (Spec Basin)</div>
+              <p class="text-midnight-violet-950/60">Driven by instruction repetition and verbatim corrective keywords.</p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-bold mb-1">Stall (Loop Basin)</div>
+              <p class="text-midnight-violet-950/60">Driven by symbol repetition and novelty collapse across turns.</p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-bold mb-1">Hallucination (Drift Basin)</div>
+              <p class="text-midnight-violet-950/60">Driven by non-existent paths or identifiers mentioned by the agent.</p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-bold mb-1">Effort Spike</div>
+              <p class="text-midnight-violet-950/60">Driven by sudden increases in turn complexity or symbol density.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hotspots -->
+        <div>
+          <h3 class="text-lg sm:text-xl font-semibold text-fiery-terracotta mb-6 uppercase tracking-wider text-sm">Identifying Hotspots</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-12">
+            <div>
+              <div class="font-bold mb-2">Top Friction Files</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                Lists the specific source files where most proactive warnings were triggered. This 
+                identifies areas of your codebase that are currently "unstable" for AI reasoning.
+              </p>
+            </div>
+            <div>
+              <div class="font-bold mb-2">High-Cost Windows</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                Identifies interventions that were followed by the most expensive subsequent turns. 
+                This helps you find the specific moments where a failure spiral burned the most 
+                budget and time.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
