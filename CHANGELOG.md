@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **LLM Schema Compatibility**: Fixed invalid JSON schema for `extraction_mode` field in `IntentCapsule` that caused OpenAI-compatible APIs to reject requests with HTTP 400. The field was emitting `$ref` alongside sibling keywords (`description`, `default`), which is disallowed. Now uses an inline schema via `schemars(schema_with = ...)`.
+
 ## [0.6.4] - 2026-02-17
 
 ### Changed

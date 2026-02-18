@@ -136,6 +136,7 @@ pub struct IntentCapsule {
     pub failure_signals: Option<String>,
     /// The extraction mode used for this capsule
     #[serde(default)]
+    #[schemars(schema_with = "extraction_mode_schema")]
     pub extraction_mode: ExtractionMode,
 }
 
@@ -143,6 +144,14 @@ fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schema
     schemars::json_schema!({
         "type": "string",
         "enum": ["none", "drift", "rediscovery", "decision_conflict", "retry_spiral", "false_progress", "unbounded_horizon"]
+    })
+}
+
+fn extraction_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["none", "hybrid", "full"],
+        "default": "hybrid"
     })
 }
 
