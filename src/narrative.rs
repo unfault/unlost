@@ -580,6 +580,215 @@ Output format:
     )
 }
 
+pub(crate) async fn llm_brief_narrative(
+    llm_model_override: Option<&str>,
+    scope: Option<&str>,
+    workspace_id: &str,
+    workspace_root: &str,
+    hits: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    let mut context = String::new();
+    context.push_str("Brief context\n\n");
+
+    if let Some(s) = scope {
+        context.push_str("Scope:\n");
+        context.push_str(s);
+        context.push_str("\n\n");
+    } else {
+        context.push_str("Scope: full workspace\n");
+        context.push_str("workspace: ");
+        context.push_str(workspace_id);
+        context.push('\n');
+        context.push_str("root: ");
+        context.push_str(workspace_root);
+        context.push_str("\n\n");
+    }
+
+    context.push_str("Capsules (scored by importance — failure modes, rationale, cross-session recurrence):\n");
+    for (i, hit) in hits.iter().enumerate() {
+        let cap = &hit.capsule;
+        let meta = &hit.meta;
+        context.push_str(&format!(
+            "#{} ts_ms={} id={} source={} category={}\n",
+            i + 1,
+            hit.ts_ms,
+            hit.id,
+            meta.source,
+            cap.category,
+        ));
+        // Include failure mode explicitly — it's the primary selection signal and the LLM
+        // should know it was recorded as a trap or mistake.
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
+            let fm = fm.trim_matches('"');
+            context.push_str(&format!("failure_mode: {}", fm));
+            if let Some(ref sig) = cap.failure_signals {
+                context.push_str(&format!(" ({})", sig.replace('\n', " ")));
+            }
+            context.push('\n');
+        }
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
+        }
+        if !cap.symbols.is_empty() {
+            let syms = cap
+                .symbols
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            context.push_str(&format!("symbols: {syms}\n"));
+        }
+        context.push('\n');
+        if i >= 39 {
+            break;
+        }
+    }
+
+    let scope_clause = if let Some(s) = scope {
+        format!(
+            "The brief is scoped to: `{s}`. Focus exclusively on what a collaborator needs \
+             to know about that specific area. Only mention cross-cutting concerns if they \
+             directly affect `{s}`.\n\n"
+        )
+    } else {
+        String::new()
+    };
+
+    let preamble = format!(
+        r#"You are a staff engineer giving a new collaborator a codebase brief.
+{scope_clause}Your job: synthesize what this person MUST know to work here without getting surprised.
+Do NOT narrate history. Do NOT summarize what happened. Produce a map, not a story.
+Prioritize non-obvious choices, invariants, and traps. Capsules with `failure_mode` set
+represent real recorded pain — those belong in THINGS THAT BITE.
+
+Output EXACTLY these 5 section headers, each on its own line in ALL CAPS, followed by
+their content. No other headers. No preamble. Start directly with the first header.
+
+MENTAL MODEL
+  2-3 sentences. What is this system, what is its core loop, the one invariant to internalize.
+  Be concrete — name the key modules/files with backticks.
+
+KEY DESIGN DECISIONS
+  3-6 bullets starting with `• `. Each bullet: a non-obvious choice and the reason it was made.
+  Anchor each bullet with 1-2 backticked symbols, paths, or concepts from the capsules.
+  Only include decisions that have a recorded rationale or that recur across sessions.
+
+THINGS THAT BITE
+  2-5 bullets starting with `• `. Gotchas, footguns, and hard-learned lessons.
+  Any capsule with failure_mode set (retry_spiral, decision_conflict, drift, etc.) MUST
+  appear here. Make it concrete — what exactly breaks, what assumption is wrong.
+
+ENTRY POINTS
+  2-4 bullets starting with `• `. Where to start reading. Use backticked `file:line` format
+  where possible. One sentence per bullet on why this is the right starting place.
+
+GO DEEPER
+  2-3 lines. Each line is a concrete `unlost` command the reader should run next to drill
+  into the most important or unclear areas. Use `unlost brief <scope>` for area deep-dives
+  and `unlost query "<question>"` for specific questions. No bullet markers on these lines.
+
+Rules:
+- Base output ONLY on the provided capsules.
+- Do not invent symbols, paths, or decisions not present in the capsules.
+- Do not mention timestamps, session IDs, or capsule IDs.
+- Keep each bullet to one line. No sub-bullets.
+"#
+    );
+
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(
+            llm_model_override,
+            &preamble,
+            &context,
+        )
+        .await?
+        .narrative,
+    )
+}
+
+/// Render the output of `brief` with ANSI styling.
+///
+/// Differs from `render_narrative` in that it bolds the 5 fixed section headers
+/// so the structure is immediately scannable at a glance.
+pub(crate) fn render_brief(output: OutputFormat, s: &str) -> String {
+    let output = if std::env::var_os("NO_COLOR").is_some() {
+        OutputFormat::Plain
+    } else {
+        output
+    };
+
+    let s = crate::util::strip_llm_boilerplate(s.trim().to_string());
+
+    // Section headers the LLM is instructed to produce
+    const SECTION_HEADERS: &[&str] = &[
+        "MENTAL MODEL",
+        "KEY DESIGN DECISIONS",
+        "THINGS THAT BITE",
+        "ENTRY POINTS",
+        "GO DEEPER",
+    ];
+
+    match output {
+        OutputFormat::Plain => s.trim().to_string(),
+        OutputFormat::Ansi => {
+            let wrap_width = 80usize;
+            let mut out = String::with_capacity(s.len() + 128);
+            let mut first = true;
+
+            for line in s.lines() {
+                let l = line.trim_end();
+                let trimmed = l.trim();
+
+                let is_header = SECTION_HEADERS
+                    .iter()
+                    .any(|&h| trimmed.eq_ignore_ascii_case(h));
+
+                // GO DEEPER lines are the `unlost ...` commands — dim them like tips
+                let is_go_deeper_cmd = trimmed.starts_with("unlost ");
+
+                let wrapped = wrap_line_preserving_backticks(l, wrap_width);
+                for wl in wrapped {
+                    if !first {
+                        out.push('\n');
+                    }
+                    // Add a blank line before each section header for visual breathing room,
+                    // but not before the very first one.
+                    if is_header && !first {
+                        out.push('\n');
+                    }
+                    first = false;
+
+                    if is_header {
+                        // Bold + bright white for section headers
+                        out.push_str("\x1b[1;97m");
+                        out.push_str(&wl);
+                        out.push_str("\x1b[0m");
+                    } else if is_go_deeper_cmd {
+                        // Dim cyan for suggested commands
+                        out.push_str("\x1b[2;36m");
+                        out.push_str(&wl);
+                        out.push_str("\x1b[0m");
+                    } else {
+                        out.push_str(&colorize_backticks(&wl));
+                    }
+                }
+            }
+            out
+        }
+    }
+}
+
 pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {
     if output != OutputFormat::Ansi {
         return None;

@@ -96,12 +96,18 @@ unlost config llm openai --model gpt-4o-mini
 - The LLM call goes through your configured provider (Anthropic, OpenAI, etc.)
 - Capsule storage is entirely local — embeddings, the capsules themselves, and query history never leave your machine
 
-## Recall & Query
+## Recall, Brief & Query
 
-Your agents built a memory trail. Here's how to query it:
+Your agents built a memory trail. Here's how to use it:
 
 ```bash
-# What did we decide here?
+# Get a staff engineer's debrief — what matters, what bites, where to start
+unlost brief
+
+# Drill into a specific area
+unlost brief src/governor.rs
+
+# What happened recently in this file?
 unlost recall src/http_proxy.rs
 
 # Why did we rename the capsules table?
@@ -110,6 +116,22 @@ unlost query "why did we rename the capsules table?"
 # Find everything about the proxy routing
 unlost query --symbol proxy_request
 ```
+
+### `unlost brief`
+
+`brief` is a one-command orientation for any codebase you didn't write (or haven't touched in a while). It answers the question a staff engineer would answer on day one: *"Here's what this system is, the non-obvious choices, the things that bite, and where to start reading."*
+
+Unlike `recall` (which narrates recent history), `brief` scans all recorded memory — conversations and git commits — and scores each capsule by importance: failure modes that were recorded, decisions with rationale, knowledge that surfaced repeatedly across sessions. The output is structured into four sections:
+
+```
+MENTAL MODEL          — what this system is and its core invariant
+KEY DESIGN DECISIONS  — non-obvious choices and why they were made
+THINGS THAT BITE      — gotchas and hard-learned lessons
+ENTRY POINTS          — where to start reading, with file:line references
+GO DEEPER             — suggested unlost commands to drill down further
+```
+
+Git commit messages are first-class capsules in `brief`. A commit like `"fix: workspace ID must come from git remote, not path"` with an explanatory body will surface as a KEY DESIGN DECISION — even if it predates when you started using unlost.
 
 ## The Cognitive Mirror (Metrics)
 
@@ -133,19 +155,27 @@ This reveals:
 - **Average Interval**: How many tokens of productive work you get between trajectory breakdowns.
 - **Top Friction Files**: Codebase "hotspots" that are consistently causing the agent to stall or drift.
 
-## Replay & Grounding
+## Replay & Git History
 
-Did an agent session happen while Unlost was off? Or do you want to analyze a past transcript?
+Did an agent session happen while Unlost was off? Or do you want to seed a codebase with its git history?
 
 ```bash
-# Replay OpenCode sessions from your current repo
-unlost replay opencode --git-grounding
+# Replay OpenCode sessions — also ingests git history automatically
+unlost replay opencode
 
-# Replay a Claude transcript file
-unlost replay claude --transcript-path history.json --git-grounding
+# Replay a Claude transcript — also ingests git history automatically
+unlost replay claude --transcript-path history.json
+
+# Ingest only git history (no agent transcript needed)
+unlost replay git
+unlost replay git --max-commits 200
 ```
 
-The `--git-grounding` flag verifies agent claims against actual commits in your history, marking capsules as "Verified via Git" when a match is found.
+Git commit history is ingested automatically whenever you run `replay opencode` or `replay claude` — no extra step. Each commit becomes a capsule: subject as the decision, body as the rationale, touched files as symbols. Deduplication by hash means re-running replay never double-counts commits.
+
+The `--git-grounding` flag (on `replay opencode` and `replay claude`) cross-references agent-touched files against actual commits in your history, marking capsules as "Verified via Git" when a match is found.
+
+Git capsules are used by `brief` and `query` but deliberately excluded from `recall` (which stays focused on the conversational story) and from the trajectory controller (which operates on live turns only).
 
 ## Install
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0] - 2026-02-19
+
+### Added
+- **`unlost brief`**: New command that produces a staff-engineer-style codebase debrief. Answers "what do I need to know to work here without getting surprised?" by scanning all recorded history (not just recent turns), scoring capsules by importance (failure modes, explicit rationale, cross-session recurrence), and producing four structured sections: MENTAL MODEL, KEY DESIGN DECISIONS, THINGS THAT BITE, ENTRY POINTS. Ends with a GO DEEPER section of suggested `unlost` commands to drill down further. Scoped variant (`unlost brief src/governor.rs`) narrows the debrief to a specific file or concept.
+- **Git commit ingestion**: Git commits are now first-class capsules. Each commit becomes an `IntentCapsule` with `category: "GitCommit"`, subject as the decision, body as the rationale, and touched files as symbols — embedded for semantic search, zero LLM cost. Deduplicates by hash across runs.
+- **`unlost replay git`**: New subcommand to ingest git history on demand (`unlost replay git --max-commits 500`).
+- **Automatic git ingestion**: `unlost replay opencode`, `unlost replay claude`, and `unlost init` now automatically ingest git history after their main work completes. No extra step needed.
+
+### Changed
+- **Git capsule routing**: Git capsules are included in `brief` and `query` (where historical decisions are valuable) but excluded from `recall` (which stays focused on the conversational story) and from the trajectory controller's history window (which operates on live agent turns only).
+
 ## [0.6.5] - 2026-02-18
 
 ### Fixed
@@ -192,6 +203,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.7.0]: https://github.com/unfault/unlost/compare/v0.6.5...v0.7.0
 [0.6.4]: https://github.com/unfault/unlost/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/unfault/unlost/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/unfault/unlost/compare/v0.6.1...v0.6.2

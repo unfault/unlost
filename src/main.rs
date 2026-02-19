@@ -115,6 +115,22 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Command::Brief {
+            target,
+            llm_model,
+            output,
+            plain,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            let output = if plain {
+                OutputFormat::Plain
+            } else {
+                output
+            };
+            unlost::commands::brief::run(target, llm_model, output, embed_model, embed_cache_dir)
+                .await?;
+        }
         Command::Recall {
             target,
             limit,
@@ -233,6 +249,14 @@ async fn main() -> anyhow::Result<()> {
 
 async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
     match command {
+        ReplayCommand::Git {
+            path,
+            max_commits,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::git::replay_git(path, max_commits, embed_model, embed_cache_dir).await?;
+        }
         ReplayCommand::Claude {
             path,
             transcript_path,

@@ -1,3 +1,4 @@
+pub mod brief;
 pub mod clear;
 pub mod config;
 pub mod emotion;

@@ -535,6 +535,18 @@ pub async fn run(
             .ok();
     }
 
+    // Ingest git commit history as capsules — zero LLM cost, deduplicates on re-run.
+    // This runs unconditionally (git_history flag controls the summary fed to the LLM
+    // above; this is a separate, always-on capsule ingest).
+    {
+        let repo_root = crate::workspace::git_toplevel(&root_path);
+        if let Some(ref repo_root) = repo_root {
+            let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+                && std::env::var_os("NO_COLOR").is_none();
+            let _ = crate::git::ingest_git_commits(&ws, repo_root, &embedder, 500, use_color).await;
+        }
+    }
+
     println!("workspace: {}", ws.id);
     if !top_routes.is_empty() {
         println!("routes:");

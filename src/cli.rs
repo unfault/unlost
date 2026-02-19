@@ -169,6 +169,32 @@ pub enum Command {
         file: String,
     },
 
+    /// Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
+    Brief {
+        /// Optional scope: file path, symbol, or concept to focus the brief on
+        target: Vec<String>,
+
+        /// LLM model to use for the brief
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Recall the story so far (proactive overview)
     Recall {
         /// Optional scope (file path or symbol/function name)
@@ -439,6 +465,25 @@ pub enum ReplayCommand {
         /// Ground replayed turns with actual git logs (find corresponding commits)
         #[arg(long, default_value_t = false)]
         git_grounding: bool,
+    },
+
+    /// Ingest git commit history as capsules into the current workspace
+    Git {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Max commits to ingest (most recent first, deduplicates on re-run)
+        #[arg(long, default_value_t = 500)]
+        max_commits: usize,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
     },
 
     /// Replay OpenCode messages from disk storage into the current workspace

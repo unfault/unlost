@@ -831,6 +831,20 @@ pub async fn replay(
         println!();
     }
 
+    // Always ingest git history after replaying agent sessions — zero extra cost,
+    // deduplicates on hash, and makes `unlost brief` significantly more useful.
+    if let Some(ref root) = repo_root {
+        let embedder = crate::embed::load_embedder(
+            &embed_model,
+            embed_cache_dir.as_deref().map(std::path::PathBuf::from),
+            false,
+        )
+        .await;
+        if let Ok(embedder) = embedder {
+            let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
+        }
+    }
+
     Ok(())
 }
 

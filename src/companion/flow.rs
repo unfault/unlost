@@ -309,9 +309,11 @@ impl Flow {
             Err(_) => None,
         };
 
-        // Query recent history
+        // Query recent history — exclude git capsules: they are facts about merged code,
+        // not conversation turns, and their thin signals (no usage, no emotion, failure_mode=None)
+        // would skew friction scoring if they land in the last-5 window.
         let history = match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
-            Ok(h) => h,
+            Ok(h) => h.into_iter().filter(|c| c.meta.source != "git").collect(),
             Err(_) => vec![],
         };
 

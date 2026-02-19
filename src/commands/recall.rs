@@ -300,7 +300,12 @@ pub async fn run(
             }
         }
     }
-    let mut hits = by_id.into_values().collect::<Vec<_>>();
+    // Exclude git capsules from recall: they are facts about merged commits, not
+    // the conversational story so far. They belong in `brief` and `query`, not here.
+    let mut hits = by_id
+        .into_values()
+        .filter(|h| h.meta.source != "git")
+        .collect::<Vec<_>>();
     hits = select_hits_for_recall(hits, want);
 
     if hits.is_empty() {
