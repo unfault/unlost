@@ -286,7 +286,7 @@ unlost config llm openai --model gpt-4o-mini</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost brief</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">A staff engineer's debrief on any codebase — what matters, what bites, where to start. Scans all recorded memory (conversations + git commits) and scores by importance, not recency.</p>
+          <p class="text-midnight-violet-950/60 mb-4">A staff engineer's debrief on any codebase: what matters, what bites, where to start. Scans all recorded memory (conversations + git commits) and scores by importance, not recency.</p>
           <pre><code>unlost brief
 unlost brief src/governor.rs
 unlost brief TrajectoryController</code></pre>
@@ -297,15 +297,15 @@ unlost brief TrajectoryController</code></pre>
             <div class="text-white/80 whitespace-nowrap">flow through a shim → capsules are extracted and embedded → stored in</div>
             <div class="text-white/80 whitespace-nowrap">`LanceDB` → surfaced via `recall`, `brief`, and `query`.</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">KEY DESIGN DECISIONS</div>
-            <div class="text-white/80 whitespace-nowrap">• `capsules_v3` schema is append-only — mutations require `reindex`</div>
-            <div class="text-white/80 whitespace-nowrap">• `TrajectoryController` is pure Rust, zero LLM — intentional for latency</div>
+            <div class="text-white/80 whitespace-nowrap">• `capsules_v3` schema is append-only; mutations require `reindex`</div>
+            <div class="text-white/80 whitespace-nowrap">• `TrajectoryController` is pure Rust, zero LLM; intentional for latency</div>
             <div class="text-white/80 whitespace-nowrap">• Workspace ID comes from git remote URL, not path</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">THINGS THAT BITE</div>
-            <div class="text-white/80 whitespace-nowrap">• Aliased git clones get a different workspace ID — data appears missing</div>
+            <div class="text-white/80 whitespace-nowrap">• Aliased git clones get a different workspace ID; data appears missing</div>
             <div class="text-white/80 whitespace-nowrap">• `llm_extract` silently falls back to OPENAI_API_KEY if no config set</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">ENTRY POINTS</div>
-            <div class="text-white/80 whitespace-nowrap">• `src/companion/flow.rs:414` — main recording pipeline</div>
-            <div class="text-white/80 whitespace-nowrap">• `src/commands/recall.rs:133` — recall entry point</div>
+            <div class="text-white/80 whitespace-nowrap">• `src/companion/flow.rs:414`: main recording pipeline</div>
+            <div class="text-white/80 whitespace-nowrap">• `src/commands/recall.rs:133`: recall entry point</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">GO DEEPER</div>
             <div class="text-cyan-400/70 whitespace-nowrap">  unlost brief src/governor.rs</div>
             <div class="text-cyan-400/70 whitespace-nowrap">  unlost query "why is workspace ID derived from git remote"</div>
