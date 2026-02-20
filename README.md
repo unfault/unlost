@@ -44,7 +44,7 @@ All your Claude Code projects, forever, with zero per-repo config:
 unlost config agent claude --global
 ```
 
-That's it. Unlost hooks into every Claude Code session, checks for friction before each prompt, injects guidance when something feels off, and quietly records what actually happened (intent, decision, rationale, next steps) into local capsules you can query anytime.
+This installs the Unlost agent skill and hooks unlost into every Claude Code session. Unlost checks for friction before each prompt, injects guidance when something feels off, and quietly records what actually happened (intent, decision, rationale, next steps) into local capsules you can query anytime.
 
 ### OpenCode
 
@@ -60,7 +60,14 @@ Or one project at a time:
 unlost config agent opencode --path .
 ```
 
-Same deal. Unlost spots drift, catches false progress, and builds a local trail of decisions — without storing full transcripts.
+This installs the Unlost agent skill and hooks unlost into your OpenCode sessions. The skill teaches OpenCode:
+
+- **Friction detection** runs automatically — unlost checks for drift, retry spirals, and false progress before each prompt
+- **Two tiers of memory commands**:
+  - Fast path (no LLM): `unlost query --no-llm`, `unlost metrics` — safe to run proactively
+  - LLM path (on demand): `unlost query`, `unlost recall`, `unlost brief` — only when user explicitly asks
+
+Unlost spots drift, catches false progress, and builds a local trail of decisions — without storing full transcripts.
 
 ## How it works
 

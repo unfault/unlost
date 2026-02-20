@@ -233,7 +233,7 @@
         <div>
           <h3 class="text-base sm:text-lg font-semibold mb-4">Agent Integration</h3>
           <p class="text-midnight-violet-950/60 mb-4">
-            Hook unlost into your agent. Choose global for system-wide coverage, or per-project for opt-in control.
+            Hook unlost into your agent. This installs the Unlost agent skill (for OpenCode) and configures the necessary hooks. The skill teaches the agent how to use unlost: fast-path commands for proactive checks, and LLM-path commands for on-demand recall. Choose global for system-wide coverage, or per-project for opt-in control.
           </p>
           <pre><code># Claude Code - one command, works everywhere
 unlost config agent claudecode --global
@@ -241,6 +241,13 @@ unlost config agent claudecode --global
 # OpenCode - opt-in per repository
 cd your-project
 unlost config agent opencode --path .</code></pre>
+          <small class="text-midnight-violet-950/60 block mt-4 text-sm">
+            <strong>What the skill teaches:</strong> For OpenCode, the installed skill teaches two tiers of commands:
+            <br><br>
+            <strong>Fast path</strong> (no LLM, run proactively): <code>unlost query --no-llm</code>, <code>unlost metrics</code>
+            <br>
+            <strong>LLM path</strong> (on demand only): <code>unlost query</code>, <code>unlost recall</code>, <code>unlost brief</code>
+          </small>
           <small class="text-midnight-violet-950/60 block mt-2 text-sm">If you want to use Unlost with your favourite agent, please <a href="https://github.com/unfault/unlost/issues" class="text-fiery-terracotta hover:underline">drop us a note</a>.</small>
         </div>
 
