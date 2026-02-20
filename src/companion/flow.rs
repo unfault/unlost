@@ -324,7 +324,7 @@ impl Flow {
         // Create current capsule for friction evaluation
         let current = IntentCapsule {
             category: String::new(),
-            intent: event.text.clone(),
+            intent: crate::util::strip_llm_boilerplate(event.text.clone()),
             decision: String::new(),
             rationale: String::new(),
             next_steps: vec![],
