@@ -487,10 +487,34 @@ pub(crate) async fn llm_recall_narrative(
             }
         }
     }
+    // Determine the most-recent session key so we can suppress `next:` lines
+    // for older sessions — stale next-steps from past sessions are almost never
+    // still valid and mislead the LLM into suggesting resolved work.
+    let latest_session_key: Option<String> = hits.first().map(|h| {
+        if let Some(s) = h.meta.agent_session_id.as_deref() {
+            if !s.trim().is_empty() {
+                return format!("ses:{s}");
+            }
+        }
+        format!("conn:{}", h.conn_id)
+    });
+
     context.push_str("Capsules (most recent first):\n");
     for (i, hit) in hits.iter().enumerate() {
         let cap = &hit.capsule;
         let meta = &hit.meta;
+        let this_session_key: String = {
+            if let Some(s) = hit.meta.agent_session_id.as_deref() {
+                if !s.trim().is_empty() {
+                    format!("ses:{s}")
+                } else {
+                    format!("conn:{}", hit.conn_id)
+                }
+            } else {
+                format!("conn:{}", hit.conn_id)
+            }
+        };
+        let is_latest_session = latest_session_key.as_deref() == Some(&this_session_key);
         context.push_str(&format!(
             "#{} ts_ms={} id={} conn_id={} exchange_seq={} http_status={} source={} category={} upstream={} path={}\n",
             i + 1,
@@ -528,7 +552,7 @@ pub(crate) async fn llm_recall_narrative(
                 cap.rationale.replace('\n', " ")
             ));
         }
-        if !cap.next_steps.is_empty() {
+        if !cap.next_steps.is_empty() && is_latest_session {
             let steps = cap
                 .next_steps
                 .iter()
