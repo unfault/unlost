@@ -6,10 +6,13 @@ use chrono::{SecondsFormat, TimeZone};
 
 use crate::cli::OutputFormat;
 
+
+
 pub(crate) async fn llm_query_narrative(
     llm_model_override: Option<&str>,
     query_text: &str,
     symbol: Option<&str>,
+    workspace_root: &str,
     matches: &[crate::CapsuleHit],
 ) -> Result<String> {
     let fmt_ts_utc = |ts_ms: i64| -> Option<String> {
@@ -17,6 +20,20 @@ pub(crate) async fn llm_query_narrative(
             .timestamp_millis_opt(ts_ms)
             .single()
             .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+    };
+
+    // Build graph once for relationship grounding. Failure is non-fatal.
+    let cg = if matches.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        match crate::workspace::build_graph_for_workspace(root) {
+            Some(g) => Some(g),
+            None => {
+                tracing::warn!("llm_query_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                None
+            }
+        }
+    } else {
+        None
     };
 
     let mut context = String::new();
@@ -112,6 +129,11 @@ pub(crate) async fn llm_query_narrative(
                 .collect::<Vec<_>>()
                 .join(", ");
             context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
         }
         context.push('\n');
         if i >= 9 {
@@ -426,6 +448,20 @@ pub(crate) async fn llm_recall_narrative(
         }
     }
 
+    // Build graph once for relationship grounding. Failure is non-fatal.
+    let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        match crate::workspace::build_graph_for_workspace(root) {
+            Some(g) => Some(g),
+            None => {
+                tracing::warn!("llm_recall_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut context = String::new();
     context.push_str("Recall context\n\n");
     if let Some(s) = scope {
@@ -511,6 +547,11 @@ pub(crate) async fn llm_recall_narrative(
                 .collect::<Vec<_>>()
                 .join(", ");
             context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
         }
         context.push('\n');
         if i >= 39 {
@@ -587,6 +628,20 @@ pub(crate) async fn llm_brief_narrative(
     workspace_root: &str,
     hits: &[crate::CapsuleHit],
 ) -> anyhow::Result<String> {
+    // Build graph once for relationship grounding. Failure is non-fatal.
+    let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        match crate::workspace::build_graph_for_workspace(root) {
+            Some(g) => Some(g),
+            None => {
+                tracing::warn!("llm_brief_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut context = String::new();
     context.push_str("Brief context\n\n");
 
@@ -648,6 +703,11 @@ pub(crate) async fn llm_brief_narrative(
                 .collect::<Vec<_>>()
                 .join(", ");
             context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
         }
         context.push('\n');
         if i >= 39 {

@@ -7,7 +7,7 @@ use tracing::info;
 use unfault_core::{
     FileId, Language as UfLanguage, SourceFile, build_code_graph,
     parse::parse_source_file,
-    semantics::{SourceSemantics, build_source_semantics},
+    semantics::{SourceSemantics, build_source_semantics, CommonSemantics},
 };
 
 fn detect_language(path: &std::path::Path) -> Option<UfLanguage> {
@@ -356,17 +356,52 @@ pub async fn run(
         }
     }
 
+    // Centrality: most-imported files (hotspots for the LLM context).
+    let centrality = unfault_core::graph::traversal::get_centrality(&cg, 25);
+    let hotspots: Vec<(usize, String)> = centrality
+        .central_files
+        .iter()
+        .map(|(path, score)| (*score as usize, path.clone()))
+        .collect();
+
+    // Dependencies of the top hub file (gives the LLM the dependency spine).
+    let deps: Vec<(usize, String)> = if let Some((top_path, _)) = centrality.central_files.first()
+    {
+        let dep_ctx = unfault_core::graph::traversal::get_dependencies(&cg, top_path);
+        let mut all: Vec<String> = dep_ctx
+            .dependencies
+            .into_iter()
+            .chain(dep_ctx.library_users)
+            .collect();
+        all.sort();
+        all.dedup();
+        all.truncate(25);
+        // Weight is 1 (uniform) since get_dependencies doesn't score.
+        all.into_iter().map(|d| (1usize, d)).collect()
+    } else {
+        Vec::new()
+    };
+
     let mut top_routes: Vec<(String, String)> = Vec::new();
-    for (idx, path, method) in cg.get_http_route_handlers() {
-        let node = &cg.graph[idx];
-        let qualified = match node {
-            unfault_core::GraphNode::Function { qualified_name, .. } => qualified_name.clone(),
-            _ => continue,
+    for (_file_id, sem) in &sem_entries {
+        let common: &dyn CommonSemantics = match sem.as_ref() {
+            SourceSemantics::Python(s) => s,
+            SourceSemantics::Go(s) => s,
+            SourceSemantics::Rust(s) => s,
+            SourceSemantics::Typescript(s) => s,
         };
-        let m = method.unwrap_or("ANY");
-        top_routes.push((format!("{m} {path}"), qualified));
+        for route in common.route_patterns() {
+            let method = route.method.as_str();
+            let path = route.path.as_str();
+            let handler = route
+                .handler_name
+                .as_deref()
+                .unwrap_or(&route.handler_file);
+            top_routes.push((format!("{method} {path}"), handler.to_string()));
+        }
     }
     top_routes.sort_by(|a, b| a.0.cmp(&b.0));
+    top_routes.dedup_by(|a, b| a.0 == b.0);
     if top_routes.len() > 5 {
         top_routes.truncate(5);
     }
@@ -440,59 +475,145 @@ pub async fn run(
         },
     ));
 
-    for (idx, path, method) in cg.get_http_route_handlers() {
-        if capsules.len() >= max_capsules {
-            break;
+    'routes: for (_file_id, sem) in &sem_entries {
+        let common: &dyn CommonSemantics = match sem.as_ref() {
+            SourceSemantics::Python(s) => s,
+            SourceSemantics::Go(s) => s,
+            SourceSemantics::Rust(s) => s,
+            SourceSemantics::Typescript(s) => s,
+        };
+        for route in common.route_patterns() {
+            if capsules.len() >= max_capsules {
+                break 'routes;
+            }
+
+            let method = route.method.as_str();
+            let path = route.path.as_str();
+            let file_path = route.handler_file.clone();
+            let qualified = route
+                .handler_name
+                .as_deref()
+                .unwrap_or(&route.handler_file)
+                .to_string();
+
+            capsules.push((
+                crate::IntentCapsule {
+                    category: "Snapshot:Route".to_string(),
+                    intent: "Identify the request surface area".to_string(),
+                    decision: format!(
+                        "HTTP handler {method} {path} implemented by {qualified} ({file_path})."
+                    ),
+                    rationale: String::new(),
+                    next_steps: Vec::new(),
+                    symbols: vec![
+                        qualified.clone(),
+                        file_path.clone(),
+                        format!("{method} {path}"),
+                    ],
+                    user_symbols: vec![],
+                    failure_mode: crate::types::FailureMode::None,
+                    failure_signals: None,
+                    extraction_mode: crate::types::ExtractionMode::None,
+                },
+                crate::ResponseMeta {
+                    source: "init".to_string(),
+                    upstream_host: "init".to_string(),
+                    request_path: file_path,
+                    http_status: 0,
+                    agent_session_id: None,
+                    usage: None,
+                },
+            ));
+        }
+    }
+
+    // Static risk capsule: HTTP calls lacking timeout or retry, grouped by file.
+    // Zero LLM cost; emitted as a single Snapshot:Risks capsule when findings exist.
+    {
+        struct RiskSite {
+            file: String,
+            no_timeout: usize,
+            no_retry: usize,
         }
 
-        let node = &cg.graph[idx];
-        let (qualified, file_id) = match node {
-            unfault_core::GraphNode::Function {
-                qualified_name,
-                file_id,
-                ..
-            } => (qualified_name.clone(), *file_id),
-            _ => continue,
-        };
+        let mut risk_sites: Vec<RiskSite> = Vec::new();
+        for (_file_id, sem) in &sem_entries {
+            let common: &dyn CommonSemantics = match sem.as_ref() {
+                SourceSemantics::Python(s) => s,
+                SourceSemantics::Go(s) => s,
+                SourceSemantics::Rust(s) => s,
+                SourceSemantics::Typescript(s) => s,
+            };
+            let no_timeout = common.http_calls_without_timeout().len();
+            let no_retry = common.http_calls_without_retry().len();
+            if no_timeout > 0 || no_retry > 0 {
+                risk_sites.push(RiskSite {
+                    file: common.file_path().to_string(),
+                    no_timeout,
+                    no_retry,
+                });
+            }
+        }
 
-        let method = method.unwrap_or("ANY");
-        let file_path = cg
-            .file_nodes
-            .get(&file_id)
-            .and_then(|fidx| match &cg.graph[*fidx] {
-                unfault_core::GraphNode::File { path, .. } => Some(path.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        if !risk_sites.is_empty() && capsules.len() < max_capsules {
+            let total_no_timeout: usize = risk_sites.iter().map(|r| r.no_timeout).sum();
+            let total_no_retry: usize = risk_sites.iter().map(|r| r.no_retry).sum();
+            let file_count = risk_sites.len();
 
-        capsules.push((
-            crate::IntentCapsule {
-                category: "Snapshot:Route".to_string(),
-                intent: "Identify the request surface area".to_string(),
-                decision: format!(
-                    "HTTP handler {method} {path} implemented by {qualified} ({file_path})."
-                ),
-                rationale: String::new(),
-                next_steps: Vec::new(),
-                symbols: vec![
-                    qualified.clone(),
-                    file_path.clone(),
-                    format!("{method} {path}"),
-                ],
-                user_symbols: vec![],
-                failure_mode: crate::types::FailureMode::None,
-                failure_signals: None,
-                extraction_mode: crate::types::ExtractionMode::None,
-            },
-            crate::ResponseMeta {
-                source: "init".to_string(),
-                upstream_host: "init".to_string(),
-                request_path: file_path,
-                http_status: 0,
-                agent_session_id: None,
-                usage: None,
-            },
-        ));
+            let mut details = String::new();
+            for r in risk_sites.iter().take(10) {
+                if r.no_timeout > 0 {
+                    details.push_str(&format!(
+                        " {}: {} call(s) without timeout.",
+                        r.file, r.no_timeout
+                    ));
+                }
+                if r.no_retry > 0 {
+                    details.push_str(&format!(
+                        " {}: {} call(s) without retry.",
+                        r.file, r.no_retry
+                    ));
+                }
+            }
+
+            let symbols: Vec<String> = risk_sites
+                .iter()
+                .take(10)
+                .map(|r| r.file.clone())
+                .collect();
+
+            capsules.push((
+                crate::IntentCapsule {
+                    category: "Snapshot:Risks".to_string(),
+                    intent: "Surface HTTP reliability risks at init time".to_string(),
+                    decision: format!(
+                        "{total_no_timeout} HTTP call(s) without timeout and \
+                         {total_no_retry} without retry across {file_count} file(s).{details}"
+                    ),
+                    rationale: "Calls without timeout can block indefinitely; \
+                                calls without retry silently drop transient errors."
+                        .to_string(),
+                    next_steps: vec![
+                        "Add timeout to all outbound HTTP calls.".to_string(),
+                        "Consider retry with exponential backoff for non-idempotent paths."
+                            .to_string(),
+                    ],
+                    symbols,
+                    user_symbols: vec![],
+                    failure_mode: crate::types::FailureMode::None,
+                    failure_signals: None,
+                    extraction_mode: crate::types::ExtractionMode::None,
+                },
+                crate::ResponseMeta {
+                    source: "init".to_string(),
+                    upstream_host: "init".to_string(),
+                    request_path: "init".to_string(),
+                    http_status: 0,
+                    agent_session_id: None,
+                    usage: None,
+                },
+            ));
+        }
     }
 
     if !no_llm {
@@ -502,8 +623,8 @@ pub async fn run(
             &root_path,
             &stats,
             &top_routes,
-            &Vec::new(),
-            &Vec::new(),
+            &hotspots,
+            &deps,
             &file_paths,
             git_history_summary.as_deref(),
         )

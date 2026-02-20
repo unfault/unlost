@@ -45,7 +45,7 @@ ort = { version = "2.0.0-rc.11", default-features = false, features = [
 ] }
 tokenizers = { version = "0.20.4", default-features = false, features = ["onig"] }
 uuid = { version = "1.18.1", features = ["v4"] }
-unfault-core = "0.1.7"
+unfault-core = "0.2.0"
 petgraph = "0.8"
 sha2 = "0.10.9"
 hex = "0.4.3"

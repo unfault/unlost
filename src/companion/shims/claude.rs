@@ -1160,7 +1160,7 @@ pub async fn replay(
                 }
 
                 // Grounding from git logs
-                let grounding_note = if let Some(ref available) = commits {
+                let git_note = if let Some(ref available) = commits {
                     if turn.timestamp_ms > 0 {
                         let matches = crate::git::find_corresponding_commits(
                             turn.timestamp_ms,
@@ -1179,6 +1179,23 @@ pub async fn replay(
                     }
                 } else {
                     None
+                };
+
+                // Grounding from unfault-core semantics of touched files
+                let sem_note = if !turn.touched_paths.is_empty() {
+                    crate::workspace::semantic_grounding_for_paths(
+                        std::path::Path::new(&path),
+                        &turn.touched_paths,
+                    )
+                } else {
+                    None
+                };
+
+                let grounding_note = match (git_note, sem_note) {
+                    (Some(g), Some(s)) => Some(format!("{} | {}", g, s)),
+                    (Some(g), None) => Some(g),
+                    (None, Some(s)) => Some(s),
+                    (None, None) => None,
                 };
 
                 let event = RecordTurnEvent {

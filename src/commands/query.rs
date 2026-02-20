@@ -342,6 +342,11 @@ pub async fn run(
                     llm_model.as_deref(),
                     &query,
                     symbol.as_deref(),
+                    std::env::current_dir()
+                        .ok()
+                        .and_then(|p| p.to_str().map(|s| s.to_string()))
+                        .as_deref()
+                        .unwrap_or("."),
                     &matches,
                 )
                 .await

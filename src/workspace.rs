@@ -544,6 +544,245 @@ fn detect_language(path: &std::path::Path) -> Option<unfault_core::Language> {
     }
 }
 
+/// Build a `CodeGraph` from the full workspace, with no depth or file count limit.
+///
+/// Returns `None` on any failure — callers should log a warning and proceed
+/// without graph data rather than surfacing an error to the user.
+pub fn build_graph_for_workspace(root: &std::path::Path) -> Option<unfault_core::CodeGraph> {
+    use ignore::WalkBuilder;
+    use std::sync::Arc;
+    use unfault_core::{
+        build_code_graph, parse::parse_source_file, semantics::build_source_semantics, FileId,
+        SourceFile,
+    };
+
+    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
+
+    let mut sem_entries = Vec::new();
+    let mut file_id_counter: u64 = 0;
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(lang) = detect_language(path) else {
+            continue;
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        let source_file = SourceFile {
+            path: rel.to_string_lossy().to_string(),
+            language: lang,
+            content,
+        };
+        let file_id = FileId(file_id_counter);
+        file_id_counter += 1;
+
+        let parsed = match parse_source_file(file_id, &source_file) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let sem = match build_source_semantics(&parsed) {
+            Ok(Some(s)) => s,
+            _ => continue,
+        };
+        sem_entries.push((file_id, Arc::new(sem)));
+    }
+
+    if sem_entries.is_empty() {
+        return None;
+    }
+
+    Some(build_code_graph(&sem_entries))
+}
+
+/// Given a `CodeGraph` and a list of symbol strings (file paths, identifiers,
+/// anything from a capsule's `symbols` field), return a compact one-line
+/// summary of the import relationships for symbols that resolve to file nodes.
+///
+/// Format: `a.rs → [b.rs, c.rs] | b.rs ← [a.rs]`
+///
+/// Symbols that don't resolve (identifiers, markdown, unsupported languages)
+/// are silently skipped. Returns `None` if nothing resolved.
+pub fn relationships_for_symbols(
+    cg: &unfault_core::CodeGraph,
+    symbols: &[String],
+) -> Option<String> {
+    use unfault_core::graph::traversal::{get_dependencies, get_impact};
+
+    let mut parts: Vec<String> = Vec::new();
+
+    for sym in symbols {
+        let Some(_idx) = cg.find_file_by_path(sym) else {
+            continue;
+        };
+
+        let deps = get_dependencies(cg, sym);
+        let impact = get_impact(cg, sym, 1); // depth 1: direct dependents only
+
+        let has_deps = !deps.dependencies.is_empty() || !deps.library_users.is_empty();
+        let has_impact = !impact.affected_files.is_empty();
+
+        if !has_deps && !has_impact {
+            continue;
+        }
+
+        // Use just the filename for readability, not the full path.
+        let label = std::path::Path::new(sym)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| sym.clone());
+
+        let mut entry = label;
+
+        if has_deps {
+            let names: Vec<String> = deps
+                .dependencies
+                .iter()
+                .chain(deps.library_users.iter())
+                .take(4)
+                .map(|d| {
+                    std::path::Path::new(d)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| d.clone())
+                })
+                .collect();
+            entry.push_str(&format!(" → [{}]", names.join(", ")));
+        }
+
+        if has_impact {
+            let names: Vec<String> = impact
+                .affected_files
+                .iter()
+                .take(4)
+                .map(|d| {
+                    std::path::Path::new(d)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| d.clone())
+                })
+                .collect();
+            entry.push_str(&format!(" ← [{}]", names.join(", ")));
+        }
+
+        parts.push(entry);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" | "))
+    }
+}
+
+/// Build a compact semantic grounding string for a set of touched file paths.
+///
+/// For each path that can be parsed with unfault-core, extracts function names,
+/// async flags, and route patterns. Returns a single string suitable for
+/// appending to a capsule's `grounding_note`, or `None` if no files yielded
+/// useful data.
+///
+/// Designed to be called synchronously at replay time, once per turn. Files
+/// that don't exist on disk or whose language is not supported are silently
+/// skipped. Capped at 10 files to bound latency.
+pub fn semantic_grounding_for_paths(
+    workspace_root: &std::path::Path,
+    touched_paths: &[String],
+) -> Option<String> {
+    use unfault_core::{
+        parse::parse_source_file,
+        semantics::{build_source_semantics, CommonSemantics, SourceSemantics},
+        FileId, SourceFile,
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+
+    for (i, rel_path) in touched_paths.iter().take(10).enumerate() {
+        let abs = workspace_root.join(rel_path);
+        let lang = match detect_language(&abs) {
+            Some(l) => l,
+            None => continue,
+        };
+        let content = match std::fs::read_to_string(&abs) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let file_id = FileId(i as u64);
+        let source_file = SourceFile {
+            path: rel_path.clone(),
+            language: lang,
+            content,
+        };
+
+        let parsed = match parse_source_file(file_id, &source_file) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let sem = match build_source_semantics(&parsed) {
+            Ok(Some(s)) => s,
+            _ => continue,
+        };
+
+        let common: &dyn CommonSemantics = match &sem {
+            SourceSemantics::Python(s) => s,
+            SourceSemantics::Go(s) => s,
+            SourceSemantics::Rust(s) => s,
+            SourceSemantics::Typescript(s) => s,
+        };
+
+        let fns = common.functions();
+        let routes = common.route_patterns();
+
+        if fns.is_empty() && routes.is_empty() {
+            continue;
+        }
+
+        let mut file_parts: Vec<String> = Vec::new();
+
+        if !fns.is_empty() {
+            let fn_descs: Vec<String> = fns
+                .iter()
+                .take(8)
+                .map(|f| {
+                    if f.is_async {
+                        format!("async {}", f.name)
+                    } else {
+                        f.name.clone()
+                    }
+                })
+                .collect();
+            file_parts.push(format!("fns=[{}]", fn_descs.join(", ")));
+        }
+
+        if !routes.is_empty() {
+            let route_descs: Vec<String> = routes
+                .iter()
+                .take(4)
+                .map(|r| format!("{} {}", r.method.as_str(), r.path.as_str()))
+                .collect();
+            file_parts.push(format!("routes=[{}]", route_descs.join(", ")));
+        }
+
+        if !file_parts.is_empty() {
+            parts.push(format!("{}: {}", rel_path, file_parts.join("; ")));
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("Semantics: {}", parts.join(" | ")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

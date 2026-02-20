@@ -6549,9 +6549,9 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "unfault-core"
-version = "0.1.7"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41fe1d3b79c67f62bf66839b1a1574b82c94b915babc211860340a395ca3ccd9"
+checksum = "b781d002c72d722b5f515ec507ad7fb7821c795e48afde34255be89e48913390"
 dependencies = [
  "anyhow",
  "petgraph 0.8.3",
