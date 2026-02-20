@@ -48,6 +48,8 @@ pub struct TrajectoryController {
     pub stall_streak: usize,
     /// Persistence counter for instruction staticness.
     pub static_streak: usize,
+    /// Consecutive turns where the user expressed anger/frustration/disapproval.
+    pub anger_streak: usize,
     /// Per-basin cooldown counters (turns remaining).
     pub basin_cooldowns: std::collections::HashMap<String, usize>,
     /// History of user-mentioned symbols with timestamps for decay.
@@ -109,9 +111,10 @@ const SUMMARY_CUES: &[&str] = &[
     "overview",
     "in short",
     "to conclude",
-    "sorry",
-    "apologize",
-    "my apologies",
+    // NOTE: "sorry" / "apologize" / "my apologies" were intentionally removed.
+    // Detecting them in the assistant's decision text was damping the trajectory score
+    // precisely when the agent was looping on apologies — the opposite of what we want.
+    // Apology detection for de-escalation is handled via anger_streak instead.
 ];
 
 fn detect_summary_intent(text: &str) -> f32 {
@@ -221,6 +224,17 @@ impl TrajectoryController {
             self.static_streak = 0;
         }
         let s_stat = if self.static_streak >= 2 { 1.0 } else { 0.0 };
+
+        // Anger escalation streak: track consecutive turns where the user is angry/frustrated.
+        let is_angry = matches!(
+            current_emotion.map(|e| e.label.as_str()),
+            Some("anger" | "frustration" | "disapproval")
+        );
+        if is_angry {
+            self.anger_streak += 1;
+        } else {
+            self.anger_streak = 0;
+        }
 
         // 3. EMA Smoothing
         self.smoothed_channels.repetition =
@@ -348,7 +362,25 @@ impl TrajectoryController {
             "loop"
         };
 
-        let mut note = if self.state != prev_state || self.state == TrajectoryState::Intervene {
+        // Anger escalation override: if the user has been angry/frustrated for 2+ consecutive
+        // turns, fire a de-escalation note regardless of the normal trajectory cause.
+        // This short-circuits the basin dispatch so we never instruct the agent to apologize
+        // or keep executing — we want it to stop, acknowledge, and propose a recovery plan.
+        let anger_override = if self.anger_streak >= 2 {
+            let key = "anger_escalation";
+            if self.basin_cooldowns.get(key).map_or(0, |c| *c) == 0 {
+                self.basin_cooldowns.insert(key.to_string(), 3);
+                Some(de_escalation_note(history))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut note = if anger_override.is_some() {
+            anger_override
+        } else if self.state != prev_state || self.state == TrajectoryState::Intervene {
             // Check per-basin cooldown
             if self.basin_cooldowns.get(cause).map_or(0, |c| *c) > 0 {
                 None
@@ -411,6 +443,7 @@ impl TrajectoryController {
         self.last_decision = None;
         self.user_symbol_history.clear();
         self.watch_start_ts = None;
+        self.anger_streak = 0;
     }
 }
 
@@ -631,10 +664,7 @@ fn select_intervention_with_substance(
             "[SYSTEM NOTE: User frustration detected in a potential loop. Pause to clarify the immediate blocker.]"
                 .to_string(),
         ),
-        ("loop", "anger") | ("loop", _) if is_emergency => Some(
-            "[SYSTEM NOTE: CRITICAL: Repetitive stall detected. Stop all execution. Apologize and await explicit instructions.]"
-                .to_string(),
-        ),
+        ("loop", "anger") | ("loop", _) if is_emergency => Some(de_escalation_note(history)),
         ("loop", _) if is_ambient => {
             let syms = current.symbols.join(", ");
             Some(format!(
@@ -801,6 +831,47 @@ fn line_failure_mode(out: &mut String, fm: &crate::types::FailureMode) {
     out.push_str(&format!(" [FAILURE:{:?}]", fm));
 }
 
+/// Build a de-escalation note for when the user's anger is visibly escalating.
+///
+/// The goal is to stop the agent from tunnelling further into a broken state,
+/// have it acknowledge what went wrong kindly, and propose a concrete recovery
+/// plan — not to make it apologise in a loop or passively "await instructions".
+fn de_escalation_note(history: &[CapsuleHit]) -> String {
+    // Find the last stable goal: earliest non-meta intent in the recent window.
+    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
+
+    let last_goal = recent
+        .iter()
+        .rev() // oldest first
+        .find(|h| {
+            let intent = h.capsule.intent.trim();
+            intent.len() > 20
+                && !intent.to_lowercase().starts_with("carry on")
+                && !intent.to_lowercase().starts_with("go ahead")
+                && !intent.to_lowercase().starts_with("continue")
+        })
+        .map(|h| h.capsule.intent.trim().to_string());
+
+    let mut note = String::from(
+        "[SYSTEM NOTE: The user's frustration is escalating. \
+STOP all processing and do not make any further changes to the codebase.\n\
+Instead, do the following — in this order:\n\
+1. Acknowledge the problem clearly and kindly: name specifically what went wrong, \
+without deflecting or over-explaining.\n\
+2. Briefly summarise the current broken state so the user can see you understand it.\n\
+3. Propose a concrete recovery plan of no more than 3 steps to get back to a satisfying point.\n\
+Wait for the user to confirm the plan before taking any action.",
+    );
+
+    if let Some(goal) = last_goal {
+        note.push_str(&format!("\nLast known goal: \"{}\"", goal));
+    }
+
+    note.push(']');
+    note
+}
+
 fn render_resumption_brief(history: &[CapsuleHit]) -> Option<String> {
     if history.is_empty() {
         return None;
@@ -896,6 +967,26 @@ pub fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
         }
         crate::types::FailureMode::RetrySpiral => {
             Some("[SYSTEM NOTE: You are in a retry spiral. Stop and analyze why the previous approach failed before trying again.]".to_string())
+        }
+        crate::types::FailureMode::FalseProgress => {
+            // Only fire when at least 2 of the last 3 capsules show false_progress,
+            // so a single ambiguous turn doesn't trigger it.
+            let fp_count = recent
+                .iter()
+                .take(3)
+                .filter(|h| h.capsule.failure_mode == crate::types::FailureMode::FalseProgress)
+                .count();
+            if fp_count >= 2 {
+                Some(
+                    "[SYSTEM NOTE: Multiple consecutive attempts have produced no observable \
+change in behaviour. Stop making changes. Read the actual error output or run the \
+relevant command yourself, form a single testable hypothesis about the root cause, \
+and state it explicitly — then wait for confirmation before writing any code.]"
+                        .to_string(),
+                )
+            } else {
+                None
+            }
         }
         _ => None,
     }
