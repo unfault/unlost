@@ -540,10 +540,14 @@ pub async fn run(
     // above; this is a separate, always-on capsule ingest).
     {
         let repo_root = crate::workspace::git_toplevel(&root_path);
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+            && std::env::var_os("NO_COLOR").is_none();
         if let Some(ref repo_root) = repo_root {
-            let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
-                && std::env::var_os("NO_COLOR").is_none();
             let _ = crate::git::ingest_git_commits(&ws, repo_root, &embedder, 500, use_color).await;
+            // Ingest CHANGELOG.md (if present at the repo root) as capsules — grounds
+            // `unlost brief` and `unlost query` with shipped-decision history.
+            let changelog_path = repo_root.join("CHANGELOG.md");
+            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color).await;
         }
     }
 

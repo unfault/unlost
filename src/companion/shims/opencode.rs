@@ -831,8 +831,9 @@ pub async fn replay(
         println!();
     }
 
-    // Always ingest git history after replaying agent sessions — zero extra cost,
-    // deduplicates on hash, and makes `unlost brief` significantly more useful.
+    // Always ingest git history and CHANGELOG.md after replaying agent sessions —
+    // zero extra cost, deduplicates on re-run, and makes `unlost brief` significantly
+    // more useful by grounding it with shipped-decision history.
     if let Some(ref root) = repo_root {
         let embedder = crate::embed::load_embedder(
             &embed_model,
@@ -842,6 +843,8 @@ pub async fn replay(
         .await;
         if let Ok(embedder) = embedder {
             let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
+            let changelog_path = root.join("CHANGELOG.md");
+            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color).await;
         }
     }
 

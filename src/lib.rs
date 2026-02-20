@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod changelog;
 pub mod cli;
 pub mod commands;
 pub mod companion;
