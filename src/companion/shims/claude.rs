@@ -809,6 +809,7 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
             agent_session_id: Some(input.session_id.clone()),
             usage: turn.usage,
             grounding_note: None,
+            source_ts_ms: None,
         };
 
         let result = flow.record_turn(event).await;
@@ -1207,6 +1208,7 @@ pub async fn replay(
                     agent_session_id: Some(sid.clone()),
                     usage: turn.usage,
                     grounding_note,
+                    source_ts_ms: if turn.timestamp_ms > 0 { Some(turn.timestamp_ms) } else { None },
                 };
                 let result = flow.record_turn(event).await;
                 if result.error.is_none() {

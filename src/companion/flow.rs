@@ -117,6 +117,9 @@ pub(crate) struct RecordTurnEvent {
     pub usage: Option<UsageEvent>,
     /// Optional grounding info (e.g. verified git commits)
     pub grounding_note: Option<String>,
+    /// Original message timestamp (ms since epoch). When set (replay path),
+    /// this overrides the wall-clock time so capsules sort correctly.
+    pub source_ts_ms: Option<i64>,
 }
 
 /// Result of a record operation.
@@ -497,6 +500,7 @@ impl Flow {
             agent_session_id: final_session_id,
             usage: event.usage.map(UsageMeta::from),
             grounding_note: event.grounding_note,
+            source_ts_ms: event.source_ts_ms,
         };
 
         // Ingest into chunker (may or may not produce a flush job depending on boundaries).

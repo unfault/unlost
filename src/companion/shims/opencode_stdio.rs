@@ -174,6 +174,7 @@ impl From<RecordParams> for RecordTurnEvent {
             agent_session_id: p.agent_session_id,
             usage,
             grounding_note: None,
+            source_ts_ms: None,
         }
     }
 }

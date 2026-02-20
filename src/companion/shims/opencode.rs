@@ -760,6 +760,7 @@ pub async fn replay(
                     agent_session_id: Some(session_id_clone.clone()),
                     usage: turn.usage,
                     grounding_note,
+                    source_ts_ms: if turn.timestamp_ms > 0 { Some(turn.timestamp_ms) } else { None },
                 };
 
                 let result = flow.record_turn(event).await;

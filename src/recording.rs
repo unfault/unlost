@@ -182,6 +182,9 @@ pub(crate) struct ChunkInput {
     pub(crate) usage: Option<crate::types::UsageMeta>,
     /// Optional grounding info (e.g. verified git commits)
     pub(crate) grounding_note: Option<String>,
+    /// Original message timestamp (ms since epoch) from replay source.
+    /// When set, overrides the wall-clock time so replayed capsules sort correctly.
+    pub(crate) source_ts_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +208,7 @@ struct WorkspaceBuffer {
     last_agent_session_id: Option<String>,
     last_usage: Option<crate::types::UsageMeta>,
     last_grounding_note: Option<String>,
+    last_source_ts_ms: Option<i64>,
     total_chars: usize,
     turns: Vec<String>,
     saw_commit: bool,
@@ -222,6 +226,7 @@ impl WorkspaceBuffer {
             last_agent_session_id: None,
             last_usage: None,
             last_grounding_note: None,
+            last_source_ts_ms: None,
             total_chars: 0,
             turns: Vec::new(),
             saw_commit: false,
@@ -273,6 +278,9 @@ impl WorkspaceChunker {
             buf.last_agent_session_id = item.agent_session_id;
             buf.last_usage = item.usage;
             buf.last_grounding_note = item.grounding_note;
+            if item.source_ts_ms.is_some() {
+                buf.last_source_ts_ms = item.source_ts_ms;
+            }
             buf.saw_commit |= item.commit_mentioned;
 
             buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
@@ -362,7 +370,7 @@ impl WorkspaceChunker {
 fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob {
     buf.next_seq += 1;
     let exchange_seq = buf.next_seq;
-    let ts_ms = crate::now_ms();
+    let ts_ms = buf.last_source_ts_ms.unwrap_or_else(crate::now_ms);
 
     let mut input = String::new();
     input.push_str("Signals:\n");
@@ -668,6 +676,7 @@ pub(crate) async fn analysis_worker_multiplex(
             agent_session_id: None,
             usage: None,
             grounding_note: None,
+            source_ts_ms: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -736,6 +745,7 @@ pub(crate) async fn analysis_worker(
             agent_session_id: None,
             usage: None,
             grounding_note: None,
+            source_ts_ms: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
