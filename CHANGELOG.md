@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1] - 2026-02-20
+
+### Added
+- **OpenCode skill generation**: `unlost config agent opencode` now automatically creates `.opencode/skills/unlost/SKILL.md` (per-project) or `~/.config/opencode/skills/unlost/SKILL.md` (with `--global`). The skill teaches OpenCode agents what unlost provides and how to use it. If the file already exists, the command prompts before overwriting.
+- **Two-tier query guidance in skill**: The generated skill distinguishes fast-path commands (`unlost query --no-llm`, `unlost metrics`) — safe to run proactively with no LLM cost — from LLM-path commands (`unlost query`, `unlost recall`, `unlost brief`) — which should only run on explicit user request.
+
 ## [0.7.0] - 2026-02-19
 
 ### Added

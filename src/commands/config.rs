@@ -136,6 +136,8 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
 
             let scope = if global { "global" } else { "project" };
             println!("configured ({scope}): {}", cfg_path.display());
+
+            write_opencode_skill(&cfg_path, global)?;
         }
 
         AgentCommand::Claude { path, global } => {
@@ -291,6 +293,126 @@ fn rewrite_unlost_hook_commands(hook_array: &mut serde_json::Value) {
             }
         }
     }
+}
+
+const OPENCODE_SKILL_CONTENT: &str = r#"---
+name: unlost
+description: Query project memory, retrieve past decisions, and check agent orientation via the unlost capsule store
+compatibility: opencode
+---
+
+## What unlost does
+
+Unlost runs silently as an OpenCode plugin. Before each of your prompts, it checks
+for friction patterns (drift, retry spirals, false progress, unbounded scope) and
+injects a warning when something is off. After each exchange, it extracts a small
+capsule — intent, decision, rationale, key symbols — and stores it locally.
+
+You do not need to invoke unlost for friction detection. It runs automatically.
+
+## Querying project memory
+
+There are two tiers. The fast path you run proactively. The LLM path you run only
+when the user explicitly asks for a deep recall or narrative summary.
+
+### Fast path — run proactively (no LLM, instant)
+
+These commands are safe to run at any time without asking the user. They are
+entirely local: no LLM call, no network, no meaningful latency.
+
+| Command | What it returns |
+|---------|-----------------|
+| `unlost query --no-llm "<question>"` | Raw capsule hits from vector search, ranked by relevance |
+| `unlost metrics` | Friction hotspots, loop patterns, verbosity trends from local metrics log |
+
+Run these when:
+- You are about to work on something and want to check if a relevant decision exists
+- You want to orient yourself after a context gap
+- You need to know *if* something was recorded, not a full explanation
+
+### LLM path — on demand only (narrative, slower)
+
+These commands call the configured LLM and should only be run when the user
+explicitly asks for a recall, summary, or brief. Do not run them proactively.
+
+| Command | What it returns |
+|---------|-----------------|
+| `unlost query "<question>"` | Narrative answer grounded in matching capsules |
+| `unlost recall` | Chronological decision trail with LLM-written summaries |
+| `unlost brief` | Structured brief: what happened, key decisions, what's next |
+
+Run these when the user says things like:
+- "catch me up", "what did we decide about X", "summarize what happened"
+- "give me a brief before we continue"
+- "why did we do Y"
+
+## Examples
+
+```bash
+# Proactive: check if a topic was ever decided before starting work
+unlost query --no-llm "error handling strategy"
+
+# Proactive: inspect friction and loop patterns
+unlost metrics
+
+# On demand: explain a past decision (user asked)
+unlost query "why did we switch to lancedb"
+
+# On demand: full decision trail (user asked to be caught up)
+unlost recall
+
+# On demand: structured brief before resuming (user asked)
+unlost brief
+```
+
+## Notes
+
+- All data is stored locally. No transcripts leave the machine.
+- Capsules are workspace-scoped (git toplevel).
+- If unlost is not configured for this project, run: `unlost config agent opencode`
+"#;
+
+fn write_opencode_skill(cfg_path: &std::path::Path, global: bool) -> anyhow::Result<()> {
+    let skills_dir = if global {
+        // cfg_path is ~/.config/opencode/opencode.json
+        // skill goes to ~/.config/opencode/skills/unlost/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine opencode config directory"))?
+            .join("skills")
+            .join("unlost")
+    } else {
+        // cfg_path is <git-root>/opencode.json
+        // skill goes to <git-root>/.opencode/skills/unlost/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine project root"))?
+            .join(".opencode")
+            .join("skills")
+            .join("unlost")
+    };
+
+    let skill_path = skills_dir.join("SKILL.md");
+
+    if skill_path.exists() {
+        print!(
+            "SKILL.md already exists at {}. Overwrite? [y/N] ",
+            skill_path.display()
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("skill: skipped");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(&skill_path, OPENCODE_SKILL_CONTENT)?;
+    println!("skill: {}", skill_path.display());
+    Ok(())
 }
 
 pub fn run(command: ConfigCommand) -> anyhow::Result<()> {
