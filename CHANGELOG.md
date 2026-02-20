@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.0] - 2026-02-20
+
+### Added
+-
+
 ## [0.7.1] - 2026-02-20
 
 ### Added
@@ -209,6 +214,8 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.8.0]: https://github.com/unfault/unlost/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/unfault/unlost/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/unfault/unlost/compare/v0.6.5...v0.7.0
 [0.6.4]: https://github.com/unfault/unlost/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/unfault/unlost/compare/v0.6.2...v0.6.3
