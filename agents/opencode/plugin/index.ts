@@ -90,6 +90,61 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
   // and tool execution hooks.
   const touchedPathsBySession = new Map<string, Set<string>>()
 
+  // Track normalized tool outcomes per session.
+  // Only lifecycle tools are captured (build, test, publish, git commit/push, etc.).
+  // Each entry is a short fact string: "succeeded" or "failed: <snippet>".
+  type ToolOutcome = { name: string; output: string }
+  const toolOutcomesBySession = new Map<string, ToolOutcome[]>()
+
+  // Allow-list: only capture bash tool calls whose command matches one of these patterns.
+  // We match against the command content, not the tool name, since everything runs via bash.
+  const TOOL_OUTCOME_ALLOW_RE = /\b(cargo\s+(build|test|check|clippy|publish|run)|go\s+(build|test|run|vet|install)|npm\s+(build|test|run|publish|install)|pnpm\s+(build|test|run|publish|install)|yarn\s+(build|test|run|publish)|bun\s+(build|test|run|publish|install)|pytest|python\s+-m\s+pytest|mvn\s+(package|install|test|deploy)|gradle\s+(build|test|publish)|make(\s+\w+)?|git\s+(commit|push|merge|rebase|tag))/
+
+  // Patterns that indicate success in tool output.
+  const TOOL_SUCCESS_RE = /\b(Finished|finished|PASSED|passed|succeeded|success|ok\b|OK\b|Done\b|done\b|published|pushed|merged|committed)/
+  // Patterns that indicate failure in tool output.
+  const TOOL_FAILURE_RE = /\b(error|Error|ERROR|FAILED|failed|FAIL\b|panic|panicked|fatal|Fatal)/
+
+  function normalizeTooOutcome(toolName: string, output: string): ToolOutcome | null {
+    const out = (output || "").trim()
+    if (!out) return null
+
+    if (TOOL_SUCCESS_RE.test(out)) {
+      return { name: toolName, output: "succeeded" }
+    }
+    if (TOOL_FAILURE_RE.test(out)) {
+      // Capture first 200 chars of output as the error snippet
+      const snippet = out.slice(0, 200).replace(/\n+/g, " ").trim()
+      return { name: toolName, output: `failed: ${snippet}` }
+    }
+    // Ambiguous — omit rather than guess
+    return null
+  }
+
+  function addToolOutcome(sessionId: string | null, toolName: string, command: string, output: string) {
+    if (!TOOL_OUTCOME_ALLOW_RE.test(command)) return
+    const outcome = normalizeTooOutcome(toolName, output)
+    if (!outcome) return
+
+    const sid = resolveSessionId(sessionId)
+    const list = toolOutcomesBySession.get(sid) || []
+    list.push(outcome)
+    toolOutcomesBySession.set(sid, list)
+  }
+
+  function drainToolOutcomes(sessionId: string): ToolOutcome[] {
+    const sid = sessionId || UNKNOWN_SESSION_KEY
+    const out = toolOutcomesBySession.get(sid) || []
+    toolOutcomesBySession.delete(sid)
+    // Also drain unknown-session outcomes
+    if (sid !== UNKNOWN_SESSION_KEY) {
+      const unknown = toolOutcomesBySession.get(UNKNOWN_SESSION_KEY) || []
+      toolOutcomesBySession.delete(UNKNOWN_SESSION_KEY)
+      return [...out, ...unknown]
+    }
+    return out
+  }
+
   const UNKNOWN_SESSION_KEY = "*"
 
   function normalizeTouchedPath(p: string): string | null {
@@ -331,18 +386,20 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
     const touchedPaths = drainTouchedPaths(sessionId)
     const gitTouchedPaths = getGitTouchedPaths()
     const touchedPathsToSend = [...touchedPaths, ...gitTouchedPaths].slice(0, 64)
+    const toolCallsToSend = drainToolOutcomes(sessionId)
 
     if (!userText && !assistantText) return
 
     // Debug: log usage being sent
     const usageToSend = assistantMsg?.usage || null
-    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}... usage=${safeJson(usageToSend)}`)
+    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}... tool_outcomes=${toolCallsToSend.length} usage=${safeJson(usageToSend)}`)
 
     sendRequest<RecordResponse>("record", {
       user_text: userText,
       assistant_text: assistantText,
       directory: workingDirectory,
       touched_paths: touchedPathsToSend,
+      tool_calls: toolCallsToSend,
       agent_session_id: sessionId,
       usage: usageToSend,
     }).catch(() => {})
@@ -530,6 +587,34 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
           }
 
           for (const c of candidates) visit(c)
+
+          // Capture normalized tool outcomes for lifecycle commands (build/test/publish/git).
+          // Only on after-events where we have the result.
+          if (etype === "tool.execute.after") {
+            try {
+              const toolName = (props.tool?.name || (props as Record<string, unknown>).tool as string || "bash") as string
+              // Extract command from args — bash tool puts command in args.command or args itself
+              let command = ""
+              const args = props.args || props.tool?.args || props.input || props.tool?.input
+              if (typeof args === "string") {
+                command = args
+              } else if (args && typeof args === "object") {
+                const a = args as Record<string, unknown>
+                command = (typeof a.command === "string" ? a.command : typeof a.cmd === "string" ? a.cmd : "") as string
+              }
+              // Extract output string
+              let output = ""
+              if (typeof props.result === "string") {
+                output = props.result
+              } else if (props.result && typeof props.result === "object") {
+                const r = props.result as Record<string, unknown>
+                output = typeof r.output === "string" ? r.output : typeof r.stdout === "string" ? r.stdout : ""
+              }
+              addToolOutcome(sid, toolName, command, output)
+            } catch {
+              // ignore
+            }
+          }
         } catch {
           // ignore
         }

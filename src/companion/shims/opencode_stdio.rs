@@ -63,6 +63,10 @@ struct RecordParams {
     /// Best-effort list of touched paths (workspace-relative). Optional.
     #[serde(default)]
     touched_paths: Vec<String>,
+    /// Normalized outcomes from significant tool calls (build, test, publish, git, etc.).
+    /// Each entry is a short fact: "succeeded" or "failed: <snippet>". Optional.
+    #[serde(default)]
+    tool_calls: Vec<crate::types::ToolCall>,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     #[serde(default)]
     agent_session_id: Option<String>,
@@ -170,6 +174,7 @@ impl From<RecordParams> for RecordTurnEvent {
             user_text: p.user_text,
             assistant_text: p.assistant_text,
             touched_paths: p.touched_paths,
+            tool_calls: p.tool_calls,
             agent_kind: AgentKind::OpenCode,
             agent_session_id: p.agent_session_id,
             usage,

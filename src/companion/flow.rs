@@ -108,6 +108,9 @@ pub(crate) struct RecordTurnEvent {
     pub assistant_text: String,
     /// Best-effort list of touched paths (workspace-relative). Optional.
     pub touched_paths: Vec<String>,
+    /// Normalized outcomes from significant tool calls (build, test, publish, git, etc.).
+    /// Each entry is a short fact: "succeeded" or "failed: <snippet>". Empty = none captured.
+    pub tool_calls: Vec<crate::types::ToolCall>,
     /// Which agent platform this came from
     #[allow(dead_code)]
     pub agent_kind: AgentKind,
@@ -476,6 +479,18 @@ impl Flow {
             exchange_text.push_str(event.assistant_text.trim());
         }
 
+        // Append normalized tool outcomes (build/test/publish/git facts only).
+        // Each entry is already a short fact string: "succeeded" or "failed: <snippet>".
+        if !event.tool_calls.is_empty() {
+            exchange_text.push_str("\n\nTool outcomes:\n");
+            for tc in &event.tool_calls {
+                exchange_text.push_str(&tc.name);
+                exchange_text.push_str(" -> ");
+                exchange_text.push_str(&tc.output);
+                exchange_text.push('\n');
+            }
+        }
+
         let commit_mentioned = looks_like_commit_or_pr(&exchange_text);
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
 
@@ -570,7 +585,7 @@ async fn process_flush_job(
     job: FlushJob,
     state: Arc<Mutex<BackgroundState>>,
 ) -> anyhow::Result<()> {
-    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\nThen provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\nStructure the capsule as an IntentCapsule: category, intent (why), decision (what), rationale (why that), next_steps, and symbols (file paths).";
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\nThen provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\nStructure the capsule as an IntentCapsule: category, intent (why), decision (what), rationale (why that), next_steps, and symbols (file paths).\n\nThe slice may include a 'Tool outcomes' section listing normalized facts from build/test/publish/git tool calls (e.g. 'cargo build -> succeeded'). Use these facts as ground truth when filling decision and next_steps — do not infer build status from prose alone.";
 
     let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
 

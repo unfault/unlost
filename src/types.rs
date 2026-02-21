@@ -1,6 +1,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// A normalized outcome from a significant tool call (build, test, publish, etc.).
+/// Output is a short fact string, not raw stdout/stderr.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolCall {
+    /// Tool name (e.g. "bash")
+    pub name: String,
+    /// Normalized fact: "succeeded" or "failed: <first 200 chars of error>"
+    pub output: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct UsageMeta {
     pub provider_id: Option<String>,

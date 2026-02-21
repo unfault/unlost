@@ -756,6 +756,7 @@ pub async fn replay(
                     user_text: turn.user_text,
                     assistant_text: turn.assistant_text,
                     touched_paths: turn.touched_paths,
+                    tool_calls: vec![],
                     agent_kind: AgentKind::OpenCode,
                     agent_session_id: Some(session_id_clone.clone()),
                     usage: turn.usage,
