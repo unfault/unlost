@@ -930,7 +930,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
         <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
       </h2>
       <p class="text-lg text-midnight-violet-950/60 mb-10 leading-relaxed">
-        Capsules are not just a log. They encode a <em>causal history</em> — the sequence of decisions, constraints, and failures that explain why the code looks the way it does today.
+        Capsules are not just a log. They encode a <em>causal history</em> - the sequence of decisions, constraints, and failures that explain why the code looks the way it does today.
       </p>
 
       <div class="space-y-14">
@@ -939,10 +939,10 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
         <div>
           <h3 class="text-base sm:text-lg font-semibold mb-3">The problem with standard RAG</h3>
           <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
-            Most retrieval systems return a <em>ranked bag of hits</em>. Ask "why is the timeout 30s?" and you get the five most similar capsules — but no sense of how you arrived there. Causality is lost. Sessions are mixed. Old decisions look the same as new ones.
+            Most retrieval systems return a <em>ranked bag of hits</em>. Ask "why is the timeout 30s?" and you get the five most similar capsules - but no sense of how you arrived there. Causality is lost. Sessions are mixed. Old decisions look the same as new ones.
           </p>
           <p class="text-midnight-violet-950/60 leading-relaxed">
-            Engineers don't think in bags of results. They think in chains: <em>"because we switched to HTTP/2, we needed longer timeouts, which surfaced a bug in the keepalive logic, which we worked around by…"</em> That's a causal chain — and it's what <code>unlost trace</code> reconstructs.
+            Engineers don't think in bags of results. They think in chains: <em>"because we switched to HTTP/2, we needed longer timeouts, which surfaced a bug in the keepalive logic, which we worked around by…"</em> That's a causal chain, and it's what <code>unlost trace</code> reconstructs.
           </p>
         </div>
 
@@ -954,14 +954,14 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
               <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">1</div>
               <div>
                 <div class="font-semibold text-midnight-violet-950mb-1">Richer embeddings</div>
-                <p class="leading-relaxed mt-1">Every capsule is embedded with its <strong>category</strong>, <strong>failure mode</strong>, top symbols, and the <strong>prior decision</strong> from the same work thread. This encodes trajectory into the vector — capsules from the same causal chain cluster together in embedding space, even across different agent sessions.</p>
+                <p class="leading-relaxed mt-1">Every capsule is embedded with its <strong>category</strong>, <strong>failure mode</strong>, top symbols, and the <strong>prior decision</strong> from the same work thread. This encodes trajectory into the vector; capsules from the same causal chain cluster together in embedding space, even across different agent sessions.</p>
               </div>
             </div>
             <div class="flex gap-4 items-start">
               <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">2</div>
               <div>
                 <div class="font-semibold text-midnight-violet-950 mb-1">HyPE: question-first retrieval</div>
-                <p class="leading-relaxed mt-1">When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — <em>"Why is the connection timeout 30 seconds?"</em>, <em>"How does the proxy route upstream requests?"</em>. At retrieval time, your query is matched against these stored questions rather than the capsule text. Question-to-question matching is dramatically more precise than query-to-capsule.</p>
+                <p class="leading-relaxed mt-1">When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers: <em>"Why is the connection timeout 30 seconds?"</em>, <em>"How does the proxy route upstream requests?"</em>. At retrieval time, your query is matched against these stored questions rather than the capsule text. Question-to-question matching is dramatically more precise than query-to-capsule.</p>
                 <p class="text-midnight-violet-950/40 text-xs mt-2 leading-relaxed">
                   Based on: Ma et al., <em>"HyPE: Hypothetical Prompt Embeddings for Improved Retrieval"</em> (2024).
                   <a href="https://arxiv.org/abs/2412.12630" class="hover:text-fiery-terracotta underline" target="_blank" rel="noopener">arxiv.org/abs/2412.12630</a>
@@ -972,7 +972,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
               <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">3</div>
               <div>
                 <div class="font-semibold text-midnight-violet-950 mb-1">Seed → fan-out → threshold</div>
-                <p class="leading-relaxed mt-1">A vector ANN search finds the closest seed capsules. For each seed, unlost fans out to all capsules that share symbols — traversing the existing LabelList index. Capsules above the similarity threshold are dropped to prevent the chain from sprawling. The survivors are sorted chronologically: <strong>oldest first, newest last</strong>.</p>
+                <p class="leading-relaxed mt-1">A vector ANN search finds the closest seed capsules. For each seed, unlost fans out to all capsules that share symbols, traversing the existing LabelList index. Capsules above the similarity threshold are dropped to prevent the chain from sprawling. The survivors are sorted chronologically: <strong>oldest first, newest last</strong>.</p>
               </div>
             </div>
           </div>
@@ -987,7 +987,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           <div class="terminal overflow-x-auto">
             <div class="text-white/40 mb-1"># same chain, different sessions, months apart</div>
             <div class="text-white/80 whitespace-nowrap">2026-01-14  [ses_a] switched to HTTP/2 for upstream</div>
-            <div class="text-white/80 whitespace-nowrap">2026-01-21  [ses_a] retry spiral on keepalive — increased timeout</div>
+            <div class="text-white/80 whitespace-nowrap">2026-01-21  [ses_a] retry spiral on keepalive, increased timeout</div>
             <div class="text-white/80 whitespace-nowrap">2026-02-03  [ses_b] timeout 30s hardcoded in proxy_request</div>
             <div class="text-white/80 whitespace-nowrap">2026-02-18  [ses_b] <span class="text-fiery-terracotta">← you are here</span></div>
           </div>
@@ -1007,7 +1007,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div>
               <code class="text-fiery-terracotta text-base">unlost brief src/governor.rs</code>
-              <p class="mt-2 leading-relaxed">Brief uses the code graph to automatically expand the scope to related files — dependencies and dependents — before fetching capsules. The LLM receives a system map alongside the capsules, so it can explain the <em>system</em> rather than just the file.</p>
+              <p class="mt-2 leading-relaxed">Brief uses the code graph to automatically expand the scope to related files (dependencies and dependents) before fetching capsules. The LLM receives a system map alongside the capsules, so it can explain the <em>system</em> rather than just the file.</p>
             </div>
           </div>
         </div>
@@ -1015,7 +1015,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
         <!-- Reindex note -->
         <div class="pl-4 border-l-2 border-fiery-terracotta/30">
           <p class="text-sm text-midnight-violet-950/50 leading-relaxed">
-            <strong class="text-midnight-violet-950/70">Already have capsules?</strong> New capsules automatically get richer embeddings and HyPE questions. To apply these improvements to your existing capsule history, run <code>unlost reindex</code> — it rebuilds the LanceDB index from your stored capsules.
+            <strong class="text-midnight-violet-950/70">Already have capsules?</strong> New capsules automatically get richer embeddings and HyPE questions. To apply these improvements to your existing capsule history, run <code>unlost reindex</code> - it rebuilds the LanceDB index from your stored capsules.
           </p>
         </div>
 
@@ -1072,7 +1072,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             Ma, L., et al. 2024. <b>HyPE: Hypothetical Prompt Embeddings for Improved Retrieval.</b>
             arXiv preprint.
             <a href="https://arxiv.org/abs/2412.12630" class="hover:text-fiery-terracotta underline" target="_blank" rel="noopener">arxiv.org/abs/2412.12630</a>
-            — Demonstrates that pre-generating questions at indexing time and matching query-to-question rather than query-to-document significantly improves retrieval precision.
+            Demonstrates that pre-generating questions at indexing time and matching query-to-question rather than query-to-document significantly improves retrieval precision.
           </p>
         </div>
       </div>
