@@ -392,6 +392,101 @@ pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
     }
 }
 
+pub(crate) async fn llm_trace_narrative(
+    llm_model_override: Option<&str>,
+    query_text: &str,
+    workspace_root: &str,
+    chain: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    use chrono::{SecondsFormat, TimeZone};
+
+    let fmt_ts = |ts_ms: i64| -> String {
+        chrono::Utc
+            .timestamp_millis_opt(ts_ms)
+            .single()
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+            .unwrap_or_else(|| ts_ms.to_string())
+    };
+
+    // Build graph for relationship grounding (non-fatal)
+    let cg = if chain.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        crate::workspace::build_graph_for_workspace(root)
+    } else {
+        None
+    };
+
+    let mut context = String::new();
+    context.push_str("Trace query:\n");
+    context.push_str(query_text);
+    context.push_str("\n\n");
+    context.push_str(&format!("Chain: {} capsules (chronological, oldest first)\n\n", chain.len()));
+
+    for (i, hit) in chain.iter().enumerate() {
+        let cap = &hit.capsule;
+        let meta = &hit.meta;
+        context.push_str(&format!(
+            "#{} time={} source={} category={}\n",
+            i + 1,
+            fmt_ts(hit.ts_ms),
+            meta.source,
+            cap.category,
+        ));
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
+            let fm = fm.trim_matches('"');
+            context.push_str(&format!("failure_mode: {fm}\n"));
+        }
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+        }
+        if !cap.symbols.is_empty() {
+            let syms = cap.symbols.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+            context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
+        }
+        context.push('\n');
+        if i >= 49 {
+            break;
+        }
+    }
+
+    let preamble = r#"You are unlost trace. Your job is to reconstruct the causal story: the path of decisions that led to the current state.
+
+Rules:
+- The capsules are in chronological order (oldest first). Read them as a timeline.
+- Base your output ONLY on the provided capsules. Do not invent decisions or symbols.
+- Identify the TURNING POINTS: moments where the direction changed, a constraint was established, or a failure was recorded.
+- When failure modes are present (retry_spiral, drift, decision_conflict, etc.), name them — they explain WHY the path bent.
+- Keep the narrative causal: "because of X, we ended up doing Y, which led to Z."
+- Anchor every claim to 1-2 specific backticked tokens (file paths, symbols, or decisions).
+- Do NOT mention timestamps, session IDs, or capsule numbers.
+
+Output format:
+- 1 sentence: the current state (what is true now, at the end of the chain).
+- Then 3-6 bullets: the key steps in the causal path, in order. Each bullet is one turning point.
+- Then 1 sentence: the single most important constraint or lesson that emerges from this path.
+- End with ONE concrete follow-up: `unlost query "..."` or `unlost brief <scope>`.
+
+Style: first person, teammate tone, concise. No headings. No "report" language."#;
+
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
+            .await?
+            .narrative,
+    )
+}
+
 pub(crate) async fn llm_recall_narrative(
     llm_model_override: Option<&str>,
     scope: Option<&str>,

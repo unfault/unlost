@@ -150,6 +150,11 @@ struct BackgroundState {
     embed_cache_dir: Option<String>,
     extraction_mode: crate::types::ExtractionMode,
     pub(crate) llm_calls: Arc<std::sync::atomic::AtomicU64>,
+    /// Most recent extracted decision per workspace, for embedding causal continuity.
+    /// Updated after each successful capsule insertion. The next job for that workspace
+    /// uses this as `prior_decision` in the embed text, even if the chunker's buffer
+    /// was flushed before the worker finished.
+    last_decisions: HashMap<String, String>,
 }
 
 impl BackgroundState {
@@ -166,6 +171,7 @@ impl BackgroundState {
             embed_cache_dir,
             extraction_mode,
             llm_calls: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_decisions: HashMap::new(),
         }
     }
 
@@ -339,6 +345,7 @@ impl Flow {
             failure_mode,
             failure_signals: None,
             extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
         };
 
         // NEW: Trajectory-based proactive friction regulation
@@ -585,7 +592,15 @@ async fn process_flush_job(
     job: FlushJob,
     state: Arc<Mutex<BackgroundState>>,
 ) -> anyhow::Result<()> {
-    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\nThen provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\nStructure the capsule as an IntentCapsule: category, intent (why), decision (what), rationale (why that), next_steps, and symbols (file paths).\n\nThe slice may include a 'Tool outcomes' section listing normalized facts from build/test/publish/git tool calls (e.g. 'cargo build -> succeeded'). Use these facts as ground truth when filling decision and next_steps — do not infer build status from prose alone.";
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\nThen provide `capsules`: up to the requested max. Each capsule must be short and high-signal.\n\nStructure the capsule as an IntentCapsule: category, intent (why), decision (what), rationale (why that), next_steps, symbols (file paths), and questions.\n\n`questions`: 2-3 natural language questions that a developer would ask to find this capsule later (e.g. \"Why is the timeout set to 30 seconds?\", \"How does the proxy route requests upstream?\"). These are used for semantic retrieval — make them specific and grounded in the actual decision.\n\nThe slice may include a 'Tool outcomes' section listing normalized facts from build/test/publish/git tool calls (e.g. 'cargo build -> succeeded'). Use these facts as ground truth when filling decision and next_steps — do not infer build status from prose alone.";
+
+    // Use the authoritative last decision from state (more reliable than the chunker's
+    // snapshot, which may have been taken before the previous job was processed).
+    let prior_decision = {
+        let st = state.lock().await;
+        st.last_decisions.get(&job.workspace_id).cloned()
+            .or_else(|| job.prior_decision.clone())
+    };
 
     let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
 
@@ -665,6 +680,7 @@ async fn process_flush_job(
                     failure_mode,
                     failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
                     extraction_mode: crate::types::ExtractionMode::None, // Effectively none if it failed
+                    questions: vec![],
                 }
             }
         }
@@ -685,6 +701,7 @@ async fn process_flush_job(
                 Some("Ghost extraction (no-LLM)".to_string())
             },
             extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
         }
     };
 
@@ -757,9 +774,17 @@ async fn process_flush_job(
         user_emotion.as_ref(),
         assistant_emotion.as_ref(),
         &capsule,
-        Some(&job.input),
+        prior_decision.as_deref(),
     )
     .await?;
+
+    // Record the decision so the next capsule in this workspace can encode causal continuity.
+    if !capsule.decision.trim().is_empty() {
+        state.lock().await.last_decisions.insert(
+            job.workspace_id.clone(),
+            capsule.decision.clone(),
+        );
+    }
 
     tracing::info!(
         workspace_id = %job.workspace_id,

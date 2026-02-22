@@ -160,6 +160,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             failure_mode,
             failure_signals: capsule.capsule.failure_signals,
             extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
         };
 
         crate::storage::insert_capsule_row(

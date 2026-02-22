@@ -264,9 +264,6 @@ pub async fn ingest_changelog(
             usage: None,
         };
 
-        // Embed version label + full section body for rich semantic search
-        let embed_text = format!("Release {}\n\n{}", entry.version, entry.body);
-
         match crate::storage::insert_capsule_row(
             &db,
             embedder,
@@ -277,7 +274,7 @@ pub async fn ingest_changelog(
             None,
             None,
             &capsule,
-            Some(&embed_text),
+            None,
         )
         .await
         {
@@ -323,6 +320,7 @@ fn entry_to_capsule(e: &ChangelogEntry) -> crate::IntentCapsule {
         failure_mode: crate::types::FailureMode::None,
         failure_signals: None,
         extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
     }
 }
 

@@ -220,6 +220,7 @@ async fn serve_request(
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
                 extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
             };
 
             let current_user_emotion = if let Some(ref text) = current_user_text {
@@ -442,6 +443,7 @@ async fn proxy_request(
                 failure_mode: crate::types::FailureMode::None,
                 failure_signals: None,
                 extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
             };
 
             let current_user_emotion = if let Some(ref text) = current_user_text {

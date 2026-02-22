@@ -90,6 +90,7 @@
           <a href="#solution" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Solution</a>
           <a href="#install" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Install</a>
           <a href="#commands" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Commands</a>
+          <a href="#long-memory" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Long Memory</a>
         </div>
         <a href="https://github.com/unfault/unlost" class="inline-flex items-center px-3 py-1.5 sm:px-4 sm:py-2 text-sm font-medium text-white bg-midnight-violet-950 rounded-lg hover:bg-midnight-violet-800 transition-colors">GitHub</a>
       </div>
@@ -363,6 +364,31 @@ unlost query "auth flow changes"</code></pre>
             <div class="text-white/60 whitespace-nowrap">Meta: matches 5 | sessions 1 | sources 1 | providers 1</div>
             <div class="text-white/60 whitespace-nowrap">Time (UTC): 2026-02-09T15:11:31Z -> 2026-02-09T15:12:32Z</div>
             <div class="text-white/60 whitespace-nowrap">Usage: 5/5 hits</div>
+          </div>
+        </div>
+
+        <!-- Trace -->
+        <div id="trace">
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost trace</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Reconstruct the causal chain of decisions that led to the current state of a file, symbol, or concept. Works across sessions, time, and messy work threads.</p>
+          <pre><code>unlost trace src/governor.rs
+unlost trace "why is the timeout 30s?"
+unlost trace proxy_request --since 3M</code></pre>
+          <div class="terminal mt-4 overflow-x-auto">
+            <div class="text-white/40 mb-1"># Example: unlost trace src/http_proxy.rs</div>
+            <div class="text-white/80 whitespace-nowrap">The proxy module was deprecated in favour of the plugin/companion</div>
+            <div class="text-white/80 whitespace-nowrap">architecture; `src/http_proxy.rs` now sits unreachable behind a</div>
+            <div class="text-white/80 whitespace-nowrap">hidden CLI flag.</div>
+            <div class="text-white/60 mt-2 whitespace-nowrap">• Early work used `record --upstream-host` to intercept OpenAI traffic</div>
+            <div class="text-white/60 whitespace-nowrap">• A retry spiral on `proxy_request` prompted the switch to plugin mode</div>
+            <div class="text-white/60 whitespace-nowrap">• `companion/flow.rs` replaced the proxy as the recording path</div>
+            <div class="text-white/60 whitespace-nowrap">• The CLI kept the flag hidden rather than removing it to avoid breakage</div>
+            <div class="text-white/40 mt-2 whitespace-nowrap">The key constraint: the plugin path owns recording; the proxy is legacy.</div>
+            <div class="text-cyan-400/70 mt-1 whitespace-nowrap">  unlost query "what replaced the proxy recording path?"</div>
+            <div class="text-white/40 mt-2 whitespace-nowrap">─── chain: 7 capsules | oldest: 2026-01-14T10:22:11Z | newest: 2026-02-09T15:12:32Z</div>
           </div>
         </div>
 
@@ -896,6 +922,107 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
     </div>
   </section>
 
+  <!-- Long Memory Story Arc -->
+  <section id="long-memory" class="section border-t border-midnight-violet-950/5">
+    <div class="container-narrow">
+      <h2 class="text-2xl sm:text-3xl font-medium mb-4 flex items-baseline flex-wrap gap-2">
+        Long Memory &amp; the Story Arc
+        <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
+      </h2>
+      <p class="text-lg text-midnight-violet-950/60 mb-10 leading-relaxed">
+        Capsules are not just a log. They encode a <em>causal history</em> — the sequence of decisions, constraints, and failures that explain why the code looks the way it does today.
+      </p>
+
+      <div class="space-y-14">
+
+        <!-- The problem -->
+        <div>
+          <h3 class="text-base sm:text-lg font-semibold mb-3">The problem with standard RAG</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Most retrieval systems return a <em>ranked bag of hits</em>. Ask "why is the timeout 30s?" and you get the five most similar capsules — but no sense of how you arrived there. Causality is lost. Sessions are mixed. Old decisions look the same as new ones.
+          </p>
+          <p class="text-midnight-violet-950/60 leading-relaxed">
+            Engineers don't think in bags of results. They think in chains: <em>"because we switched to HTTP/2, we needed longer timeouts, which surfaced a bug in the keepalive logic, which we worked around by…"</em> That's a causal chain — and it's what <code>unlost trace</code> reconstructs.
+          </p>
+        </div>
+
+        <!-- How the chain is built -->
+        <div>
+          <h3 class="text-base sm:text-lg font-semibold mb-3">How the causal chain is built</h3>
+          <div class="space-y-6 text-midnight-violet-950/60">
+            <div class="flex gap-4 items-start">
+              <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">1</div>
+              <div>
+                <div class="font-semibold text-midnight-violet-950mb-1">Richer embeddings</div>
+                <p class="leading-relaxed mt-1">Every capsule is embedded with its <strong>category</strong>, <strong>failure mode</strong>, top symbols, and the <strong>prior decision</strong> from the same work thread. This encodes trajectory into the vector — capsules from the same causal chain cluster together in embedding space, even across different agent sessions.</p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">2</div>
+              <div>
+                <div class="font-semibold text-midnight-violet-950 mb-1">HyPE: question-first retrieval</div>
+                <p class="leading-relaxed mt-1">When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — <em>"Why is the connection timeout 30 seconds?"</em>, <em>"How does the proxy route upstream requests?"</em>. At retrieval time, your query is matched against these stored questions rather than the capsule text. Question-to-question matching is dramatically more precise than query-to-capsule.</p>
+                <p class="text-midnight-violet-950/40 text-xs mt-2 leading-relaxed">
+                  Based on: Ma et al., <em>"HyPE: Hypothetical Prompt Embeddings for Improved Retrieval"</em> (2024).
+                  <a href="https://arxiv.org/abs/2412.12630" class="hover:text-fiery-terracotta underline" target="_blank" rel="noopener">arxiv.org/abs/2412.12630</a>
+                </p>
+              </div>
+            </div>
+            <div class="flex gap-4 items-start">
+              <div class="text-2xl font-light text-midnight-violet-950/10 font-['Lexend'] shrink-0 w-8">3</div>
+              <div>
+                <div class="font-semibold text-midnight-violet-950 mb-1">Seed → fan-out → threshold</div>
+                <p class="leading-relaxed mt-1">A vector ANN search finds the closest seed capsules. For each seed, unlost fans out to all capsules that share symbols — traversing the existing LabelList index. Capsules above the similarity threshold are dropped to prevent the chain from sprawling. The survivors are sorted chronologically: <strong>oldest first, newest last</strong>.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Session boundary problem -->
+        <div>
+          <h3 class="text-base sm:text-lg font-semibold mb-3">Sessions don't slice neatly</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            In practice, engineers reuse the same agent session across multiple pieces of work. Session IDs are a poor proxy for "same work thread." Unlost sidesteps this by using <strong>semantic continuity</strong> instead: the prior-decision embedding means capsules that are conceptually related cluster together regardless of session boundaries. The chain reflects intent, not session structure.
+          </p>
+          <div class="terminal overflow-x-auto">
+            <div class="text-white/40 mb-1"># same chain, different sessions, months apart</div>
+            <div class="text-white/80 whitespace-nowrap">2026-01-14  [ses_a] switched to HTTP/2 for upstream</div>
+            <div class="text-white/80 whitespace-nowrap">2026-01-21  [ses_a] retry spiral on keepalive — increased timeout</div>
+            <div class="text-white/80 whitespace-nowrap">2026-02-03  [ses_b] timeout 30s hardcoded in proxy_request</div>
+            <div class="text-white/80 whitespace-nowrap">2026-02-18  [ses_b] <span class="text-fiery-terracotta">← you are here</span></div>
+          </div>
+        </div>
+
+        <!-- The commands -->
+        <div>
+          <h3 class="text-base sm:text-lg font-semibold mb-4">The commands</h3>
+          <div class="space-y-6 text-sm text-midnight-violet-950/60">
+            <div>
+              <code class="text-fiery-terracotta text-base">unlost trace &lt;target&gt;</code>
+              <p class="mt-2 leading-relaxed">The primary long-memory command. Pass a file, a symbol, or a natural-language question. Unlost builds the causal chain and hands it to the LLM to narrate the path: key turning points, recorded failures, the constraint that explains the current state.</p>
+            </div>
+            <div>
+              <code class="text-fiery-terracotta text-base">unlost trace "..." --since 4M --until 3M</code>
+              <p class="mt-2 leading-relaxed">For incident investigation: constrain the chain to a specific time window. <em>"What happened three months ago that might have contributed to this bug?"</em></p>
+            </div>
+            <div>
+              <code class="text-fiery-terracotta text-base">unlost brief src/governor.rs</code>
+              <p class="mt-2 leading-relaxed">Brief uses the code graph to automatically expand the scope to related files — dependencies and dependents — before fetching capsules. The LLM receives a system map alongside the capsules, so it can explain the <em>system</em> rather than just the file.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reindex note -->
+        <div class="pl-4 border-l-2 border-fiery-terracotta/30">
+          <p class="text-sm text-midnight-violet-950/50 leading-relaxed">
+            <strong class="text-midnight-violet-950/70">Already have capsules?</strong> New capsules automatically get richer embeddings and HyPE questions. To apply these improvements to your existing capsule history, run <code>unlost reindex</code> — it rebuilds the LanceDB index from your stored capsules.
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
   <!-- Research & Philosophy -->
   <section class="section border-t border-midnight-violet-950/5">
     <div class="container-narrow">
@@ -940,6 +1067,12 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             Zhu, Y., Wu, Y., & Miller, J. 2024. <b>Conversational presentation mode increases credibility judgements during information search with ChatGPT.</b> 
             Scientific Reports (Nature). 
             <a href="https://www.nature.com/articles/s41598-024-67829-6" class="hover:text-fiery-terracotta underline">DOI: 10.1038/s41598-024-67829-6</a>
+          </p>
+          <p class="text-[11px] sm:text-xs text-midnight-violet-950/40 leading-relaxed italic">
+            Ma, L., et al. 2024. <b>HyPE: Hypothetical Prompt Embeddings for Improved Retrieval.</b>
+            arXiv preprint.
+            <a href="https://arxiv.org/abs/2412.12630" class="hover:text-fiery-terracotta underline" target="_blank" rel="noopener">arxiv.org/abs/2412.12630</a>
+            — Demonstrates that pre-generating questions at indexing time and matching query-to-question rather than query-to-document significantly improves retrieval precision.
           </p>
         </div>
       </div>

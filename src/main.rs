@@ -115,6 +115,36 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Command::Trace {
+            target,
+            seeds,
+            fan_out,
+            threshold,
+            since,
+            until,
+            llm_model,
+            no_llm,
+            output,
+            plain,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            let output = if plain { OutputFormat::Plain } else { output };
+            unlost::commands::trace::run(
+                target,
+                seeds,
+                fan_out,
+                threshold,
+                since,
+                until,
+                no_llm,
+                llm_model,
+                output,
+                embed_model,
+                embed_cache_dir,
+            )
+            .await?;
+        }
         Command::Brief {
             target,
             llm_model,

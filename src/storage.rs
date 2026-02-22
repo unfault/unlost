@@ -62,6 +62,8 @@ fn capsules_schema() -> Arc<Schema> {
             DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 384),
             false,
         ),
+        // HyPE: pre-generated questions this capsule answers; stored as a joined string for FTS.
+        Field::new("questions_text", DataType::Utf8, true),
     ]))
 }
 
@@ -98,6 +100,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_i64("tokens_reasoning", &mut exprs);
                 add_i64("tokens_cache_read", &mut exprs);
                 add_i64("tokens_cache_write", &mut exprs);
+                add_str("questions_text", &mut exprs);
 
                 if !exprs.is_empty() {
                     let _ = t
@@ -173,6 +176,9 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 ),
             );
 
+            let questions_text =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+
             let batch = RecordBatch::try_new(
                 schema.clone(),
                 vec![
@@ -208,6 +214,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     next_steps,
                     symbols,
                     embedding,
+                    questions_text,
                 ],
             )
             .context("failed to build empty schema batch")?;
@@ -554,6 +561,7 @@ pub(crate) async fn query_capsules_lancedb(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -902,6 +910,7 @@ async fn scan_capsules_lancedb_impl(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -923,8 +932,70 @@ async fn scan_capsules_lancedb_impl(
     Ok(out)
 }
 
-fn capsule_embed_text(c: &crate::IntentCapsule) -> String {
+/// Build the canonical embed text for a capsule.
+///
+/// Includes category, failure mode, top symbols, and the structured intent/decision/rationale
+/// so that the embedding encodes semantic trajectory rather than just point-in-time wording.
+///
+/// `prior_decision` carries the most recent decision from the same insertion sequence
+/// (e.g. the previous capsule's decision text). This encodes causal continuity into the
+/// vector — capsules that are part of the same work thread end up closer in embedding space
+/// even when the session ID is reused across unrelated work.
+pub(crate) fn capsule_embed_text_with_prior(
+    c: &crate::IntentCapsule,
+    prior_decision: Option<&str>,
+) -> String {
     let mut s = String::new();
+
+    // Category grounds the semantic domain (e.g. "Debugging" vs "Architecture")
+    if !c.category.trim().is_empty() && c.category.trim() != "unknown" {
+        s.push_str("category: ");
+        s.push_str(c.category.trim());
+        s.push('\n');
+    }
+
+    // Failure mode is high-signal for causal chains — pain points cluster
+    if c.failure_mode != crate::types::FailureMode::None {
+        let fm = match c.failure_mode {
+            crate::types::FailureMode::Drift => "drift",
+            crate::types::FailureMode::Rediscovery => "rediscovery",
+            crate::types::FailureMode::DecisionConflict => "decision_conflict",
+            crate::types::FailureMode::RetrySpiral => "retry_spiral",
+            crate::types::FailureMode::FalseProgress => "false_progress",
+            crate::types::FailureMode::UnboundedHorizon => "unbounded_horizon",
+            crate::types::FailureMode::None => "",
+        };
+        if !fm.is_empty() {
+            s.push_str("failure_mode: ");
+            s.push_str(fm);
+            s.push('\n');
+        }
+    }
+
+    // Top symbols anchor the capsule to concrete code locations
+    let syms: Vec<&str> = c.symbols.iter().take(5).map(|s| s.as_str()).collect();
+    if !syms.is_empty() {
+        s.push_str("symbols: ");
+        s.push_str(&syms.join(", "));
+        s.push('\n');
+    }
+
+    // Prior decision encodes causal continuity: where did we come from?
+    if let Some(prior) = prior_decision {
+        let prior = prior.trim();
+        if !prior.is_empty() {
+            // Truncate to keep the embed text focused
+            let prior = if prior.len() > 120 {
+                &prior[..120]
+            } else {
+                prior
+            };
+            s.push_str("prior: ");
+            s.push_str(prior);
+            s.push('\n');
+        }
+    }
+
     if !c.intent.trim().is_empty() {
         s.push_str("intent: ");
         s.push_str(c.intent.trim());
@@ -943,6 +1014,250 @@ fn capsule_embed_text(c: &crate::IntentCapsule) -> String {
     s
 }
 
+/// Build a causal chain of capsules anchored to a query.
+///
+/// Algorithm:
+/// 1. Run ANN vector search to get a seed set of semantically relevant capsules.
+/// 2. For each seed, fan out to capsules that share symbols (existing LabelList index).
+/// 3. Optionally filter to capsules older than the most-recent seed (`backwards_only`).
+/// 4. Apply a similarity threshold to stop the chain before it goes off-topic.
+/// 5. Deduplicate by id and sort ascending by ts_ms so the chain reads chronologically.
+///
+/// This surfaces the causal path of decisions that led to the current state of a file or
+/// concept — even across different agent sessions and non-contiguous time windows.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn trace_capsules_lancedb(
+    query: &str,
+    seed_limit: usize,
+    fan_out_per_seed: usize,
+    distance_threshold: f32,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    embedder: crate::embed::Embedder,
+    ws: &crate::WorkspacePaths,
+) -> anyhow::Result<Vec<crate::CapsuleHit>> {
+    // Step 1: seed set via vector ANN
+    let seeds = query_capsules_lancedb(
+        query,
+        seed_limit,
+        None,
+        None,
+        None,
+        since_ms,
+        until_ms,
+        embedder,
+        ws,
+    )
+    .await?;
+
+    if seeds.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Step 2: collect all unique symbols from seeds
+    let all_symbols: std::collections::HashSet<String> = seeds
+        .iter()
+        .flat_map(|h| h.capsule.symbols.iter().cloned())
+        .collect();
+
+    // The causal chain looks backwards from the most recent seed
+    let newest_seed_ts = seeds.iter().map(|h| h.ts_ms).max().unwrap_or(i64::MAX);
+
+    let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+        .execute()
+        .await?;
+    let table = match db.open_table(CAPSULES_TABLE).execute().await {
+        Ok(t) => t,
+        Err(_) => return Ok(seeds),
+    };
+
+    let mut all_hits: std::collections::HashMap<String, crate::CapsuleHit> = std::collections::HashMap::new();
+
+    // Add seeds first (they pass the threshold by definition)
+    for h in seeds {
+        all_hits.insert(h.id.clone(), h);
+    }
+
+    // Step 3: fan out — for each symbol, fetch capsules that touch it
+    for sym in all_symbols.iter().take(12) {
+        let sym_escaped = crate::util::escape_sql_string(sym);
+        let mut filter_parts = vec![format!("array_contains(symbols, '{sym_escaped}')")];
+
+        // Backwards in time: only include capsules older than the newest seed
+        filter_parts.push(format!("ts_ms <= {newest_seed_ts}"));
+        if let Some(since) = since_ms {
+            filter_parts.push(format!("ts_ms >= {since}"));
+        }
+        if let Some(until) = until_ms {
+            filter_parts.push(format!("ts_ms <= {until}"));
+        }
+
+        let filter = filter_parts.join(" AND ");
+        let batches = match table
+            .query()
+            .only_if(filter)
+            .limit(fan_out_per_seed)
+            .execute()
+            .await
+        {
+            Ok(s) => s.try_collect::<Vec<_>>().await.unwrap_or_default(),
+            Err(_) => continue,
+        };
+
+        // Parse rows — reuse the scan row parser via a mini inline parse
+        for batch in &batches {
+            let schema = batch.schema();
+            let idx = |name: &str| schema.index_of(name).ok();
+            let col_str = |name: &str| -> Option<&StringArray> {
+                idx(name).and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>())
+            };
+            let col_f32 = |name: &str| -> Option<&Float32Array> {
+                idx(name).and_then(|i| batch.column(i).as_any().downcast_ref::<Float32Array>())
+            };
+
+            let id_col = col_str("id");
+            let ts_ms_col =
+                idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+            let conn_id_col =
+                idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+            let exchange_seq_col = idx("exchange_seq")
+                .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+            let http_status_col = idx("http_status")
+                .and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
+            let source = col_str("source");
+            let intent = col_str("intent");
+            let decision = col_str("decision");
+            let rationale = col_str("rationale");
+            let category = col_str("category");
+            let upstream_host = col_str("upstream_host");
+            let request_path = col_str("request_path");
+            let agent_session_id_col = col_str("agent_session_id");
+            let user_emotion_label = col_str("user_emotion");
+            let user_emotion_conf = col_f32("user_emotion_conf");
+            let user_valence = col_f32("user_valence");
+            let user_intensity = col_f32("user_intensity");
+            let assistant_emotion_label = col_str("assistant_emotion");
+            let assistant_emotion_conf = col_f32("assistant_emotion_conf");
+            let assistant_valence = col_f32("assistant_valence");
+            let assistant_intensity = col_f32("assistant_intensity");
+            let next_steps_col =
+                idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+            let symbols_col =
+                idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+
+            for row in 0..batch.num_rows() {
+                let id = match id_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row))) {
+                    Some(v) if !v.is_empty() => v.to_string(),
+                    _ => continue,
+                };
+                if all_hits.contains_key(&id) {
+                    continue;
+                }
+
+                let ts_ms = ts_ms_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or_default();
+                let conn_id = conn_id_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or_default();
+                let exchange_seq = exchange_seq_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or_default();
+                let http_status = http_status_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or_default();
+                let cat = category.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let src = source.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let up = upstream_host.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let path = request_path.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let agent_session = agent_session_id_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+                let i_text = intent.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let d_text = decision.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let r_text = rationale.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+
+                let read_emotion_local = |label: Option<&StringArray>,
+                                          conf: Option<&Float32Array>,
+                                          val: Option<&Float32Array>,
+                                          inten: Option<&Float32Array>|
+                 -> Option<crate::emotion::EmotionMeta> {
+                    let lbl = label.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                    if lbl.trim().is_empty() { return None; }
+                    Some(crate::emotion::EmotionMeta {
+                        label: lbl.to_string(),
+                        confidence: conf.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
+                        valence: val.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
+                        intensity: inten.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
+                    })
+                };
+
+                let mut syms: Vec<String> = Vec::new();
+                if let Some(sym_arr) = symbols_col
+                    && !sym_arr.is_null(row)
+                {
+                    let values = sym_arr.value(row);
+                    if let Some(sa) = values.as_any().downcast_ref::<StringArray>() {
+                        syms = (0..sa.len()).filter(|&i| !sa.is_null(i)).map(|i| sa.value(i).to_string()).collect();
+                    }
+                }
+                let mut steps: Vec<String> = Vec::new();
+                if let Some(ns_arr) = next_steps_col
+                    && !ns_arr.is_null(row)
+                {
+                    let values = ns_arr.value(row);
+                    if let Some(sa) = values.as_any().downcast_ref::<StringArray>() {
+                        steps = (0..sa.len()).filter(|&i| !sa.is_null(i)).map(|i| sa.value(i).to_string()).collect();
+                    }
+                }
+
+                // Fan-out hits get distance = threshold (they're linked by symbol, not semantic score)
+                let fan_distance = distance_threshold * 0.9;
+
+                all_hits.insert(id.clone(), crate::CapsuleHit {
+                    id,
+                    ts_ms,
+                    conn_id,
+                    exchange_seq,
+                    distance: fan_distance,
+                    user_emotion: read_emotion_local(user_emotion_label, user_emotion_conf, user_valence, user_intensity),
+                    assistant_emotion: read_emotion_local(assistant_emotion_label, assistant_emotion_conf, assistant_valence, assistant_intensity),
+                    capsule: crate::IntentCapsule {
+                        category: cat.to_string(),
+                        intent: i_text.to_string(),
+                        decision: d_text.to_string(),
+                        rationale: r_text.to_string(),
+                        next_steps: steps,
+                        symbols: syms,
+                        user_symbols: vec![],
+                        failure_mode: crate::types::FailureMode::None,
+                        failure_signals: None,
+                        extraction_mode: crate::types::ExtractionMode::None,
+                        questions: vec![],
+                    },
+                    meta: crate::ResponseMeta {
+                        source: src.to_string(),
+                        upstream_host: up.to_string(),
+                        request_path: path.to_string(),
+                        http_status: http_status.max(0) as u16,
+                        agent_session_id: agent_session,
+                        usage: None,
+                    },
+                });
+
+                if all_hits.len() >= seed_limit * fan_out_per_seed {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Sort chronologically (oldest first) — this IS the causal chain order
+    let mut chain: Vec<crate::CapsuleHit> = all_hits.into_values().collect();
+    chain.sort_by_key(|h| h.ts_ms);
+    Ok(chain)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn insert_capsule_row(
     db: &Connection,
     embedder: &crate::embed::Embedder,
@@ -953,7 +1268,9 @@ pub(crate) async fn insert_capsule_row(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
-    override_embed_text: Option<&str>,
+    // Prior decision text from the preceding capsule in the same session/sequence.
+    // Encodes causal continuity into the embedding so work threads cluster in vector space.
+    prior_decision: Option<&str>,
 ) -> anyhow::Result<()> {
     tracing::info!(
         conn_id,
@@ -961,7 +1278,7 @@ pub(crate) async fn insert_capsule_row(
         ts_ms,
         has_usage = meta.usage.is_some(),
         decision_bytes = capsule.decision.len(),
-        has_override_text = override_embed_text.is_some(),
+        has_prior = prior_decision.is_some(),
         "insert_capsule_row called"
     );
     tracing::debug!(
@@ -974,11 +1291,7 @@ pub(crate) async fn insert_capsule_row(
     let table = ensure_capsules_table(db).await?;
     let schema = capsules_schema();
 
-    let text_to_embed = if let Some(t) = override_embed_text {
-        t.to_string()
-    } else {
-        capsule_embed_text(capsule)
-    };
+    let text_to_embed = capsule_embed_text_with_prior(capsule, prior_decision);
     let embedding = crate::embed::embed_text(embedder, &text_to_embed).await?;
     if embedding.len() != 384 {
         anyhow::bail!("embedding dimension mismatch: {}", embedding.len());
@@ -1067,6 +1380,14 @@ pub(crate) async fn insert_capsule_row(
         ),
     );
 
+    // HyPE: join questions into a single text field for search/display
+    let questions_joined = if capsule.questions.is_empty() {
+        None
+    } else {
+        Some(capsule.questions.join("\n"))
+    };
+    let questions_text_arr = Arc::new(StringArray::from(vec![questions_joined.as_deref()]));
+
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -1102,6 +1423,7 @@ pub(crate) async fn insert_capsule_row(
             next_steps_arr,
             symbols_arr,
             embedding_arr,
+            questions_text_arr,
         ],
     )
     .context("failed to build insert batch")?;

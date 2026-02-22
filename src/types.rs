@@ -148,6 +148,11 @@ pub struct IntentCapsule {
     #[serde(default)]
     #[schemars(schema_with = "extraction_mode_schema")]
     pub extraction_mode: ExtractionMode,
+    /// 2-3 natural language questions that this capsule's decision answers.
+    /// Used for HyPE (Hypothetical Prompt Embeddings): at query time the user's question
+    /// is matched against these pre-generated questions for higher-precision retrieval.
+    #[serde(default)]
+    pub questions: Vec<String>,
 }
 
 fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
@@ -207,6 +212,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
+                questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -243,6 +249,7 @@ mod tests {
                 "User expressed frustration, same symbols touched 3 times".to_string(),
             ),
             extraction_mode: ExtractionMode::None,
+                questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -321,6 +328,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
+                questions: vec![],
         }];
 
         let output = InitCapsulesOutput {
@@ -379,6 +387,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
+                questions: vec![],
         };
 
         let meta = ResponseMeta {
@@ -424,6 +433,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
+                questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();

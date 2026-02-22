@@ -169,6 +169,56 @@ pub enum Command {
         file: String,
     },
 
+    /// Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
+    Trace {
+        /// File path, symbol name, or free-text question (e.g. "why is the timeout 30s?")
+        target: Vec<String>,
+
+        /// Max seed capsules from initial semantic search
+        #[arg(long, default_value_t = 5)]
+        seeds: usize,
+
+        /// Max capsules per symbol fan-out
+        #[arg(long, default_value_t = 8)]
+        fan_out: usize,
+
+        /// Similarity distance threshold (0.0–1.0); capsules above this are dropped
+        #[arg(long, default_value_t = 0.65)]
+        threshold: f32,
+
+        /// Filter to capsules after this time (RFC3339 or relative: 1h, 1d, 1w, 1M, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter to capsules before this time (RFC3339 or relative: 1h, 1d, 1w, 1M, 1y)
+        #[arg(long)]
+        until: Option<String>,
+
+        /// LLM model to use for trace narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Disable LLM narrative (prints raw chain)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
     Brief {
         /// Optional scope: file path, symbol, or concept to focus the brief on

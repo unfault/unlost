@@ -196,6 +196,9 @@ pub(crate) struct FlushJob {
     pub(crate) meta: crate::ResponseMeta,
     pub(crate) input: String,
     pub(crate) grounding_note: Option<String>,
+    /// Decision text from the previous capsule in this workspace's sequence.
+    /// Used to encode causal continuity into the embedding.
+    pub(crate) prior_decision: Option<String>,
 }
 
 struct WorkspaceBuffer {
@@ -212,6 +215,9 @@ struct WorkspaceBuffer {
     total_chars: usize,
     turns: Vec<String>,
     saw_commit: bool,
+    /// Decision from the most recently flushed capsule in this workspace.
+    /// Threaded into the next FlushJob so embeddings encode causal continuity.
+    last_decision: Option<String>,
 }
 
 impl WorkspaceBuffer {
@@ -230,6 +236,7 @@ impl WorkspaceBuffer {
             total_chars: 0,
             turns: Vec::new(),
             saw_commit: false,
+            last_decision: None,
         }
     }
 }
@@ -399,6 +406,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         meta,
         input,
         grounding_note: buf.last_grounding_note.clone(),
+        prior_decision: buf.last_decision.clone(),
     }
 }
 
@@ -459,13 +467,14 @@ impl ServeState {
 }
 
 pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
-    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
- Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\n\
+     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+ Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals, questions (array)}.\n\n\
  Rules:\n\
  - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
  - Keep it grounded in what happened: intent, decisions, rationale, and what's next.\n\
  - Keep each field concise; next_steps max 3.\n\
- - symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\n\
+ - symbols: identifiers, file paths, endpoints, commit/PR refs if explicitly mentioned.\n\
+ - questions: 2-3 natural language questions a developer would ask to find this capsule later (e.g. \"Why is the timeout 30s?\"). Specific and grounded.\n\n\
  Failure mode detection: none, drift, rediscovery, decision_conflict, retry_spiral, false_progress, unbounded_horizon.";
 
     let mut deduper = RecentJobDeduper::new(std::time::Duration::from_secs(45), 2048);
@@ -523,6 +532,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
                 extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
             },
         };
 
@@ -533,7 +543,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
         let _ = crate::metrics::record_capsule_saved(&ws_paths, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule);
 
         if let Ok(db) = state.db_for(&job.workspace_id).await {
-            let _ = crate::storage::insert_capsule_row(&db, &state.embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, Some(&job.input)).await;
+            let _ = crate::storage::insert_capsule_row(&db, &state.embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, job.prior_decision.as_deref()).await;
         }
     }
 }
@@ -545,8 +555,9 @@ pub(crate) async fn process_flush_jobs_proxy(
     embedder: Embedder,
     emotion: Arc<std::sync::Mutex<EmotionModel>>,
 ) {
-    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
- Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals}.\n\n\
+     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+ Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals, questions (array)}.\n\
+ questions: 2-3 natural language questions a developer would ask to find this capsule later.\n\n\
  Failure mode detection: none, drift, rediscovery, decision_conflict, retry_spiral, false_progress, unbounded_horizon.";
 
     let mut deduper = RecentJobDeduper::new(std::time::Duration::from_secs(45), 2048);
@@ -602,6 +613,7 @@ pub(crate) async fn process_flush_jobs_proxy(
                 failure_mode,
                 failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
                 extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
             },
         };
 
@@ -609,7 +621,7 @@ pub(crate) async fn process_flush_jobs_proxy(
 
         let _ = append_capsule_jsonl(&ws.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule);
         let _ = crate::metrics::record_capsule_saved(&ws, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule);
-        let _ = crate::storage::insert_capsule_row(&db, &embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, Some(&job.input)).await;
+        let _ = crate::storage::insert_capsule_row(&db, &embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, job.prior_decision.as_deref()).await;
     }
 }
 

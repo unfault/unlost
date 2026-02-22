@@ -123,6 +123,7 @@ fn commit_to_capsule(c: &CommitDetail) -> crate::IntentCapsule {
         failure_mode: crate::types::FailureMode::None,
         failure_signals: None,
         extraction_mode: crate::types::ExtractionMode::None,
+                questions: vec![],
     }
 }
 

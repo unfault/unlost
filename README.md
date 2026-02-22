@@ -103,7 +103,7 @@ unlost config llm openai --model gpt-4o-mini
 - The LLM call goes through your configured provider (Anthropic, OpenAI, etc.)
 - Capsule storage is entirely local — embeddings, the capsules themselves, and query history never leave your machine
 
-## Recall, Brief & Query
+## Recall, Brief, Query & Trace
 
 Your agents built a memory trail. Here's how to use it:
 
@@ -122,6 +122,15 @@ unlost query "why did we rename the capsules table?"
 
 # Find everything about the proxy routing
 unlost query --symbol proxy_request
+
+# Reconstruct the causal chain that led to the current state of a file
+unlost trace src/governor.rs
+
+# Ask a question about a decision's history
+unlost trace "why is the connection timeout 30 seconds?"
+
+# Investigate what happened in a specific time window
+unlost trace "auth flow" --since 4M --until 3M
 ```
 
 ### `unlost brief`
@@ -139,6 +148,48 @@ GO DEEPER             — suggested unlost commands to drill down further
 ```
 
 Git commit messages are first-class capsules in `brief`. A commit like `"fix: workspace ID must come from git remote, not path"` with an explanatory body will surface as a KEY DESIGN DECISION — even if it predates when you started using unlost.
+
+### `unlost trace`
+
+`trace` reconstructs the **causal chain** of decisions that explain the current state of a file, symbol, or concept. Where `recall` narrates what happened recently, `trace` asks: *why is the code the way it is?*
+
+Pass a file path, a function name, or a natural-language question. Unlost builds a chronological chain — seeded by semantic similarity, expanded by symbol overlap — and narrates the path: the turning points, the recorded failures, the constraint that became an invariant.
+
+```bash
+# The path that led to this file's current state
+unlost trace src/http_proxy.rs
+
+# Why a specific decision was made
+unlost trace "why did we switch to HTTP/2?"
+
+# Incident investigation: what happened in a specific window?
+unlost trace "connection timeout" --since 4M --until 3M
+```
+
+This works across session boundaries and across months of history. Engineers don't slice their work neatly per session — `trace` doesn't require them to.
+
+## Long Memory & the Story Arc
+
+Capsules are not just a log. They encode a *causal history* — the sequence of decisions, constraints, and failures that explain why the code looks the way it does today.
+
+### How it works
+
+**Richer embeddings.** Every capsule is embedded with its category, failure mode, top symbols, and the prior decision from the same work thread. This encodes trajectory into the vector — capsules from the same causal chain cluster together in embedding space, even across different sessions.
+
+**HyPE questions.** When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — *"Why is the timeout 30 seconds?"*, *"How does the proxy route upstream requests?"*. At retrieval time, your query is matched against these pre-generated questions. Question-to-question matching is significantly more precise than query-to-capsule. Based on [Ma et al., "HyPE: Hypothetical Prompt Embeddings" (2024)](https://arxiv.org/abs/2412.12630).
+
+**Causal chain (trace).** `unlost trace` seeds from a vector search, fans out to capsules sharing symbols, applies a similarity threshold, and sorts the survivors chronologically. The LLM narrates the causal path: turning points, recorded failures, the constraint that became an invariant.
+
+```
+2026-01-14  switched to HTTP/2 for upstream
+2026-01-21  retry spiral on keepalive — increased timeout to 30s
+2026-02-03  timeout 30s hardcoded in proxy_request
+2026-02-18  ← you are here
+```
+
+### Already have capsules?
+
+New capsules automatically get richer embeddings and HyPE questions. To apply these improvements to your existing history, run `unlost reindex`.
 
 ## The Cognitive Mirror (Metrics)
 
