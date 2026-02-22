@@ -176,7 +176,7 @@ Capsules are not just a log. They encode a *causal history* — the sequence of 
 
 **Richer embeddings.** Every capsule is embedded with its category, failure mode, top symbols, and the prior decision from the same work thread. This encodes trajectory into the vector — capsules from the same causal chain cluster together in embedding space, even across different sessions.
 
-**HyPE questions.** When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — *"Why is the timeout 30 seconds?"*, *"How does the proxy route upstream requests?"*. At retrieval time, your query is matched against these pre-generated questions. Question-to-question matching is significantly more precise than query-to-capsule. Based on [Ma et al., "HyPE: Hypothetical Prompt Embeddings" (2024)](https://arxiv.org/abs/2412.12630).
+**HyPE questions.** When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — *"Why is the timeout 30 seconds?"*, *"How does the proxy route upstream requests?"*. At retrieval time, your query is matched against these pre-generated questions. Question-to-question matching is significantly more precise than query-to-capsule. Based on [Ma et al., "HyPE: Hypothetical Prompt Embeddings" (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335).
 
 **Causal chain (trace).** `unlost trace` seeds from a vector search, fans out to capsules sharing symbols, applies a similarity threshold, and sorts the survivors chronologically. The LLM narrates the causal path: turning points, recorded failures, the constraint that became an invariant.
 
