@@ -11,9 +11,15 @@
 - **Grouped help output**: `unlost --help` and `unlost` (no args) now display commands organised into four sections — **Memory** (`query`, `trace`, `recall`, `explore`, `challenge`, `brief`), **Workspace** (`init`, `reindex`, `clear`, `where`), **Setup** (`config`, `model`), and **Diagnostics** (`metrics`, `replay`, `inspect`) — instead of a single flat list. Implemented via a custom `help_template` on the root `Cli` struct (clap's `next_help_heading` derive attribute does not apply to struct-variant subcommands).
 - **`explore` prompt redesign**: Rewritten to be genuinely open-ended and generative — a thinking partner, not an auditor. The LLM is instructed to use workspace memory as background and constraint, then think freely beyond it. Alternatives are labelled `[memory]` or `[outside]` so the user knows what is grounded and what is creative.
 - **`challenge` alternatives format**: Replaced pipe-separated table (unreadable at terminal width) with named card format per alternative. Each card uses circled numbers (①②③④), with dimmed field labels (`Upside:`, `Downside:`, `Cost:`, `Evidence:`) and a blank line between cards for scannability.
+- **Higher-signal recall selection**: `unlost recall` now filters low-signal capsules (e.g. replay/ghost extractions), scans a wider recent window to avoid crowd-out, and includes git commit capsules by default so the narrative stays anchored when conversational signal is thin.
+- **Recall interventions controls**: Interventions can be hidden from output (`UNLOST_RECALL_HIDE_INTERVENTIONS=1`) and are excluded from the LLM narrative context by default unless explicitly enabled (`UNLOST_RECALL_INTERVENTIONS_IN_CONTEXT=1`).
+- **Faster `reindex` rebuilds**: `unlost reindex` now batches embeddings and LanceDB inserts, clears the workspace DB directory in one operation, and shows in-place progress during rebuild.
+- **Richer `trace --raw` output**: Raw trace printing now includes capsule source and best-effort references (e.g. `commit:<hash>` / `version:vX.Y.Z`) when available.
 
 ### Fixed
 - **`render_structured` polish**: Space inserted between circled number and card title text (`①Keep` → `① Keep`). Probe lines changed from dim cyan (`\x1b[2;36m`, nearly invisible on dark backgrounds) to normal cyan (`\x1b[36m`). All prose, card field values, and probe lines now wrap at 80 columns via a new `wrap_ansi_line()` helper that measures visible width by skipping ANSI SGR escape sequences.
+- **Safer `reindex` confirmation**: Confirmation prompt now reads a single line from stdin (instead of blocking on EOF), improving behavior in non-interactive environments.
+- **Recall rendering clarity**: The narrative output now labels the final section as `Next steps (if any):` to avoid implying that every recap must produce action items.
 
 ## [0.7.1] - 2026-02-20
 
