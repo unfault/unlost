@@ -1,7 +1,9 @@
 pub mod brief;
+pub mod challenge;
 pub mod clear;
 pub mod config;
 pub mod emotion;
+pub mod explore;
 pub mod init;
 pub mod inspect;
 pub mod metrics;

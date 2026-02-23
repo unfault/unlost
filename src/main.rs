@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use clap::{CommandFactory, Parser};
-use unlost::cli::{Cli, Command, ShimCommand, ReplayCommand, OutputFormat};
+use unlost::cli::{Cli, Command, OutputFormat, ReplayCommand, ShimCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -19,7 +19,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Default to "info" for shim (we want to see friction/emotion logs),
     // "warn" for everything else
-    let is_shim = matches!(&cli.command, Some(Command::Shim { .. }) | Some(Command::Replay { .. }));
+    let is_shim = matches!(
+        &cli.command,
+        Some(Command::Shim { .. }) | Some(Command::Replay { .. })
+    );
     let default_level = if is_shim { "info" } else { "warn" };
     let log_level = cli
         .log
@@ -92,11 +95,7 @@ async fn main() -> anyhow::Result<()> {
             embed_cache_dir,
             file,
         } => {
-            let output = if plain {
-                OutputFormat::Plain
-            } else {
-                output
-            };
+            let output = if plain { OutputFormat::Plain } else { output };
             unlost::commands::query::run(
                 query,
                 limit,
@@ -153,13 +152,35 @@ async fn main() -> anyhow::Result<()> {
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain {
-                OutputFormat::Plain
-            } else {
-                output
-            };
+            let output = if plain { OutputFormat::Plain } else { output };
             unlost::commands::brief::run(target, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
+        }
+        Command::Explore {
+            query,
+            llm_model,
+            output,
+            plain,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            let output = if plain { OutputFormat::Plain } else { output };
+            unlost::commands::explore::run(query, llm_model, output, embed_model, embed_cache_dir)
+                .await?;
+        }
+        Command::Challenge {
+            target,
+            llm_model,
+            output,
+            plain,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            let output = if plain { OutputFormat::Plain } else { output };
+            unlost::commands::challenge::run(
+                target, llm_model, output, embed_model, embed_cache_dir,
+            )
+            .await?;
         }
         Command::Recall {
             target,
@@ -174,11 +195,7 @@ async fn main() -> anyhow::Result<()> {
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain {
-                OutputFormat::Plain
-            } else {
-                output
-            };
+            let output = if plain { OutputFormat::Plain } else { output };
             unlost::commands::recall::run(
                 target,
                 limit,

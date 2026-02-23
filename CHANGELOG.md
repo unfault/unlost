@@ -1,9 +1,11 @@
 # Changelog
 
-## [0.8.0] - 2026-02-20
+## [0.8.0] - 2026-02-23
 
 ### Added
--
+- **`unlost explore`**: New command for forward-looking planning grounded in workspace memory. Given a scenario or goal (e.g. `unlost explore "should we keep lancedb or move to sqlite+fts?"`), retrieves the most relevant capsules via semantic search combined with an importance-scored full scan (failure modes, rationale, cross-session recurrence), then produces a structured output: SCENARIO, OPTIONS table (with upside/downside/effort/reversibility/evidence columns), RECOMMENDATION, UNKNOWNS, and PROBES. Every claim must cite capsule evidence; gaps surface explicitly in UNKNOWNS rather than as hallucination.
+- **`unlost challenge`**: New command to pressure-test a past decision or technology choice (e.g. `unlost challenge "lancedb"` or `unlost challenge "was using fastembed the right call?"`). Uses the same two-pool retrieval strategy with extra weight on capsules that have a recorded `decision` + `rationale`. Produces: THE DECISION (per evidence), ALTERNATIVES table, VERDICT (keep if / change if), UNKNOWNS, and PROBES. Capsules with `failure_mode` set are treated as recorded pain and weighed as evidence against the current approach.
+- **`render_structured` renderer**: Shared ANSI renderer for `explore` and `challenge` output. Section headers are bold-white, `unlost ...` probe lines are dimmed cyan, table rows and prose get backtick colorization. Tables are never word-wrapped to preserve column alignment.
 
 ## [0.7.1] - 2026-02-20
 

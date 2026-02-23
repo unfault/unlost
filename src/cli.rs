@@ -291,6 +291,58 @@ pub enum Command {
         embed_cache_dir: Option<String>,
     },
 
+    /// Explore future paths grounded in your workspace memory
+    Explore {
+        /// Scenario or goal to explore (e.g. "should we keep lancedb or move to sqlite+fts?")
+        query: Vec<String>,
+
+        /// LLM model to use for the exploration narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Pressure-test a past decision or technology choice using your workspace memory
+    Challenge {
+        /// Decision or technology to challenge (e.g. "lancedb" or "was using fastembed the right call?")
+        target: Vec<String>,
+
+        /// LLM model to use for the challenge narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Show workspace metrics (local, derived from metrics.jsonl)
     Metrics {
         /// Workspace path (defaults to current directory)

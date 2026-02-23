@@ -6,7 +6,40 @@ use chrono::{SecondsFormat, TimeZone};
 
 use crate::cli::OutputFormat;
 
+fn looks_like_semver(s: &str) -> bool {
+    // Cheap check: `0.7.0` (optionally with a leading `v`).
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let s = s.strip_prefix('v').unwrap_or(s);
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() < 2 || parts.len() > 4 {
+        return false;
+    }
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
 
+fn capsule_ref_token(meta: &crate::types::ResponseMeta) -> Option<String> {
+    let src = meta.source.trim();
+    let rp = meta.request_path.trim();
+    if rp.is_empty() {
+        return None;
+    }
+    if src == "git" {
+        return Some(format!("commit:{rp}"));
+    }
+    if src == "changelog" {
+        if looks_like_semver(rp) {
+            let v = rp.strip_prefix('v').unwrap_or(rp);
+            return Some(format!("version:v{v}"));
+        }
+        return Some(format!("version:{rp}"));
+    }
+    None
+}
 
 pub(crate) async fn llm_query_narrative(
     llm_model_override: Option<&str>,
@@ -28,7 +61,9 @@ pub(crate) async fn llm_query_narrative(
         match crate::workspace::build_graph_for_workspace(root) {
             Some(g) => Some(g),
             None => {
-                tracing::warn!("llm_query_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                tracing::warn!(
+                    "llm_query_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
+                );
                 None
             }
         }
@@ -85,14 +120,18 @@ pub(crate) async fn llm_query_narrative(
         let session_tag = session_tag
             .map(|t| format!(" session={t}"))
             .unwrap_or_default();
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
         context.push_str(&format!(
-            "#{} distance={} source={} category={} upstream={} path={}{}{}\n",
+            "#{} distance={} source={} category={} upstream={} path={}{}{}{}\n",
             i + 1,
             hit.distance,
             meta.source,
             cap.category,
             meta.upstream_host,
             meta.request_path,
+            ref_tok,
             session_tag,
             ts
         ));
@@ -107,6 +146,36 @@ pub(crate) async fn llm_query_narrative(
                 "rationale: {}\n",
                 cap.rationale.replace('\n', " ")
             ));
+        }
+
+        // Help the LLM distinguish high-signal capsules from "ghost"/fallback ones.
+        // Many recent capsules may be recorded without a full LLM extraction, which can
+        // otherwise distort the recency-weighted narrative.
+        if cap.extraction_mode != crate::types::ExtractionMode::Hybrid {
+            let mode = match cap.extraction_mode {
+                crate::types::ExtractionMode::None => "none",
+                crate::types::ExtractionMode::Hybrid => "hybrid",
+                crate::types::ExtractionMode::Full => "full",
+            };
+            context.push_str(&format!("extraction_mode: {mode}\n"));
+        }
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = match cap.failure_mode {
+                crate::types::FailureMode::None => "none",
+                crate::types::FailureMode::Drift => "drift",
+                crate::types::FailureMode::Rediscovery => "rediscovery",
+                crate::types::FailureMode::DecisionConflict => "decision_conflict",
+                crate::types::FailureMode::RetrySpiral => "retry_spiral",
+                crate::types::FailureMode::FalseProgress => "false_progress",
+                crate::types::FailureMode::UnboundedHorizon => "unbounded_horizon",
+            };
+            context.push_str(&format!("failure_mode: {fm}\n"));
+        }
+        if let Some(sig) = cap.failure_signals.as_deref() {
+            let sig = sig.trim();
+            if !sig.is_empty() {
+                context.push_str(&format!("failure_signals: {}\n", sig.replace('\n', " ")));
+            }
         }
         if let Some(e) = hit.user_emotion.as_ref() {
             context.push_str(&format!(
@@ -146,6 +215,7 @@ pub(crate) async fn llm_query_narrative(
 Grounding rules:
 - Base your answer ONLY on the provided matches. Don't invent files, symbols, routes, frameworks, or auth mechanisms.
 - When you make a claim, anchor it to concrete evidence by mentioning 1-3 specific backticked tokens pulled from the matches (paths, symbols, or routes).
+- When a match includes `ref=version:...` or `ref=commit:...`, prefer using that ref as the citation anchor for any noteworthy fact. Do NOT guess or invent a mapping from commit refs to changelog versions.
 
 Session rules:
 - Matches may come from different agent sessions. If you see multiple distinct sessions, call that out briefly (e.g. "across multiple sessions") and avoid merging conflicting threads.
@@ -420,17 +490,24 @@ pub(crate) async fn llm_trace_narrative(
     context.push_str("Trace query:\n");
     context.push_str(query_text);
     context.push_str("\n\n");
-    context.push_str(&format!("Chain: {} capsules (chronological, oldest first)\n\n", chain.len()));
+    context.push_str(&format!(
+        "Chain: {} capsules (chronological, oldest first)\n\n",
+        chain.len()
+    ));
 
     for (i, hit) in chain.iter().enumerate() {
         let cap = &hit.capsule;
         let meta = &hit.meta;
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
         context.push_str(&format!(
-            "#{} time={} source={} category={}\n",
+            "#{} time={} source={} category={}{}\n",
             i + 1,
             fmt_ts(hit.ts_ms),
             meta.source,
             cap.category,
+            ref_tok,
         ));
         if cap.failure_mode != crate::types::FailureMode::None {
             let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
@@ -444,10 +521,19 @@ pub(crate) async fn llm_trace_narrative(
             context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
         }
         if !cap.rationale.trim().is_empty() {
-            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
         }
         if !cap.symbols.is_empty() {
-            let syms = cap.symbols.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+            let syms = cap
+                .symbols
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
             context.push_str(&format!("symbols: {syms}\n"));
             if let Some(ref g) = cg {
                 if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
@@ -470,6 +556,7 @@ Rules:
 - When failure modes are present (retry_spiral, drift, decision_conflict, etc.), name them — they explain WHY the path bent.
 - Keep the narrative causal: "because of X, we ended up doing Y, which led to Z."
 - Anchor every claim to 1-2 specific backticked tokens (file paths, symbols, or decisions).
+- When a capsule includes `ref=version:...` or `ref=commit:...`, use that ref to ground noteworthy facts (prefer release versions when present, otherwise commit refs). Do NOT guess commit->version mappings.
 - Do NOT mention timestamps, session IDs, or capsule numbers.
 
 Output format:
@@ -494,62 +581,19 @@ pub(crate) async fn llm_recall_narrative(
     workspace_root: &str,
     hits: &[crate::CapsuleHit],
     interventions: &[crate::metrics::Intervention],
+    interventions_printed: bool,
+    interventions_in_context: bool,
+    git_capsules_included: bool,
 ) -> Result<String> {
-    fn workspace_git_status_porcelain(workspace_root: &str) -> Option<String> {
-        use std::process::Command;
-
-        let root = std::path::Path::new(workspace_root);
-        if !root.join(".git").exists() {
-            return None;
-        }
-
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["status", "--porcelain=v1"]) // stable, easy to parse
-            .output()
-            .ok()?;
-
-        if !out.status.success() {
-            return None;
-        }
-
-        let s = String::from_utf8_lossy(&out.stdout);
-        let mut lines = s.lines();
-
-        let mut snap = String::new();
-        let mut n = 0usize;
-        while let Some(line) = lines.next() {
-            let line = line.trim_end();
-            if line.is_empty() {
-                continue;
-            }
-            if n == 0 {
-                snap.push_str("git status --porcelain=v1:\n");
-            }
-            if n >= 40 {
-                snap.push_str("... (truncated)\n");
-                break;
-            }
-            snap.push_str(line);
-            snap.push('\n');
-            n += 1;
-        }
-
-        if snap.is_empty() {
-            Some("git status: clean\n".to_string())
-        } else {
-            Some(snap)
-        }
-    }
-
     // Build graph once for relationship grounding. Failure is non-fatal.
     let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
         let root = std::path::Path::new(workspace_root);
         match crate::workspace::build_graph_for_workspace(root) {
             Some(g) => Some(g),
             None => {
-                tracing::warn!("llm_recall_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                tracing::warn!(
+                    "llm_recall_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
+                );
                 None
             }
         }
@@ -559,6 +603,17 @@ pub(crate) async fn llm_recall_narrative(
 
     let mut context = String::new();
     context.push_str("Recall context\n\n");
+
+    // Runtime settings are non-capsule evidence about how this recall run was configured.
+    // The LLM may use these to avoid suggesting already-applied changes.
+    context.push_str("Recall runtime settings (non-capsule evidence):\n");
+    context.push_str(&format!("interventions_printed: {}\n", if interventions_printed { "true" } else { "false" }));
+    context.push_str(&format!("interventions_in_context: {}\n", if interventions_in_context { "true" } else { "false" }));
+    context.push_str(&format!("git_capsules_included: {}\n\n", if git_capsules_included { "true" } else { "false" }));
+    context.push_str("Runtime controls (non-capsule evidence):\n");
+    context.push_str("interventions_default: printed\n");
+    context.push_str("hide_interventions_env: UNLOST_RECALL_HIDE_INTERVENTIONS\n");
+    context.push_str("include_interventions_in_context_env: UNLOST_RECALL_INTERVENTIONS_IN_CONTEXT\n\n");
     if let Some(s) = scope {
         context.push_str("Scope:\n");
         context.push_str(s);
@@ -571,16 +626,6 @@ pub(crate) async fn llm_recall_narrative(
         context.push_str("root: ");
         context.push_str(workspace_root);
         context.push_str("\n\n");
-
-        // Optional: allow callers to include a git snapshot to reflect uncommitted work.
-        // Default is off to keep recall strictly capsule-driven.
-        if std::env::var_os("UNLOST_RECALL_GIT_SNAPSHOT").is_some() {
-            if let Some(snap) = workspace_git_status_porcelain(workspace_root) {
-                context.push_str("Workspace snapshot (non-capsule evidence):\n");
-                context.push_str(&snap);
-                context.push('\n');
-            }
-        }
     }
     // Determine the most-recent session key so we can suppress `next:` lines
     // for older sessions — stale next-steps from past sessions are almost never
@@ -610,8 +655,11 @@ pub(crate) async fn llm_recall_narrative(
             }
         };
         let is_latest_session = latest_session_key.as_deref() == Some(&this_session_key);
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
         context.push_str(&format!(
-            "#{} ts_ms={} id={} conn_id={} exchange_seq={} http_status={} source={} category={} upstream={} path={}\n",
+            "#{} ts_ms={} id={} conn_id={} exchange_seq={} http_status={} source={} category={} upstream={} path={}{}\n",
             i + 1,
             hit.ts_ms,
             hit.id,
@@ -621,7 +669,8 @@ pub(crate) async fn llm_recall_narrative(
             meta.source,
             cap.category,
             meta.upstream_host,
-            meta.request_path
+            meta.request_path,
+            ref_tok,
         ));
         if let Some(e) = hit.user_emotion.as_ref() {
             context.push_str(&format!(
@@ -690,7 +739,7 @@ pub(crate) async fn llm_recall_narrative(
 
             let diagnosis = crate::metrics::get_diagnosis(&iv.cause, &iv.top_channels);
             let severity = crate::metrics::get_severity_label(iv.intensity);
-            
+
             let duration_str = if let Some(start) = iv.watch_start_ts {
                 let dur_mins = (iv.ts_ms - start) / 60000;
                 format!("intervened after {}m", dur_mins)
@@ -698,9 +747,15 @@ pub(crate) async fn llm_recall_narrative(
                 "intervened".to_string()
             };
 
-            context.push_str(&format!("#{} time={} {} {} {}\n", 
-                i + 1, ts_str, duration_str, severity, diagnosis));
-            
+            context.push_str(&format!(
+                "#{} time={} {} {} {}\n",
+                i + 1,
+                ts_str,
+                duration_str,
+                severity,
+                diagnosis
+            ));
+
             if let Some(ref topic) = iv.topic {
                 context.push_str(&format!("  topic: \"{}\"\n", topic.replace('\n', " ")));
             }
@@ -715,12 +770,14 @@ pub(crate) async fn llm_recall_narrative(
 
 Rules:
 - Base your output ONLY on the provided capsules.
-- If a "Workspace snapshot (non-capsule evidence)" section is present, you MAY use it only to describe current uncommitted work (e.g., which files are being edited). Do not treat it as decisions/intent; do not infer beyond what it shows.
+- If a "Recall runtime settings (non-capsule evidence)" section is present, you MAY use it to avoid suggesting already-applied changes (e.g. if `interventions_printed: true`, do not claim the interventions section is missing).
+- If capsules contain claims about runtime flags/env-vars that conflict with the "Runtime controls" section, treat the "Runtime controls" section as the source of truth for the current CLI behavior.
 - If a "Recent friction interventions" section is present, use it to understand where the system detected workflow friction (duration of the build-up, diagnosis, and topic). Briefly acknowledge significant friction in the narrative if it helps explain the current state, but do not let it dominate the story. Mentioning the topic of the friction (e.g., "Work on the benchmark harness hit a grounding failure...") provides good context.
 - **Handle stale next steps/interventions**: If an older capsule (#10, #20...) or friction intervention describes a blocker or problem (like a broken build or grounding failure) that is NOT mentioned or repeated in any subsequent (newer) capsules or interventions despite multiple intervening productive exchanges, assume it has been addressed, resolved, or deprioritized. Do NOT include it in your "suggested next steps" unless newer evidence explicitly reaffirms it as an ongoing issue.
 - Do NOT quote or excerpt the conversation.
 - When scoped to a specific file or symbol, the narrative MUST be primarily ABOUT that scope. Only mention cross-scope impacts if they directly and significantly affect the scoped item. Do not include general workspace context unless it specifically relates to the scoped item.
 - Keep it high-signal: intent, decisions, rationale, and what's next.
+- Avoid commit hashes/refs in recall. If you cite a shipped change from a changelog capsule, prefer the `ref=version:...` token when present.
 - **Weight recency**: Capsules are ordered from most recent to oldest (by ts_ms). Focus HEAVILY on the most recent capsules (#1, #2, #3...) and the LATEST session to determine the current state and "next steps". If newer capsules describe productive work (like release prep), do not let older historical context (like research from days ago) dominate the first paragraph.
 - **Session Transitions**: If the most recent capsules belong to a new session and older capsules belong to a different session, prioritize the story of the new session. Only use the old session to provide relevant background, not as the primary topic.
 - Only mention emotional tone if explicit `user_mood` / `asst_mood` lines are present in the capsules. If present, use this to paint the emotional context.
@@ -729,7 +786,7 @@ Rules:
 Output format:
 - 2-3 sentences: overall state of the work focused on the scope (if scoped).
 - Then 3-6 short bullets: key decisions (with 1-2 backticked tokens each).
-- Then 2-4 short bullets: suggested next steps (actions for the near future).
+- Then 2-4 short bullets under the heading "Next steps (if any):" (prefer verification over implementation unless the capsules clearly show the work is still undone).
 - If the evidence is thin, say so plainly and recommend ONE follow-up `unlost query ...`.
 "#;
 
@@ -753,7 +810,9 @@ pub(crate) async fn llm_brief_narrative(
         match crate::workspace::build_graph_for_workspace(root) {
             Some(g) => Some(g),
             None => {
-                tracing::warn!("llm_brief_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding");
+                tracing::warn!(
+                    "llm_brief_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
+                );
                 None
             }
         }
@@ -778,17 +837,23 @@ pub(crate) async fn llm_brief_narrative(
         context.push_str("\n\n");
     }
 
-    context.push_str("Capsules (scored by importance — failure modes, rationale, cross-session recurrence):\n");
+    context.push_str(
+        "Capsules (scored by importance — failure modes, rationale, cross-session recurrence):\n",
+    );
     for (i, hit) in hits.iter().enumerate() {
         let cap = &hit.capsule;
         let meta = &hit.meta;
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
         context.push_str(&format!(
-            "#{} ts_ms={} id={} source={} category={}\n",
+            "#{} ts_ms={} id={} source={} category={}{}\n",
             i + 1,
             hit.ts_ms,
             hit.id,
             meta.source,
             cap.category,
+            ref_tok,
         ));
         // Include failure mode explicitly — it's the primary selection signal and the LLM
         // should know it was recorded as a trap or mistake.
@@ -881,18 +946,271 @@ Rules:
 - Base output ONLY on the provided capsules.
 - Do not invent symbols, paths, or decisions not present in the capsules.
 - Do not mention timestamps, session IDs, or capsule IDs.
+- When a capsule includes `ref=version:...` or `ref=commit:...`, use that ref to ground noteworthy facts (prefer `ref=version:...` when present). Do NOT guess commit->version mappings.
 - Keep each bullet to one line. No sub-bullets.
 "#
     );
 
     Ok(
-        crate::llm_extract::<crate::QueryNarrativeOutput>(
-            llm_model_override,
-            &preamble,
-            &context,
-        )
-        .await?
-        .narrative,
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, &preamble, &context)
+            .await?
+            .narrative,
+    )
+}
+
+pub(crate) async fn llm_explore_narrative(
+    llm_model_override: Option<&str>,
+    query: &str,
+    workspace_root: &str,
+    hits: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        match crate::workspace::build_graph_for_workspace(root) {
+            Some(g) => Some(g),
+            None => {
+                tracing::warn!(
+                    "llm_explore_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut context = String::new();
+    context.push_str("Scenario to explore:\n");
+    context.push_str(query);
+    context.push_str("\n\nWorkspace root: ");
+    context.push_str(workspace_root);
+    context.push_str("\n\nCapsules (scored by importance — failure modes, rationale, cross-session recurrence):\n");
+
+    for (i, hit) in hits.iter().enumerate() {
+        let cap = &hit.capsule;
+        let meta = &hit.meta;
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
+        context.push_str(&format!(
+            "#{} ts_ms={} source={} category={}{}\n",
+            i + 1,
+            hit.ts_ms,
+            meta.source,
+            cap.category,
+            ref_tok,
+        ));
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
+            let fm = fm.trim_matches('"');
+            context.push_str(&format!("failure_mode: {}", fm));
+            if let Some(ref sig) = cap.failure_signals {
+                context.push_str(&format!(" ({})", sig.replace('\n', " ")));
+            }
+            context.push('\n');
+        }
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
+        }
+        if !cap.symbols.is_empty() {
+            let syms = cap
+                .symbols
+                .iter()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
+        }
+        context.push('\n');
+        if i >= 29 {
+            break;
+        }
+    }
+
+    let preamble = r#"You are unlost explore. Your job is forward-looking planning grounded strictly in workspace memory.
+
+Output EXACTLY these 5 section headers, each on its own line in ALL CAPS, followed by their content.
+No other headers. No preamble. Start directly with the first header.
+
+SCENARIO
+  1 sentence restatement of what is being explored, grounded in what the capsules reveal about the current state.
+
+OPTIONS
+  A table. Each row: one plausible path. Columns (pipe-separated, keep each row on ONE line):
+  Option | Upside | Downside | Effort | Reversibility | Evidence
+  Use 2-4 rows. "Evidence" must cite 1-2 backticked tokens from capsules (paths, symbols, ref=version:..., ref=commit:...).
+  If you cannot cite evidence for an option, mark Evidence as "not in memory".
+
+RECOMMENDATION
+  1-2 sentences. What the capsule evidence points toward for THIS workspace specifically.
+  Anchor with 1-2 backticked tokens. If evidence is too thin to recommend, say so plainly.
+
+UNKNOWNS
+  Bullet list starting with "• ". Explicit gaps in memory that would change the answer.
+  Always include at least one bullet. If memory is thin, this section carries the weight.
+
+PROBES
+  2-4 lines. Each is a concrete unlost command the reader should run next.
+  Use `unlost query "..."` for specific questions, `unlost trace ...` for causal chains.
+  No bullet markers on these lines.
+
+Rules:
+- Base output ONLY on the provided capsules. Do not invent symbols, paths, decisions, or technologies not present.
+- Every non-trivial claim in OPTIONS and RECOMMENDATION must cite 1-2 backticked tokens from capsules.
+- When a capsule includes ref=version:... or ref=commit:..., prefer that ref as the citation anchor.
+- Table rows must stay on ONE line. No sub-bullets inside table cells. Use short phrases.
+- Do not mention session IDs, timestamps, or capsule IDs.
+- If capsules don't mention the scenario at all, say so in SCENARIO and put everything in UNKNOWNS.
+"#;
+
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
+            .await?
+            .narrative,
+    )
+}
+
+pub(crate) async fn llm_challenge_narrative(
+    llm_model_override: Option<&str>,
+    target: &str,
+    workspace_root: &str,
+    hits: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
+        let root = std::path::Path::new(workspace_root);
+        match crate::workspace::build_graph_for_workspace(root) {
+            Some(g) => Some(g),
+            None => {
+                tracing::warn!(
+                    "llm_challenge_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut context = String::new();
+    context.push_str("Decision or technology to challenge:\n");
+    context.push_str(target);
+    context.push_str("\n\nWorkspace root: ");
+    context.push_str(workspace_root);
+    context.push_str("\n\nCapsules (scored by importance — decision/rationale, failure modes, cross-session recurrence):\n");
+
+    for (i, hit) in hits.iter().enumerate() {
+        let cap = &hit.capsule;
+        let meta = &hit.meta;
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
+        context.push_str(&format!(
+            "#{} ts_ms={} source={} category={}{}\n",
+            i + 1,
+            hit.ts_ms,
+            meta.source,
+            cap.category,
+            ref_tok,
+        ));
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
+            let fm = fm.trim_matches('"');
+            context.push_str(&format!("failure_mode: {}", fm));
+            if let Some(ref sig) = cap.failure_signals {
+                context.push_str(&format!(" ({})", sig.replace('\n', " ")));
+            }
+            context.push('\n');
+        }
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
+        }
+        if !cap.symbols.is_empty() {
+            let syms = cap
+                .symbols
+                .iter()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            context.push_str(&format!("symbols: {syms}\n"));
+            if let Some(ref g) = cg {
+                if let Some(rel) = crate::workspace::relationships_for_symbols(g, &cap.symbols) {
+                    context.push_str(&format!("relationships: {rel}\n"));
+                }
+            }
+        }
+        context.push('\n');
+        if i >= 29 {
+            break;
+        }
+    }
+
+    let preamble = r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice, strictly grounded in workspace memory.
+
+Output EXACTLY these 5 section headers, each on its own line in ALL CAPS, followed by their content.
+No other headers. No preamble. Start directly with the first header.
+
+THE DECISION
+  1-2 sentences. What the decision actually was, per capsule evidence. Cite 1-2 backticked tokens.
+  If the capsules don't clearly record this decision, say so plainly.
+
+ALTERNATIVES
+  A table. Each row: one realistic alternative. Columns (pipe-separated, keep each row on ONE line):
+  Alternative | Upside | Downside | Migration cost | Evidence
+  Use 2-4 rows. "Evidence" must cite 1-2 backticked tokens, OR state "not in memory".
+  Only include alternatives that are plausible given the capsule context — do not invent generic options.
+
+VERDICT
+  Two lines:
+  Keep if: <condition grounded in evidence>
+  Change if: <condition grounded in evidence>
+
+UNKNOWNS
+  Bullet list starting with "• ". Explicit gaps in memory that would change the verdict.
+  Always include at least one bullet. If memory is thin, this section carries the weight.
+
+PROBES
+  2-4 lines. Each is a concrete unlost command the reader should run next.
+  Use `unlost query "..."` for specific questions, `unlost trace ...` for causal chains.
+  No bullet markers on these lines.
+
+Rules:
+- Base output ONLY on the provided capsules. Do not invent symbols, paths, decisions, or technologies not present.
+- Every non-trivial claim must cite 1-2 backticked tokens from capsules (paths, symbols, ref=version:..., ref=commit:...).
+- Table rows must stay on ONE line. No sub-bullets inside table cells. Use short phrases.
+- Capsules with failure_mode set (retry_spiral, decision_conflict, drift, etc.) are recorded pain — treat them as evidence against the current approach.
+- Do not mention session IDs, timestamps, or capsule IDs.
+- If the target decision isn't mentioned in the capsules at all, say so in THE DECISION and put everything in UNKNOWNS.
+"#;
+
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)
+            .await?
+            .narrative,
     )
 }
 
@@ -961,6 +1279,79 @@ pub(crate) fn render_brief(output: OutputFormat, s: &str) -> String {
                     } else {
                         out.push_str(&colorize_backticks(&wl));
                     }
+                }
+            }
+            out
+        }
+    }
+}
+
+/// Render the output of `explore` and `challenge` with ANSI styling.
+///
+/// Section headers (SCENARIO, OPTIONS, etc.) are bolded. `unlost ...` probe
+/// lines are dimmed. Tables (lines containing `|`) are left as-is — we
+/// intentionally skip `wrap_plain_text` here to preserve column alignment.
+pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
+    let output = if std::env::var_os("NO_COLOR").is_some() {
+        OutputFormat::Plain
+    } else {
+        output
+    };
+
+    let s = crate::util::strip_llm_boilerplate(s.trim().to_string());
+
+    const SECTION_HEADERS: &[&str] = &[
+        "SCENARIO",
+        "OPTIONS",
+        "RECOMMENDATION",
+        "THE DECISION",
+        "ALTERNATIVES",
+        "VERDICT",
+        "UNKNOWNS",
+        "PROBES",
+    ];
+
+    match output {
+        OutputFormat::Plain => s.trim().to_string(),
+        OutputFormat::Ansi => {
+            let mut out = String::with_capacity(s.len() + 128);
+            let mut first = true;
+
+            for line in s.lines() {
+                let l = line.trim_end();
+                let trimmed = l.trim();
+
+                let is_header = SECTION_HEADERS
+                    .iter()
+                    .any(|&h| trimmed.eq_ignore_ascii_case(h));
+
+                let is_probe_cmd = trimmed.starts_with("unlost ");
+
+                // Table rows: lines containing | (and not a header) — render
+                // with backtick colorization but no wrapping.
+                let is_table_row = !is_header && trimmed.contains('|');
+
+                if !first {
+                    out.push('\n');
+                }
+                if is_header && !first {
+                    out.push('\n');
+                }
+                first = false;
+
+                if is_header {
+                    out.push_str("\x1b[1;97m");
+                    out.push_str(trimmed);
+                    out.push_str("\x1b[0m");
+                } else if is_probe_cmd {
+                    out.push_str("\x1b[2;36m");
+                    out.push_str(l);
+                    out.push_str("\x1b[0m");
+                } else if is_table_row {
+                    out.push_str(&colorize_backticks(l));
+                } else {
+                    // Regular prose / bullet — colorize backticks, no wrapping
+                    out.push_str(&colorize_backticks(l));
                 }
             }
             out
