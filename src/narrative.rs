@@ -1099,6 +1099,7 @@ pub(crate) async fn llm_challenge_narrative(
     target: &str,
     workspace_root: &str,
     hits: &[crate::CapsuleHit],
+    deep: bool,
 ) -> anyhow::Result<String> {
     let root = std::path::Path::new(workspace_root);
 
@@ -1246,7 +1247,8 @@ pub(crate) async fn llm_challenge_narrative(
         }
     }
 
-    let preamble = r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice.
+    let preamble = if deep {
+        r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice.
 
 You have three sources of evidence — use all of them:
 1. Code graph (hotspots, file structure, dependency topology, routes) — ground truth about what actually exists
@@ -1295,7 +1297,47 @@ Rules:
 - Do not use tables or pipe-separated rows anywhere. Use the card format above for ALTERNATIVES.
 - Do not mention session IDs, timestamps, or capsule IDs.
 - Do not invent symbols or paths not present in any of the three sources.
-"#;
+"#
+    } else {
+        r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice.
+
+You have three sources of evidence — use all of them:
+1. Code graph (hotspots, file structure, dependency topology, routes) — ground truth about what actually exists
+2. Changelog (version history) — what changed over time and why
+3. Memory capsules (recorded decisions, rationale, failure modes) — what the team thought and intended
+
+When capsules are thin, lean on the code graph and changelog. They don't lie.
+
+Output EXACTLY these 3 section headers, each on its own line in ALL CAPS, followed by their content.
+No other headers. No preamble. No UNKNOWNS. No PROBES. Start directly with the first header.
+
+THE DECISION
+  1 sentence. What the decision was, grounded in the evidence.
+  Cite 1-2 backticked tokens (file paths, symbols, or ref=version:...).
+
+ALTERNATIVES
+  2-3 alternatives. Each in this exact format:
+
+  ① <Short name>
+    Upside:   <one short clause>
+    Downside: <one short clause>
+
+  Use ①, ②, ③ as numbering. No Cost or Evidence fields. No extra lines.
+  Concrete and specific to this codebase — not generic industry options.
+
+VERDICT
+  Two lines only:
+  Keep if: <one condition>
+  Change if: <one condition>
+
+Rules:
+- Be brief. Every sentence must earn its place.
+- Do not add sections beyond THE DECISION, ALTERNATIVES, VERDICT.
+- Do not use tables or pipe-separated rows.
+- Do not mention session IDs, timestamps, or capsule IDs.
+- Do not invent symbols or paths not present in the evidence.
+"#
+    };
 
     Ok(
         crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, preamble, &context)

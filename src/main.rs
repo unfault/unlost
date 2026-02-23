@@ -175,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Challenge {
             target,
+            deep,
             llm_model,
             output,
             plain,
@@ -183,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let output = if plain { OutputFormat::Plain } else { output };
             unlost::commands::challenge::run(
-                target, llm_model, output, embed_model, embed_cache_dir,
+                target, deep, llm_model, output, embed_model, embed_cache_dir,
             )
             .await?;
         }

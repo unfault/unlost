@@ -99,6 +99,7 @@ fn select_hits_for_challenge(
 
 pub async fn run(
     target: Vec<String>,
+    deep: bool,
     llm_model: Option<String>,
     output: OutputFormat,
     embed_model: String,
@@ -211,6 +212,7 @@ pub async fn run(
         &target,
         &workspace_root,
         &hits,
+        deep,
     )
     .await?;
 

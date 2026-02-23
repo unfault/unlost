@@ -354,6 +354,10 @@ pub enum Command {
         /// Decision or technology to challenge (e.g. "lancedb" or "was using fastembed the right call?")
         target: Vec<String>,
 
+        /// Show full analysis: adds UNKNOWNS and PROBES sections (default: concise)
+        #[arg(long, default_value_t = false)]
+        deep: bool,
+
         /// LLM model to use for the challenge narrative
         #[arg(long)]
         llm_model: Option<String>,

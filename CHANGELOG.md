@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`unlost challenge --deep`**: `challenge` is now concise by default — outputs only `THE DECISION`, `ALTERNATIVES` (2-3 options, no Cost/Evidence fields), and `VERDICT`. Pass `--deep` to get the full analysis with `UNKNOWNS` and `PROBES` sections.
+
 ### Changed
 - **HyPE-aligned retrieval for all commands**: Each command now frames its user query with a command-specific intent prefix before embedding, turning retrieval into a question-to-question match rather than a keyword-to-document match. This exploits the HyPE (Hypothetical Prompt Embeddings) questions already stored in `questions_text` at indexing time — without any extra LLM call at query time. Framing per command:
   - `recall`: *"What happened with \<target\>?"*
