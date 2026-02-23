@@ -1,11 +1,18 @@
 # Changelog
 
-## [0.8.0] - 2026-02-23
+## [0.9.0] - 2026-02-23
 
 ### Added
-- **`unlost explore`**: New command for forward-looking planning grounded in workspace memory. Given a scenario or goal (e.g. `unlost explore "should we keep lancedb or move to sqlite+fts?"`), retrieves the most relevant capsules via semantic search combined with an importance-scored full scan (failure modes, rationale, cross-session recurrence), then produces a structured output: SCENARIO, OPTIONS table (with upside/downside/effort/reversibility/evidence columns), RECOMMENDATION, UNKNOWNS, and PROBES. Every claim must cite capsule evidence; gaps surface explicitly in UNKNOWNS rather than as hallucination.
-- **`unlost challenge`**: New command to pressure-test a past decision or technology choice (e.g. `unlost challenge "lancedb"` or `unlost challenge "was using fastembed the right call?"`). Uses the same two-pool retrieval strategy with extra weight on capsules that have a recorded `decision` + `rationale`. Produces: THE DECISION (per evidence), ALTERNATIVES table, VERDICT (keep if / change if), UNKNOWNS, and PROBES. Capsules with `failure_mode` set are treated as recorded pain and weighed as evidence against the current approach.
-- **`render_structured` renderer**: Shared ANSI renderer for `explore` and `challenge` output. Section headers are bold-white, `unlost ...` probe lines are dimmed cyan, table rows and prose get backtick colorization. Tables are never word-wrapped to preserve column alignment.
+- **`unlost explore`**: New command for forward-looking planning grounded in workspace memory. Given a scenario or goal (e.g. `unlost explore "should we keep lancedb or move to sqlite+fts?"`), retrieves the most relevant capsules via semantic search combined with an importance-scored full scan (failure modes, rationale, cross-session recurrence). Capsules are context — not a cage — so the LLM can reason beyond them while clearly labelling what comes from memory (`[memory]`) vs. external knowledge (`[outside]`). Output sections: CONTEXT FROM MEMORY, PATHS WORTH CONSIDERING, TENSIONS, QUESTIONS TO SIT WITH, IF YOU GO FURTHER.
+- **`unlost challenge`**: New command to pressure-test a past decision or technology choice (e.g. `unlost challenge "lancedb"` or `unlost challenge "is our code currently properly organized?"`). Uses three evidence sources: (1) the live code graph via unfault-core (hotspots, dependency topology, routes, file list — ground truth even when capsules are thin), (2) changelog capsules (version history), and (3) conversational memory capsules (decisions, rationale, failure modes). Output sections: THE DECISION, ALTERNATIVES (as readable named cards with Upside/Downside/Cost/Evidence fields), VERDICT (keep if / change if), UNKNOWNS, PROBES.
+- **`GraphContext` + `build_graph_context_for_workspace`**: New helper in `workspace.rs` that builds the full unfault-core code graph and extracts hotspots (centrality), hub dependencies, routes, and file paths in one call. Used by `challenge` to inject structural ground truth into the LLM prompt.
+
+### Changed
+- **`explore` prompt redesign**: Rewritten to be genuinely open-ended and generative — a thinking partner, not an auditor. The LLM is instructed to use workspace memory as background and constraint, then think freely beyond it. Alternatives are labelled `[memory]` or `[outside]` so the user knows what is grounded and what is creative.
+- **`challenge` alternatives format**: Replaced pipe-separated table (unreadable at terminal width) with named card format per alternative. Each card uses circled numbers (①②③④), with dimmed field labels (`Upside:`, `Downside:`, `Cost:`, `Evidence:`) and a blank line between cards for scannability.
+
+### Fixed
+- **`render_structured` polish**: Space inserted between circled number and card title text (`①Keep` → `① Keep`). Probe lines changed from dim cyan (`\x1b[2;36m`, nearly invisible on dark backgrounds) to normal cyan (`\x1b[36m`). All prose, card field values, and probe lines now wrap at 80 columns via a new `wrap_ansi_line()` helper that measures visible width by skipping ANSI SGR escape sequences.
 
 ## [0.7.1] - 2026-02-20
 
