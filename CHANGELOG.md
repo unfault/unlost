@@ -3,6 +3,18 @@
 ## [0.9.0] - 2026-02-23
 
 ### Added
+- **Git tag ingestion**: Git tags are now first-class capsules (`category: "GitTag"`). Each tag captures its name, dereferenced commit SHA, creator date, tag message, and the files touched by the tagged commit — so queries like "what changed between v0.8.0 and v0.9.0?" can be answered from memory. Deduplicates by tag name in `git/ingested_tags.txt`. Works for both annotated and lightweight tags.
+- **Live changelog re-ingest on Stop hook**: The Claude shim now calls `ingest_changelog` at the end of every session. If `CHANGELOG.md` was in the session's touched paths (or has un-ingested versions), new entries are captured immediately without requiring a manual `unlost replay`. Zero-LLM cost, idempotent.
+- **Live tag ingest on Stop hook**: The Claude shim also calls `ingest_git_tags` on every Stop hook, so tags created during a session are captured as boundary capsules before the next session begins.
+
+### Changed
+- **`ingest_git_tags` wired into all batch paths**: `unlost init`, `unlost replay claude`, and `unlost replay opencode` now all call `ingest_git_tags` immediately after `ingest_git_commits`, so tag history is backfilled alongside commit history.
+
+---
+
+
+
+### Added
 - **`unlost explore`**: New command for forward-looking planning grounded in workspace memory. Given a scenario or goal (e.g. `unlost explore "should we keep lancedb or move to sqlite+fts?"`), retrieves the most relevant capsules via semantic search combined with an importance-scored full scan (failure modes, rationale, cross-session recurrence). Capsules are context — not a cage — so the LLM can reason beyond them while clearly labelling what comes from memory (`[memory]`) vs. external knowledge (`[outside]`). Output sections: CONTEXT FROM MEMORY, PATHS WORTH CONSIDERING, TENSIONS, QUESTIONS TO SIT WITH, IF YOU GO FURTHER.
 - **`unlost challenge`**: New command to pressure-test a past decision or technology choice (e.g. `unlost challenge "lancedb"` or `unlost challenge "is our code currently properly organized?"`). Uses three evidence sources: (1) the live code graph via unfault-core (hotspots, dependency topology, routes, file list — ground truth even when capsules are thin), (2) changelog capsules (version history), and (3) conversational memory capsules (decisions, rationale, failure modes). Output sections: THE DECISION, ALTERNATIVES (as readable named cards with Upside/Downside/Cost/Evidence fields), VERDICT (keep if / change if), UNKNOWNS, PROBES.
 - **`GraphContext` + `build_graph_context_for_workspace`**: New helper in `workspace.rs` that builds the full unfault-core code graph and extracts hotspots (centrality), hub dependencies, routes, and file paths in one call. Used by `challenge` to inject structural ground truth into the LLM prompt.

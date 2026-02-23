@@ -687,8 +687,8 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
     );
 
     let config = FlowConfig {
-        embed_model,
-        embed_cache_dir,
+        embed_model: embed_model.clone(),
+        embed_cache_dir: embed_cache_dir.clone(),
         extraction_mode: crate::types::ExtractionMode::Hybrid, // hooks are for live, so default to hybrid
     };
     let mut flow = Flow::new(config);
@@ -701,7 +701,13 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
             handle_user_prompt_submit(&mut flow, &hook_input).await?;
         }
         "Stop" => {
-            handle_stop(&mut flow, &hook_input).await?;
+            handle_stop(
+                &mut flow,
+                &hook_input,
+                &embed_model,
+                embed_cache_dir.as_deref(),
+            )
+            .await?;
         }
         _ => {
             tracing::debug!(event = %hook_input.hook_event_name, "ignoring unhandled hook event");
@@ -756,7 +762,12 @@ async fn handle_user_prompt_submit(flow: &mut Flow, input: &HookInput) -> anyhow
     Ok(())
 }
 
-async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
+async fn handle_stop(
+    flow: &mut Flow,
+    input: &HookInput,
+    embed_model: &str,
+    embed_cache_dir: Option<&str>,
+) -> anyhow::Result<()> {
     let transcript_path = match &input.transcript_path {
         Some(p) => PathBuf::from(p),
         None => {
@@ -792,11 +803,16 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
         "parsed transcript"
     );
 
-    // Record each turn (best-effort de-dupe by transcript UUID keys)
+    // Record each turn (best-effort de-dupe by transcript UUID keys).
+    // Also collect all touched paths across this batch so we can trigger
+    // incremental ingestion of CHANGELOG.md and git tags below.
     let mut seen = load_turnkeys(&ws.id, &input.session_id);
     let mut new_keys: Vec<String> = Vec::new();
+    let mut all_touched: Vec<String> = Vec::new();
 
     for turn in turns {
+        all_touched.extend(turn.touched_paths.iter().cloned());
+
         if let Some(k) = turn_key(&turn) {
             if seen.contains(&k) {
                 continue;
@@ -827,6 +843,43 @@ async fn handle_stop(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
 
     // Save cursor
     save_cursor(&ws.id, &input.session_id, &new_cursor);
+
+    // ── Incremental ingest: changelog and git tags ────────────────────────────
+    // Run after every Stop hook so that:
+    //   • If CHANGELOG.md was edited this session, new versions are captured
+    //     immediately rather than waiting for the next `unlost replay`.
+    //   • Any new git tags pushed/created this session are ingested as boundary
+    //     capsules so future queries can reconstruct session ranges.
+    // Both operations are idempotent (skip already-ingested items) and zero-LLM,
+    // so the cost is negligible when there is nothing new.
+    if let Some(repo_root) = crate::workspace::git_toplevel(cwd_path) {
+        // Only bother loading the embedder if there might be something new.
+        let changelog_path = repo_root.join("CHANGELOG.md");
+        let changelog_touched = all_touched
+            .iter()
+            .any(|p| p.ends_with("CHANGELOG.md") || p == "CHANGELOG.md");
+        // For tags: always check — tags are created with `git tag`, not file edits.
+        // The check is O(n_tags) file-read, fast even with hundreds of tags.
+        let embedder = crate::embed::load_embedder(
+            embed_model,
+            embed_cache_dir.map(std::path::PathBuf::from),
+            false,
+        )
+        .await;
+        if let Ok(ref embedder) = embedder {
+            let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+                && std::env::var_os("NO_COLOR").is_none();
+            // Always check for new tags — lightweight operation.
+            let _ = crate::git::ingest_git_tags(&ws, &repo_root, embedder, use_color).await;
+            // Only re-read and re-parse the changelog when it was actually touched,
+            // or when there are versions not yet ingested (first run after editing).
+            if changelog_touched || changelog_path.exists() {
+                let _ =
+                    crate::changelog::ingest_changelog(&ws, &changelog_path, embedder, use_color)
+                        .await;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -1379,6 +1432,7 @@ pub async fn replay(
         .await;
         if let Ok(embedder) = embedder {
             let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
+            let _ = crate::git::ingest_git_tags(&ws, root, &embedder, use_color).await;
             let changelog_path = root.join("CHANGELOG.md");
             let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color)
                 .await;

@@ -268,6 +268,256 @@ pub async fn ingest_git_commits(
     Ok(ingested)
 }
 
+// ============================================================================
+// Git tag ingestion as capsules
+// ============================================================================
+
+#[derive(Debug, Clone)]
+struct TagDetail {
+    name: String,
+    /// The commit SHA the tag points to (peeled for annotated tags).
+    commit_hash: String,
+    /// Tag creation timestamp in ms. For annotated tags this is the tagger date;
+    /// for lightweight tags it falls back to the commit date.
+    timestamp_ms: i64,
+    /// Annotated tag message (empty for lightweight tags).
+    message: String,
+    /// Files touched by the tagged commit (for boundary reconstruction).
+    files: Vec<String>,
+}
+
+/// Fetch all tags with their commit SHA, date, and message.
+///
+/// Uses `git tag -l --sort=creatordate --format=...` which works for both
+/// annotated and lightweight tags.
+fn fetch_tags(repo_root: &Path) -> anyhow::Result<Vec<TagDetail>> {
+    // Format: name RS commit_hash RS creator_date_unix RS subject GS
+    // %(objecttype) lets us detect annotated vs lightweight tags later if needed.
+    let output = std::process::Command::new("git")
+        .current_dir(repo_root)
+        .args([
+            "tag",
+            "-l",
+            "--sort=creatordate",
+            // *objectname dereferences annotated tags to their commit SHA.
+            "--format=%(refname:short)\x1f%(*objectname)%(objectname)\x1f%(creatordate:unix)\x1f%(contents:subject)\x1e",
+        ])
+        .output()
+        .context("failed to run git tag")?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut tags = Vec::new();
+
+    for rec in raw.split('\x1e') {
+        let rec = rec.trim();
+        if rec.is_empty() {
+            continue;
+        }
+        let mut parts = rec.splitn(4, '\x1f');
+        let name = parts.next().unwrap_or("").trim().to_string();
+        let commit_hash = parts.next().unwrap_or("").trim().to_string();
+        let ts_str = parts.next().unwrap_or("").trim();
+        let message = parts.next().unwrap_or("").trim().to_string();
+
+        if name.is_empty() || commit_hash.is_empty() {
+            continue;
+        }
+
+        let timestamp_ms = ts_str.parse::<i64>().unwrap_or(0) * 1000;
+
+        // Fetch files touched by the tagged commit so we can reconstruct work boundaries.
+        let files = std::process::Command::new("git")
+            .current_dir(repo_root)
+            .args(["diff-tree", "--no-commit-id", "--name-only", "-r", &commit_hash])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        tags.push(TagDetail {
+            name,
+            commit_hash,
+            timestamp_ms,
+            message,
+            files,
+        });
+    }
+
+    // Oldest-first so capsule timestamps are monotonically increasing
+    tags.sort_by_key(|t| t.timestamp_ms);
+    Ok(tags)
+}
+
+fn tag_to_capsule(t: &TagDetail) -> crate::IntentCapsule {
+    let sha7 = &t.commit_hash[..7.min(t.commit_hash.len())];
+    let intent = format!("Tagged {} at commit {}", t.name, sha7);
+    let decision = t.name.clone();
+    let rationale = if t.message.is_empty() {
+        format!("Lightweight tag {} pinned at {}", t.name, sha7)
+    } else {
+        format!("{}\n\nTagged commit: {}", t.message, sha7)
+    };
+    let symbols: Vec<String> = t.files.iter().take(20).cloned().collect();
+
+    crate::IntentCapsule {
+        category: "GitTag".to_string(),
+        intent,
+        decision,
+        rationale,
+        next_steps: Vec::new(),
+        symbols,
+        user_symbols: Vec::new(),
+        failure_mode: crate::types::FailureMode::None,
+        failure_signals: None,
+        extraction_mode: crate::types::ExtractionMode::None,
+        questions: vec![],
+    }
+}
+
+fn ingested_tags_path(ws: &crate::WorkspacePaths) -> std::path::PathBuf {
+    crate::workspace::unlost_workspace_dir(&ws.id)
+        .join("git")
+        .join("ingested_tags.txt")
+}
+
+fn load_ingested_tags(ws: &crate::WorkspacePaths) -> std::collections::HashSet<String> {
+    let path = ingested_tags_path(ws);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => s
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+fn append_ingested_tags(ws: &crate::WorkspacePaths, tags: &[String]) {
+    if tags.is_empty() {
+        return;
+    }
+    let path = ingested_tags_path(ws);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut f = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    for t in tags {
+        let _ = writeln!(f, "{}", t.trim());
+    }
+}
+
+/// Ingest git tags from `repo_root` as capsules into the workspace's LanceDB.
+///
+/// Each tag becomes a `GitTag` capsule linked to its commit SHA, so session
+/// boundaries can be reconstructed (e.g. "what changed between v0.8.0 and v0.9.0?").
+/// Deduplicates by tag name in `git/ingested_tags.txt`. Zero LLM cost.
+pub async fn ingest_git_tags(
+    ws: &crate::WorkspacePaths,
+    repo_root: &Path,
+    embedder: &crate::embed::Embedder,
+    use_color: bool,
+) -> anyhow::Result<usize> {
+    if crate::workspace::git_toplevel(repo_root).is_none() {
+        return Ok(0);
+    }
+
+    let already_ingested = load_ingested_tags(ws);
+    let tags = fetch_tags(repo_root)?;
+
+    let new_tags: Vec<TagDetail> = tags
+        .into_iter()
+        .filter(|t| !already_ingested.contains(&t.name))
+        .collect();
+
+    if new_tags.is_empty() {
+        return Ok(0);
+    }
+
+    std::fs::create_dir_all(&ws.db_dir)?;
+    let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+        .execute()
+        .await?;
+    let _ = crate::storage::ensure_capsules_table(&db).await?;
+
+    let mut ingested = 0usize;
+    let mut new_names: Vec<String> = Vec::new();
+
+    for tag in &new_tags {
+        let capsule = tag_to_capsule(tag);
+
+        let meta = crate::ResponseMeta {
+            source: "git".to_string(),
+            upstream_host: "git".to_string(),
+            // Store "tag:<name>" so narrative.rs can emit "ref=tag:<name>" citations.
+            request_path: format!("tag:{}", tag.name),
+            http_status: 0,
+            agent_session_id: None,
+            usage: None,
+        };
+
+        let embed_text = if tag.message.is_empty() {
+            format!("Tag {} at commit {}", tag.name, &tag.commit_hash[..7.min(tag.commit_hash.len())])
+        } else {
+            format!("Tag {}: {}", tag.name, tag.message)
+        };
+
+        match crate::storage::insert_capsule_row(
+            &db,
+            embedder,
+            0,
+            0,
+            tag.timestamp_ms,
+            &meta,
+            None,
+            None,
+            &capsule,
+            Some(&embed_text),
+        )
+        .await
+        {
+            Ok(_) => {
+                new_names.push(tag.name.clone());
+                ingested += 1;
+            }
+            Err(e) => {
+                tracing::warn!(tag = %tag.name, error = %e, "failed to insert git tag capsule");
+            }
+        }
+    }
+
+    append_ingested_tags(ws, &new_names);
+
+    if ingested > 0 && use_color {
+        println!(
+            "\x1b[2m  + {} git tag{} indexed\x1b[0m",
+            ingested,
+            if ingested == 1 { "" } else { "s" }
+        );
+    } else if ingested > 0 {
+        println!("  + {} git tag(s) indexed", ingested);
+    }
+
+    Ok(ingested)
+}
+
 /// Standalone entry point for `unlost replay git`.
 pub async fn replay_git(
     path: String,

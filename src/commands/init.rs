@@ -662,6 +662,7 @@ pub async fn run(
             && std::env::var_os("NO_COLOR").is_none();
         if let Some(ref repo_root) = repo_root {
             let _ = crate::git::ingest_git_commits(&ws, repo_root, &embedder, 500, use_color).await;
+            let _ = crate::git::ingest_git_tags(&ws, repo_root, &embedder, use_color).await;
             // Ingest CHANGELOG.md (if present at the repo root) as capsules — grounds
             // `unlost brief` and `unlost query` with shipped-decision history.
             let changelog_path = repo_root.join("CHANGELOG.md");

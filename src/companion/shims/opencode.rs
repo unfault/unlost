@@ -916,6 +916,7 @@ pub async fn replay(
         .await;
         if let Ok(embedder) = embedder {
             let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
+            let _ = crate::git::ingest_git_tags(&ws, root, &embedder, use_color).await;
             let changelog_path = root.join("CHANGELOG.md");
             let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color)
                 .await;
