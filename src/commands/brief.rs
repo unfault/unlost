@@ -175,9 +175,15 @@ pub async fn run(
 
     // When scoped, also run semantic search to catch conceptually-related capsules
     // that don't literally mention the scope string in their symbols field.
+    // Frame the query with the brief intent so the embedding aligns with HyPE
+    // question vectors stored at indexing time (question-to-question match).
     if let (Some(scope), Some(embedder)) = (scope_opt, embedder) {
+        let framed = crate::storage::frame_query_for_command(
+            scope,
+            crate::storage::QueryIntent::Brief,
+        );
         if let Ok(sem) = crate::storage::query_capsules_lancedb(
-            scope, 60, None, None, None, None, None, embedder, &ws,
+            &framed, 60, None, None, None, None, None, embedder, &ws,
         )
         .await
         {

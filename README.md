@@ -64,8 +64,8 @@ This installs the Unlost agent skill and hooks unlost into your OpenCode session
 
 - **Friction detection** runs automatically — unlost checks for drift, retry spirals, and false progress before each prompt
 - **Two tiers of memory commands**:
-  - Fast path (no LLM): `unlost query --no-llm`, `unlost metrics` — safe to run proactively
-  - LLM path (on demand): `unlost query`, `unlost recall`, `unlost brief` — only when user explicitly asks
+  - Fast path (no LLM): `unlost metrics` — safe to run proactively
+  - LLM path (on demand): `unlost recall`, `unlost brief`, `unlost trace`, `unlost challenge`, `unlost explore` — only when user explicitly asks
 
 Unlost spots drift, catches false progress, and builds a local trail of decisions — without storing full transcripts.
 
@@ -103,7 +103,7 @@ unlost config llm openai --model gpt-4o-mini
 - The LLM call goes through your configured provider (Anthropic, OpenAI, etc.)
 - Capsule storage is entirely local — embeddings, the capsules themselves, and query history never leave your machine
 
-## Recall, Brief, Query & Trace
+## Memory Commands
 
 Your agents built a memory trail. Here's how to use it:
 
@@ -117,12 +117,6 @@ unlost brief src/governor.rs
 # What happened recently in this file?
 unlost recall src/http_proxy.rs
 
-# Why did we rename the capsules table?
-unlost query "why did we rename the capsules table?"
-
-# Find everything about the proxy routing
-unlost query --symbol proxy_request
-
 # Reconstruct the causal chain that led to the current state of a file
 unlost trace src/governor.rs
 
@@ -131,6 +125,14 @@ unlost trace "why is the connection timeout 30 seconds?"
 
 # Investigate what happened in a specific time window
 unlost trace "auth flow" --since 4M --until 3M
+
+# Pressure-test a past technology choice
+unlost challenge "lancedb"
+unlost challenge "was using fastembed the right call?"
+
+# Explore future paths grounded in workspace memory
+unlost explore "should we keep lancedb or move to sqlite+fts?"
+unlost explore "what would multi-workspace federation require?"
 ```
 
 ### `unlost brief`
@@ -176,7 +178,7 @@ Capsules are not just a log. They encode a *causal history* — the sequence of 
 
 **Richer embeddings.** Every capsule is embedded with its category, failure mode, top symbols, and the prior decision from the same work thread. This encodes trajectory into the vector — capsules from the same causal chain cluster together in embedding space, even across different sessions.
 
-**HyPE questions.** When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — *"Why is the timeout 30 seconds?"*, *"How does the proxy route upstream requests?"*. At retrieval time, your query is matched against these pre-generated questions. Question-to-question matching is significantly more precise than query-to-capsule. Based on [Ma et al., "HyPE: Hypothetical Prompt Embeddings" (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335).
+**HyPE questions.** When a capsule is extracted, the LLM also generates 2–3 questions the capsule answers — *"Why is the timeout 30 seconds?"*, *"How does the proxy route upstream requests?"*. At retrieval time, each command frames your input as a question matching the command's intent before embedding it — `recall` wraps your target as *"What happened with X?"*, `challenge` as *"Was the decision about X the right call?"*, and so on. This turns retrieval into a question-to-question match against the stored HyPE questions, dramatically improving precision with zero extra LLM cost. Based on [Ma et al., "HyPE: Hypothetical Prompt Embeddings" (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335).
 
 **Causal chain (trace).** `unlost trace` seeds from a vector search, fans out to capsules sharing symbols, applies a similarity threshold, and sorts the survivors chronologically. The LLM narrates the causal path: turning points, recorded failures, the constraint that became an invariant.
 
@@ -233,7 +235,7 @@ Git commit history is ingested automatically whenever you run `replay opencode` 
 
 The `--git-grounding` flag (on `replay opencode` and `replay claude`) cross-references agent-touched files against actual commits in your history, marking capsules as "Verified via Git" when a match is found.
 
-Git capsules are used by `brief` and `query` but deliberately excluded from `recall` (which stays focused on the conversational story) and from the trajectory controller (which operates on live turns only).
+Git capsules are used by `brief`, `challenge`, `explore`, and `trace` but deliberately excluded from `recall` (which stays focused on the conversational story) and from the trajectory controller (which operates on live turns only).
 
 ## Install
 

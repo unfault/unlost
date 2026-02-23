@@ -932,6 +932,69 @@ async fn scan_capsules_lancedb_impl(
     Ok(out)
 }
 
+/// The retrieval intent each command has when it calls `query_capsules_lancedb`.
+///
+/// Each variant maps to a question-style prefix that is prepended to the user's raw
+/// target/query string before embedding.  This exploits HyPE (Hypothetical Prompt
+/// Embeddings): at indexing time we stored pre-generated questions in `questions_text`
+/// and embedded capsule content *alongside* those questions.  By framing the query in
+/// the same question style as the stored prompts, retrieval becomes a
+/// question-to-question match rather than a keyword-to-document match, which yields
+/// higher precision without any extra LLM call at query time.
+///
+/// Rules:
+///   - If `target` is already phrased as a question (contains '?') we leave it as-is
+///     and only add the intent prefix to bias the embedding.
+///   - If `target` is empty the prefix alone is used so the ANN still finds a useful
+///     seed neighbourhood.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum QueryIntent {
+    /// `recall` — chronological story of what happened
+    Recall,
+    /// `brief` — current state and rationale (staff-engineer debrief)
+    Brief,
+    /// `challenge` — pressure-test a past decision
+    Challenge,
+    /// `explore` — forward-looking alternatives and trade-offs
+    Explore,
+    /// `trace` — causal chain leading to the current state
+    Trace,
+}
+
+/// Frame a raw user query/target with a command-specific question prefix so that the
+/// resulting embedding aligns with the HyPE question vectors stored at indexing time.
+///
+/// Returns the framed string ready to pass directly to `embed_text`.
+pub(crate) fn frame_query_for_command(target: &str, intent: QueryIntent) -> String {
+    let target = target.trim();
+    let prefix = match intent {
+        QueryIntent::Recall => "What happened with",
+        QueryIntent::Brief => "Why is the current state of",
+        QueryIntent::Challenge => "Was the decision about",
+        QueryIntent::Explore => "What are the alternatives and trade-offs for",
+        QueryIntent::Trace => "What sequence of decisions led to",
+    };
+
+    if target.is_empty() {
+        // No user target — use the prefix alone as an intent signal
+        return prefix.to_string();
+    }
+
+    // If already a question, prepend the intent prefix as a soft bias
+    if target.contains('?') {
+        return format!("{prefix}: {target}");
+    }
+
+    // Build a natural question from the prefix + target
+    match intent {
+        QueryIntent::Brief => format!("{prefix} {target} the way it is?"),
+        QueryIntent::Challenge => format!("{prefix} {target} the right call?"),
+        QueryIntent::Trace | QueryIntent::Recall | QueryIntent::Explore => {
+            format!("{prefix} {target}?")
+        }
+    }
+}
+
 /// Build the canonical embed text for a capsule.
 ///
 /// Includes category, failure mode, top symbols, and the structured intent/decision/rationale
@@ -1233,7 +1296,15 @@ pub(crate) async fn trace_capsules_lancedb(
                     }
                 }
 
-                // Fan-out hits get distance = threshold (they're linked by symbol, not semantic score)
+                // Fan-out hits are linked by symbol, not by semantic score. We can't
+                // compute a real embedding distance here without an extra embed call, so
+                // we use content quality as a proxy guard: drop capsules that carry no
+                // meaningful signal (empty intent *and* empty decision — ghost extractions).
+                // Valid capsules are admitted with distance = threshold * 0.9 to indicate
+                // they are symbol-linked rather than semantically ranked.
+                if i_text.trim().is_empty() && d_text.trim().is_empty() {
+                    continue;
+                }
                 let fan_distance = distance_threshold * 0.9;
 
                 all_hits.insert(

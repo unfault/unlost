@@ -247,10 +247,15 @@ pub async fn run(
     let want = limit.min(40);
 
     if let Some(scope) = scope_opt.as_deref() {
-        // When scoped, prioritize capsules that explicitly mention or relate to the scope
-        // Use semantic search to catch text mentions (increased from 18 to 50)
-        if let Ok(mut sem) = crate::storage::query_capsules_lancedb(
+        // When scoped, prioritize capsules that explicitly mention or relate to the scope.
+        // Frame the query with the recall intent so the embedding aligns with HyPE
+        // question vectors stored at indexing time (question-to-question match).
+        let framed_scope = crate::storage::frame_query_for_command(
             scope,
+            crate::storage::QueryIntent::Recall,
+        );
+        if let Ok(mut sem) = crate::storage::query_capsules_lancedb(
+            &framed_scope,
             50,
             None,
             emotion_label.as_deref(),

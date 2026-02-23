@@ -154,9 +154,15 @@ pub async fn run(
         pb.set_message("Searching relevant capsules...");
     }
 
-    // Pool 1: semantic search on the query (topically relevant capsules)
-    let sem_hits = crate::storage::query_capsules_lancedb(
+    // Pool 1: semantic search on the query (topically relevant capsules).
+    // Frame the query with the explore intent so the embedding aligns with HyPE
+    // question vectors stored at indexing time (question-to-question match).
+    let framed_query = crate::storage::frame_query_for_command(
         &query,
+        crate::storage::QueryIntent::Explore,
+    );
+    let sem_hits = crate::storage::query_capsules_lancedb(
+        &framed_query,
         40,
         None,
         None,

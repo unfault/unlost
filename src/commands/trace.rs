@@ -61,8 +61,19 @@ pub async fn run(
     )
     .await?;
 
+    // Frame the query with the trace intent so the seed ANN search aligns with HyPE
+    // question vectors stored at indexing time (question-to-question match).
+    let framed_query =
+        crate::storage::frame_query_for_command(&query, crate::storage::QueryIntent::Trace);
     let chain = crate::storage::trace_capsules_lancedb(
-        &query, seeds, fan_out, threshold, since_ms, until_ms, embedder, &ws,
+        &framed_query,
+        seeds,
+        fan_out,
+        threshold,
+        since_ms,
+        until_ms,
+        embedder,
+        &ws,
     )
     .await?;
 

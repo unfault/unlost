@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **HyPE-aligned retrieval for all commands**: Each command now frames its user query with a command-specific intent prefix before embedding, turning retrieval into a question-to-question match rather than a keyword-to-document match. This exploits the HyPE (Hypothetical Prompt Embeddings) questions already stored in `questions_text` at indexing time — without any extra LLM call at query time. Framing per command:
+  - `recall`: *"What happened with \<target\>?"*
+  - `brief`: *"Why is the current state of \<target\> the way it is?"*
+  - `challenge`: *"Was the decision about \<target\> the right call?"*
+  - `explore`: *"What are the alternatives and trade-offs for \<target\>?"*
+  - `trace`: *"What sequence of decisions led to \<target\>?"*
+  If the user's input already contains a `?`, the prefix is prepended as a soft bias rather than replacing the phrasing.
+- **`trace` fan-out quality guard**: Fan-out (symbol-linked) capsules that carry no meaningful content — empty `intent` *and* empty `decision` — are now dropped before entering the causal chain. Previously all symbol-linked rows were admitted regardless of content, letting ghost/replay extractions pollute the chain.
+
 ## [0.9.0] - 2026-02-23
 
 ### Added
