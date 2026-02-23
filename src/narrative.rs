@@ -1264,9 +1264,15 @@ THE DECISION
   Cite 1-2 backticked tokens (file paths, symbols, ref=version:...).
 
 ALTERNATIVES
-  A table. Each row: one realistic alternative. Columns (pipe-separated, keep each row on ONE line):
-  Alternative | Upside | Downside | Migration cost | Evidence
-  Use 2-4 rows. "Evidence" cites tokens from any of the three sources, OR states "not in evidence".
+  2-4 alternatives. Each alternative is a named card in this exact format (repeat for each):
+
+  ① <Short name for the alternative>
+    Upside:    <one sentence>
+    Downside:  <one sentence>
+    Cost:      <Low | Medium | High>
+    Evidence:  <1-2 backticked tokens from any source, or "not in evidence">
+
+  Use ①, ②, ③, ④ as the numbering. Each field on its own indented line.
   Alternatives must be concrete and specific to this codebase — not generic industry options.
 
 VERDICT
@@ -1286,7 +1292,7 @@ PROBES
 Rules:
 - Use the code graph as ground truth for what exists. If hotspots show a file is heavily depended on, that's a structural fact.
 - Capsules with failure_mode set (retry_spiral, decision_conflict, drift, etc.) are recorded pain — treat them as evidence against the current approach.
-- Table rows must stay on ONE line. No sub-bullets inside cells. Use short phrases.
+- Do not use tables or pipe-separated rows anywhere. Use the card format above for ALTERNATIVES.
 - Do not mention session IDs, timestamps, or capsule IDs.
 - Do not invent symbols or paths not present in any of the three sources.
 "#;
@@ -1404,9 +1410,10 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
         OutputFormat::Ansi => {
             let mut out = String::with_capacity(s.len() + 256);
             let mut first = true;
-            // Track whether the previous non-empty line was a table row so we
-            // can detect the first row of each table block (= column headers).
-            let mut prev_was_table = false;
+
+            // Card field labels used in ALTERNATIVES cards
+            const CARD_FIELDS: &[&str] =
+                &["Upside:", "Downside:", "Cost:", "Evidence:", "Keep if:", "Change if:"];
 
             for line in s.lines() {
                 let l = line.trim_end();
@@ -1417,14 +1424,24 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
                     .any(|&h| trimmed.eq_ignore_ascii_case(h));
 
                 let is_probe_cmd = trimmed.starts_with("unlost ");
-                let is_table_row = !is_header && trimmed.contains('|');
-                // First row of a table block = column header row
-                let is_table_header_row = is_table_row && !prev_was_table;
+
+                // Card title: lines starting with a circled number ①②③④⑤
+                let is_card_title = trimmed.starts_with(['①', '②', '③', '④', '⑤']);
+
+                // Card field: indented line starting with a known field label
+                let card_field = CARD_FIELDS
+                    .iter()
+                    .find(|&&f| trimmed.starts_with(f))
+                    .copied();
 
                 if !first {
                     out.push('\n');
                 }
                 if is_header && !first {
+                    out.push('\n');
+                }
+                // Add a blank line before each card title for breathing room
+                if is_card_title && !first {
                     out.push('\n');
                 }
                 first = false;
@@ -1437,21 +1454,24 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
                     out.push_str("\x1b[2;36m");
                     out.push_str(l);
                     out.push_str("\x1b[0m");
-                } else if is_table_header_row {
-                    // Bold column headers; dim the pipe separators
-                    out.push_str(&render_table_row(l, true));
-                    // Print a thin separator line under the header
-                    out.push('\n');
-                    out.push_str(&render_table_separator(l));
-                } else if is_table_row {
-                    // Data rows: normal text, dim pipes
-                    out.push_str(&render_table_row(l, false));
+                } else if is_card_title {
+                    // Bold cyan for card titles (the alternative name)
+                    let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    out.push_str(&indent);
+                    out.push_str("\x1b[1;36m");
+                    out.push_str(trimmed);
+                    out.push_str("\x1b[0m");
+                } else if let Some(field) = card_field {
+                    // Dim the field label, normal+colorized for the value
+                    let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    let rest = trimmed.strip_prefix(field).unwrap_or("").trim();
+                    out.push_str(&indent);
+                    out.push_str("\x1b[2m");
+                    out.push_str(field);
+                    out.push_str("\x1b[0m ");
+                    out.push_str(&colorize_backticks(rest));
                 } else {
                     out.push_str(&colorize_backticks(l));
-                }
-
-                if !trimmed.is_empty() {
-                    prev_was_table = is_table_row;
                 }
             }
             out
@@ -1459,60 +1479,6 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
     }
 }
 
-/// Render a single table row: dim the `|` separators, colorize backticks in
-/// cell content, and optionally bold the entire row (for column headers).
-fn render_table_row(line: &str, bold_header: bool) -> String {
-    // Split on `|`, colorize each cell, reassemble with dimmed pipes.
-    let dim_pipe = "\x1b[2m|\x1b[0m";
-    let cells: Vec<&str> = line.split('|').collect();
-    let mut out = String::with_capacity(line.len() + 64);
-
-    for (i, cell) in cells.iter().enumerate() {
-        if i > 0 {
-            out.push_str(dim_pipe);
-        }
-        let colored = colorize_backticks(cell);
-        if bold_header {
-            // Bold + slightly brighter for the header text
-            out.push_str("\x1b[1m");
-            out.push_str(colored.trim());
-            // Pad with spaces to preserve rough alignment
-            if cell.len() > colored.trim().len() {
-                let pad = cell.len() - colored.trim().len();
-                for _ in 0..pad / 2 {
-                    out.push(' ');
-                }
-            }
-            out.push_str("\x1b[0m");
-        } else {
-            out.push_str(&colored);
-        }
-    }
-    out
-}
-
-/// Build a dim separator line that mirrors the column widths of the header row.
-/// e.g. `Alternative | Upside | ...` → `───────────── + ────── + ...`
-fn render_table_separator(header_line: &str) -> String {
-    let dim = "\x1b[2m";
-    let reset = "\x1b[0m";
-    let cells: Vec<&str> = header_line.split('|').collect();
-    let mut out = String::new();
-    for (i, cell) in cells.iter().enumerate() {
-        if i > 0 {
-            out.push_str(dim);
-            out.push('+');
-            out.push_str(reset);
-        }
-        let w = cell.len().max(1);
-        out.push_str(dim);
-        for _ in 0..w {
-            out.push('─');
-        }
-        out.push_str(reset);
-    }
-    out
-}
 
 pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {
     if output != OutputFormat::Ansi {
