@@ -215,8 +215,8 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
     let mut stdout = std::io::stdout();
 
     let config = FlowConfig {
-        embed_model,
-        embed_cache_dir,
+        embed_model: embed_model.clone(),
+        embed_cache_dir: embed_cache_dir.clone(),
         extraction_mode: crate::types::ExtractionMode::Hybrid, // stdio shim is for live, so use hybrid by default
     };
     let mut flow = Flow::new(config);
@@ -225,6 +225,12 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
     let ready = serde_json::json!({"ready": true});
     writeln!(stdout, "{}", serde_json::to_string(&ready)?)?;
     stdout.flush()?;
+
+    // Track the last known workspace directory across record calls so we can
+    // trigger incremental ingest when the session ends (stdin closes).
+    let mut last_directory: Option<String> = None;
+    // Accumulate all touched paths seen this session for changelog detection.
+    let mut all_touched: Vec<String> = Vec::new();
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -262,6 +268,12 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
             "record" => {
                 let params: RecordParams = serde_json::from_value(req.params).unwrap_or_default();
                 let dir_path = Path::new(&params.directory);
+
+                // Track directory and touched paths for end-of-session ingest.
+                if !params.directory.is_empty() {
+                    last_directory = Some(params.directory.clone());
+                }
+                all_touched.extend(params.touched_paths.iter().cloned());
 
                 // Try deduplication if turn_key is provided
                 let should_record = if let Some(ref tk) = params.turn_key {
@@ -301,6 +313,45 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
 
         writeln!(stdout, "{}", serde_json::to_string(&resp)?)?;
         stdout.flush()?;
+    }
+
+    // ── Session end: drain + incremental ingest ───────────────────────────────
+    // stdin closed = OpenCode session ended. Drain buffered capsules first, then
+    // run the same incremental ingest as the Claude Stop hook: git tags (always)
+    // and changelog (when touched or when un-ingested versions exist).
+    flow.drain().await;
+
+    if let Some(ref dir) = last_directory {
+        let dir_path = Path::new(dir.as_str());
+        if let Some(repo_root) = crate::workspace::git_toplevel(dir_path) {
+            if let Ok(ws) = get_or_create_workspace_paths(dir_path) {
+                let embedder = crate::embed::load_embedder(
+                    &embed_model,
+                    embed_cache_dir.as_deref().map(std::path::PathBuf::from),
+                    false,
+                )
+                .await;
+                if let Ok(ref embedder) = embedder {
+                    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout())
+                        && std::env::var_os("NO_COLOR").is_none();
+                    let _ =
+                        crate::git::ingest_git_tags(&ws, &repo_root, embedder, use_color).await;
+                    let changelog_path = repo_root.join("CHANGELOG.md");
+                    let changelog_touched = all_touched
+                        .iter()
+                        .any(|p| p.ends_with("CHANGELOG.md") || p == "CHANGELOG.md");
+                    if changelog_touched || changelog_path.exists() {
+                        let _ = crate::changelog::ingest_changelog(
+                            &ws,
+                            &changelog_path,
+                            embedder,
+                            use_color,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

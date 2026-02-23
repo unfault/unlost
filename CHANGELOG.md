@@ -6,6 +6,7 @@
 - **Git tag ingestion**: Git tags are now first-class capsules (`category: "GitTag"`). Each tag captures its name, dereferenced commit SHA, creator date, tag message, and the files touched by the tagged commit — so queries like "what changed between v0.8.0 and v0.9.0?" can be answered from memory. Deduplicates by tag name in `git/ingested_tags.txt`. Works for both annotated and lightweight tags.
 - **Live changelog re-ingest on Stop hook**: The Claude shim now calls `ingest_changelog` at the end of every session. If `CHANGELOG.md` was in the session's touched paths (or has un-ingested versions), new entries are captured immediately without requiring a manual `unlost replay`. Zero-LLM cost, idempotent.
 - **Live tag ingest on Stop hook**: The Claude shim also calls `ingest_git_tags` on every Stop hook, so tags created during a session are captured as boundary capsules before the next session begins.
+- **OpenCode stdio shim session-end ingest**: The OpenCode stdio shim (`unlost shim opencode`) now runs `ingest_git_tags` and `ingest_changelog` when stdin closes (session end), giving it parity with the Claude Stop hook. Also drains the background worker before process exit to ensure no capsules are lost.
 
 ### Changed
 - **`ingest_git_tags` wired into all batch paths**: `unlost init`, `unlost replay claude`, and `unlost replay opencode` now all call `ingest_git_tags` immediately after `ingest_git_commits`, so tag history is backfilled alongside commit history.
