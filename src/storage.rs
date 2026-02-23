@@ -768,6 +768,7 @@ async fn scan_capsules_lancedb_impl(
             idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let symbols =
             idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let questions_text_col = col_str("questions_text");
 
         for row in 0..batch.num_rows() {
             // Skip early-exit when recent_first since we need all rows to sort
@@ -910,7 +911,15 @@ async fn scan_capsules_lancedb_impl(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
-                    questions: vec![],
+                    questions: questions_text_col
+                        .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                        .map(|s| {
+                            s.split('\n')
+                                .filter(|q| !q.is_empty())
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),

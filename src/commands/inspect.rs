@@ -131,7 +131,13 @@ pub async fn run(
                 if !cap.next_steps.is_empty() {
                     println!("next:      {:?}", cap.next_steps);
                 }
-                println!("symbols:   {:?}\n", cap.symbols);
+                println!("symbols:   {:?}", cap.symbols);
+                if !cap.questions.is_empty() {
+                    for (i, q) in cap.questions.iter().enumerate() {
+                        println!("question[{}]: {}", i, q);
+                    }
+                }
+                println!();
             }
             Ok(())
         }
