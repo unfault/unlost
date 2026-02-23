@@ -1100,38 +1100,106 @@ pub(crate) async fn llm_challenge_narrative(
     workspace_root: &str,
     hits: &[crate::CapsuleHit],
 ) -> anyhow::Result<String> {
-    let cg = if hits.iter().any(|h| !h.capsule.symbols.is_empty()) {
-        let root = std::path::Path::new(workspace_root);
-        match crate::workspace::build_graph_for_workspace(root) {
-            Some(g) => Some(g),
-            None => {
-                tracing::warn!(
-                    "llm_challenge_narrative: failed to build code graph for {workspace_root}, proceeding without relationship grounding"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let root = std::path::Path::new(workspace_root);
+
+    // Build the full graph context (hotspots, deps, routes, file list, stats).
+    // This is the primary source of ground truth for structural questions —
+    // capsules alone often don't capture architectural intent.
+    let graph_ctx = crate::workspace::build_graph_context_for_workspace(root);
+    if graph_ctx.is_none() {
+        tracing::warn!(
+            "llm_challenge_narrative: failed to build code graph for {workspace_root}, proceeding without graph grounding"
+        );
+    }
+
+    // Build per-symbol relationships using the same graph (for capsule annotation).
+    let cg = graph_ctx
+        .as_ref()
+        .and_then(|_| crate::workspace::build_graph_for_workspace(root));
+
+    // Separate changelog capsules — they carry version history and are a
+    // distinct signal from conversational capsules.
+    let (changelog_hits, conv_hits): (Vec<_>, Vec<_>) = hits
+        .iter()
+        .partition(|h| h.meta.source.trim() == "changelog");
 
     let mut context = String::new();
     context.push_str("Decision or technology to challenge:\n");
     context.push_str(target);
     context.push_str("\n\nWorkspace root: ");
     context.push_str(workspace_root);
-    context.push_str("\n\nCapsules (scored by importance — decision/rationale, failure modes, cross-session recurrence):\n");
+    context.push('\n');
 
-    for (i, hit) in hits.iter().enumerate() {
+    // Inject graph context so the LLM can reason about actual code structure,
+    // not just what happened to get recorded in capsules.
+    if let Some(ref gc) = graph_ctx {
+        context.push_str(&format!(
+            "\nCode graph: files={}, functions={}, call_edges={}, import_edges={}, external_modules={}\n",
+            gc.stats.file_count,
+            gc.stats.function_count,
+            gc.stats.calls_edge_count,
+            gc.stats.import_edge_count,
+            gc.stats.external_module_count,
+        ));
+        if !gc.hotspots.is_empty() {
+            context.push_str("hotspots (most-imported files):\n");
+            for (score, path) in gc.hotspots.iter().take(20) {
+                context.push_str(&format!("  - {path} (score={score})\n"));
+            }
+        }
+        if !gc.deps.is_empty() {
+            context.push_str("top hub dependencies:\n");
+            for dep in gc.deps.iter().take(20) {
+                context.push_str(&format!("  - {dep}\n"));
+            }
+        }
+        if !gc.routes.is_empty() {
+            context.push_str("routes:\n");
+            for (route, handler) in gc.routes.iter().take(20) {
+                context.push_str(&format!("  - {route} -> {handler}\n"));
+            }
+        }
+        if !gc.file_paths.is_empty() {
+            context.push_str("source files:\n");
+            for p in gc.file_paths.iter().take(100) {
+                context.push_str(&format!("  - {p}\n"));
+            }
+        }
+        context.push('\n');
+    }
+
+    // Changelog capsules: version history and evolution signals
+    if !changelog_hits.is_empty() {
+        context.push_str("Changelog (version history, ordered newest first):\n");
+        for hit in changelog_hits.iter().take(15) {
+            let cap = &hit.capsule;
+            let meta = &hit.meta;
+            let ref_tok = capsule_ref_token(meta)
+                .map(|r| format!(" {r}"))
+                .unwrap_or_default();
+            context.push_str(&format!("  -{ref_tok}"));
+            if !cap.intent.trim().is_empty() {
+                context.push_str(&format!(" {}", cap.intent.replace('\n', " ")));
+            }
+            if !cap.decision.trim().is_empty() {
+                context.push_str(&format!(" | {}", cap.decision.replace('\n', " ")));
+            }
+            context.push('\n');
+        }
+        context.push('\n');
+    }
+
+    // Conversational capsules: recorded decisions, rationale, failure modes
+    context.push_str("Memory capsules (decisions, rationale, recorded pain — scored by importance):\n");
+    for (i, hit) in conv_hits.iter().enumerate() {
         let cap = &hit.capsule;
         let meta = &hit.meta;
         let ref_tok = capsule_ref_token(meta)
             .map(|r| format!(" ref={r}"))
             .unwrap_or_default();
         context.push_str(&format!(
-            "#{} ts_ms={} source={} category={}{}\n",
+            "#{} source={} category={}{}\n",
             i + 1,
-            hit.ts_ms,
             meta.source,
             cap.category,
             ref_tok,
@@ -1139,7 +1207,7 @@ pub(crate) async fn llm_challenge_narrative(
         if cap.failure_mode != crate::types::FailureMode::None {
             let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
             let fm = fm.trim_matches('"');
-            context.push_str(&format!("failure_mode: {}", fm));
+            context.push_str(&format!("failure_mode: {fm}"));
             if let Some(ref sig) = cap.failure_signals {
                 context.push_str(&format!(" ({})", sig.replace('\n', " ")));
             }
@@ -1178,42 +1246,49 @@ pub(crate) async fn llm_challenge_narrative(
         }
     }
 
-    let preamble = r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice, strictly grounded in workspace memory.
+    let preamble = r#"You are unlost challenge. Your job is to pressure-test a past decision or technology choice.
+
+You have three sources of evidence — use all of them:
+1. Code graph (hotspots, file structure, dependency topology, routes) — ground truth about what actually exists
+2. Changelog (version history) — what changed over time and why
+3. Memory capsules (recorded decisions, rationale, failure modes) — what the team thought and intended
+
+When capsules are thin, lean on the code graph and changelog. They don't lie.
 
 Output EXACTLY these 5 section headers, each on its own line in ALL CAPS, followed by their content.
 No other headers. No preamble. Start directly with the first header.
 
 THE DECISION
-  1-2 sentences. What the decision actually was, per capsule evidence. Cite 1-2 backticked tokens.
-  If the capsules don't clearly record this decision, say so plainly.
+  1-2 sentences. What the decision actually was, inferred from all three sources.
+  If memory capsules don't record it explicitly, infer from the code graph and changelog.
+  Cite 1-2 backticked tokens (file paths, symbols, ref=version:...).
 
 ALTERNATIVES
   A table. Each row: one realistic alternative. Columns (pipe-separated, keep each row on ONE line):
   Alternative | Upside | Downside | Migration cost | Evidence
-  Use 2-4 rows. "Evidence" must cite 1-2 backticked tokens, OR state "not in memory".
-  Only include alternatives that are plausible given the capsule context — do not invent generic options.
+  Use 2-4 rows. "Evidence" cites tokens from any of the three sources, OR states "not in evidence".
+  Alternatives must be concrete and specific to this codebase — not generic industry options.
 
 VERDICT
   Two lines:
-  Keep if: <condition grounded in evidence>
-  Change if: <condition grounded in evidence>
+  Keep if: <condition grounded in code graph / changelog / capsule evidence>
+  Change if: <condition grounded in code graph / changelog / capsule evidence>
 
 UNKNOWNS
-  Bullet list starting with "• ". Explicit gaps in memory that would change the verdict.
-  Always include at least one bullet. If memory is thin, this section carries the weight.
+  Bullet list starting with "• ". Gaps that would change the verdict — things not visible in any source.
+  Always include at least one bullet.
 
 PROBES
-  2-4 lines. Each is a concrete unlost command the reader should run next.
+  2-4 lines. Concrete next steps: unlost commands to dig deeper.
   Use `unlost query "..."` for specific questions, `unlost trace ...` for causal chains.
   No bullet markers on these lines.
 
 Rules:
-- Base output ONLY on the provided capsules. Do not invent symbols, paths, decisions, or technologies not present.
-- Every non-trivial claim must cite 1-2 backticked tokens from capsules (paths, symbols, ref=version:..., ref=commit:...).
-- Table rows must stay on ONE line. No sub-bullets inside table cells. Use short phrases.
+- Use the code graph as ground truth for what exists. If hotspots show a file is heavily depended on, that's a structural fact.
 - Capsules with failure_mode set (retry_spiral, decision_conflict, drift, etc.) are recorded pain — treat them as evidence against the current approach.
+- Table rows must stay on ONE line. No sub-bullets inside cells. Use short phrases.
 - Do not mention session IDs, timestamps, or capsule IDs.
-- If the target decision isn't mentioned in the capsules at all, say so in THE DECISION and put everything in UNKNOWNS.
+- Do not invent symbols or paths not present in any of the three sources.
 "#;
 
     Ok(

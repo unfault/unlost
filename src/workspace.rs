@@ -601,6 +601,136 @@ pub fn build_graph_for_workspace(root: &std::path::Path) -> Option<unfault_core:
     Some(build_code_graph(&sem_entries))
 }
 
+/// Rich graph context for use in LLM prompts that need to reason about code structure.
+pub struct GraphContext {
+    pub stats: unfault_core::GraphStats,
+    /// (callers, symbol_path) ordered by callers descending — most-imported files first
+    pub hotspots: Vec<(usize, String)>,
+    /// Dependencies of the most central file
+    pub deps: Vec<String>,
+    /// Route patterns discovered in the codebase
+    pub routes: Vec<(String, String)>,
+    /// All source file paths (relative to root)
+    pub file_paths: Vec<String>,
+}
+
+/// Build a `CodeGraph` plus derived structural context (hotspots, deps, routes, files).
+///
+/// Returns `None` on any failure. Callers should log a warning and proceed
+/// without graph data rather than surfacing an error to the user.
+pub fn build_graph_context_for_workspace(root: &std::path::Path) -> Option<GraphContext> {
+    use ignore::WalkBuilder;
+    use std::sync::Arc;
+    use unfault_core::{
+        build_code_graph,
+        parse::parse_source_file,
+        semantics::{build_source_semantics, CommonSemantics, SourceSemantics},
+        FileId, SourceFile,
+    };
+
+    let walker = WalkBuilder::new(root).hidden(true).git_ignore(true).build();
+
+    let mut sem_entries: Vec<(FileId, Arc<SourceSemantics>)> = Vec::new();
+    let mut file_paths: Vec<String> = Vec::new();
+    let mut file_id_counter: u64 = 0;
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(lang) = detect_language(path) else {
+            continue;
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        let rel_str = rel.to_string_lossy().to_string();
+        file_paths.push(rel_str.clone());
+        let source_file = SourceFile {
+            path: rel_str,
+            language: lang,
+            content,
+        };
+        let file_id = FileId(file_id_counter);
+        file_id_counter += 1;
+
+        let parsed = match parse_source_file(file_id, &source_file) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let sem = match build_source_semantics(&parsed) {
+            Ok(Some(s)) => s,
+            _ => continue,
+        };
+        sem_entries.push((file_id, Arc::new(sem)));
+    }
+
+    if sem_entries.is_empty() {
+        return None;
+    }
+
+    let cg = build_code_graph(&sem_entries);
+    let stats = cg.stats();
+
+    // Hotspots: most-imported files by centrality
+    let centrality = unfault_core::graph::traversal::get_centrality(&cg, 25);
+    let hotspots: Vec<(usize, String)> = centrality
+        .central_files
+        .iter()
+        .map(|(path, score)| (*score as usize, path.clone()))
+        .collect();
+
+    // Dependencies of the top hub file
+    let deps: Vec<String> = if let Some((top_path, _)) = centrality.central_files.first() {
+        let dep_ctx = unfault_core::graph::traversal::get_dependencies(&cg, top_path);
+        let mut all: Vec<String> = dep_ctx
+            .dependencies
+            .into_iter()
+            .chain(dep_ctx.library_users)
+            .collect();
+        all.sort();
+        all.dedup();
+        all.truncate(25);
+        all
+    } else {
+        Vec::new()
+    };
+
+    // Routes
+    let mut routes: Vec<(String, String)> = Vec::new();
+    for (_file_id, sem) in &sem_entries {
+        let common: &dyn CommonSemantics = match sem.as_ref() {
+            SourceSemantics::Python(s) => s,
+            SourceSemantics::Go(s) => s,
+            SourceSemantics::Rust(s) => s,
+            SourceSemantics::Typescript(s) => s,
+        };
+        for route in common.route_patterns() {
+            let method = route.method.as_str();
+            let path = route.path.as_str();
+            let handler = route.handler_name.as_deref().unwrap_or(&route.handler_file);
+            routes.push((format!("{method} {path}"), handler.to_string()));
+        }
+    }
+    routes.sort_by(|a, b| a.0.cmp(&b.0));
+    routes.dedup_by(|a, b| a.0 == b.0);
+    routes.truncate(25);
+
+    file_paths.sort();
+
+    Some(GraphContext {
+        stats,
+        hotspots,
+        deps,
+        routes,
+        file_paths,
+    })
+}
+
 /// Given a `CodeGraph` and a list of symbol strings (file paths, identifiers,
 /// anything from a capsule's `symbols` field), return a compact one-line
 /// summary of the import relationships for symbols that resolve to file nodes.
