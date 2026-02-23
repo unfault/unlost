@@ -5,6 +5,9 @@
 ### Added
 - **`unlost challenge --deep`**: `challenge` is now concise by default — outputs only `THE DECISION`, `ALTERNATIVES` (2-3 options, no Cost/Evidence fields), and `VERDICT`. Pass `--deep` to get the full analysis with `UNKNOWNS` and `PROBES` sections.
 
+### Fixed
+- **Failure mode interventions are now session-scoped**: `evaluate_failure_modes` previously read the last 5 capsules from LanceDB with no session boundary awareness. A `Drift`, `RetrySpiral`, `Rediscovery`, or `FalseProgress` tag on the final capsule of a previous session would fire a system note on the very first message of the next session — with no actual friction to detect. The function now accepts a session ID and filters history to the current session only before evaluating. If no capsules from the current session exist yet, it returns `None`. Sessions with no known ID (e.g. the HTTP proxy path) retain the previous cross-session behaviour.
+
 ### Changed
 - **HyPE-aligned retrieval for all commands**: Each command now frames its user query with a command-specific intent prefix before embedding, turning retrieval into a question-to-question match rather than a keyword-to-document match. This exploits the HyPE (Hypothetical Prompt Embeddings) questions already stored in `questions_text` at indexing time — without any extra LLM call at query time. Framing per command:
   - `recall`: *"What happened with \<target\>?"*

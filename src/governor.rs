@@ -6,9 +6,9 @@
 //!
 //! Total overhead: <15ms (local emotion + LanceDB query + matching)
 
+use crate::types::{SymptomChannels, TrajectoryState};
 use crate::CapsuleHit;
 use crate::IntentCapsule;
-use crate::types::{SymptomChannels, TrajectoryState};
 
 /// Constants for the Trajectory Model (Calibrated Feb 15, 2026)
 const WEIGHT_EFFORT: f32 = 0.34;
@@ -951,13 +951,25 @@ pub fn evaluate_stateless_friction(
     None
 }
 
-pub fn evaluate_failure_modes(history: &[CapsuleHit]) -> Option<String> {
-    // Check if the most recent capsules indicate a recurring failure mode
-    if history.is_empty() {
+pub fn evaluate_failure_modes(history: &[CapsuleHit], session_id: Option<&str>) -> Option<String> {
+    // Check if the most recent capsules indicate a recurring failure mode.
+    // If a session ID is provided, restrict evaluation to capsules from that session only —
+    // this prevents failure modes tagged in a previous session from firing at the start of a
+    // new one.
+    let session_history: Vec<&CapsuleHit> = if let Some(sid) = session_id {
+        history
+            .iter()
+            .filter(|h| h.meta.agent_session_id.as_deref() == Some(sid))
+            .collect()
+    } else {
+        history.iter().collect()
+    };
+
+    if session_history.is_empty() {
         return None;
     }
 
-    let mut recent: Vec<&CapsuleHit> = history.iter().collect();
+    let mut recent: Vec<&CapsuleHit> = session_history;
     recent.sort_by_key(|h| std::cmp::Reverse(h.ts_ms));
 
     let last = recent.first()?;

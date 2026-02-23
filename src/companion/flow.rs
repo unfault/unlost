@@ -420,7 +420,7 @@ impl Flow {
         }
 
         // If no friction, check for LLM-detected failure modes (drift, false_progress, rediscovery)
-        let note = evaluate_failure_modes(&history);
+        let note = evaluate_failure_modes(&history, final_session_id.as_deref());
 
         if note.is_some() {
             tracing::info!(
