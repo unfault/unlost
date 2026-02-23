@@ -1446,32 +1446,78 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
                 }
                 first = false;
 
+                const WRAP: usize = 80;
+
                 if is_header {
                     out.push_str("\x1b[1;97m");
                     out.push_str(trimmed);
                     out.push_str("\x1b[0m");
                 } else if is_probe_cmd {
-                    out.push_str("\x1b[2;36m");
-                    out.push_str(l);
-                    out.push_str("\x1b[0m");
-                } else if is_card_title {
-                    // Bold cyan for card titles (the alternative name)
+                    // Normal (not dim) cyan so it's readable on black backgrounds.
+                    // Wrap long probe lines with a hanging indent matching the leading spaces.
                     let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    let hang = indent.len() + 2; // extra indent for continuation lines
+                    for (wi, wl) in wrap_ansi_line(l.trim_end(), WRAP, hang).iter().enumerate() {
+                        if wi > 0 {
+                            out.push('\n');
+                            for _ in 0..hang {
+                                out.push(' ');
+                            }
+                        }
+                        out.push_str(&indent);
+                        out.push_str("\x1b[36m");
+                        out.push_str(wl.trim_start());
+                        out.push_str("\x1b[0m");
+                    }
+                } else if is_card_title {
+                    // Bold cyan; insert a space between the circled number and the title text.
+                    let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    // The circle is one unicode scalar; split it off.
+                    let mut chars = trimmed.chars();
+                    let circle = chars.next().unwrap_or('①');
+                    let rest_title = chars.as_str().trim_start();
                     out.push_str(&indent);
                     out.push_str("\x1b[1;36m");
-                    out.push_str(trimmed);
+                    out.push(circle);
+                    out.push(' ');
+                    out.push_str(rest_title);
                     out.push_str("\x1b[0m");
                 } else if let Some(field) = card_field {
-                    // Dim the field label, normal+colorized for the value
+                    // Dim the field label; wrap the value at 80 cols with a hanging indent.
                     let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
                     let rest = trimmed.strip_prefix(field).unwrap_or("").trim();
+                    // Hanging indent = indent + field width + 1 space
+                    let hang = indent.len() + field.len() + 1;
+                    let colored_rest = colorize_backticks(rest);
+                    let wrapped = wrap_ansi_line(&colored_rest, WRAP.saturating_sub(hang), 0);
                     out.push_str(&indent);
                     out.push_str("\x1b[2m");
                     out.push_str(field);
                     out.push_str("\x1b[0m ");
-                    out.push_str(&colorize_backticks(rest));
+                    for (wi, wl) in wrapped.iter().enumerate() {
+                        if wi > 0 {
+                            out.push('\n');
+                            for _ in 0..hang {
+                                out.push(' ');
+                            }
+                        }
+                        out.push_str(wl);
+                    }
                 } else {
-                    out.push_str(&colorize_backticks(l));
+                    // Regular prose — wrap at 80, preserving leading indent.
+                    let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+                    let hang = indent.len();
+                    let colored = colorize_backticks(l.trim_end());
+                    let wrapped = wrap_ansi_line(&colored, WRAP, hang);
+                    for (wi, wl) in wrapped.iter().enumerate() {
+                        if wi > 0 {
+                            out.push('\n');
+                            for _ in 0..hang {
+                                out.push(' ');
+                            }
+                        }
+                        out.push_str(wl);
+                    }
                 }
             }
             out
@@ -1479,6 +1525,67 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
     }
 }
 
+
+/// Wrap a single line (which may already contain ANSI escape sequences) to
+/// `max_visible_width` columns. Returns one or more segments; callers are
+/// responsible for rejoining with newline + hanging indent.
+///
+/// We measure visible width by skipping `\x1b[...m` sequences (SGR only).
+/// Words are split on ASCII spaces; we never break inside a word.
+fn wrap_ansi_line(line: &str, max_visible_width: usize, _hang: usize) -> Vec<String> {
+    if max_visible_width == 0 {
+        return vec![line.to_string()];
+    }
+
+    /// Count visible (non-ANSI-escape) characters in a str.
+    fn visible_len(s: &str) -> usize {
+        let mut len = 0;
+        let mut in_esc = false;
+        for ch in s.chars() {
+            if ch == '\x1b' {
+                in_esc = true;
+            } else if in_esc {
+                if ch == 'm' {
+                    in_esc = false;
+                }
+            } else {
+                len += 1;
+            }
+        }
+        len
+    }
+
+    // Split into space-delimited tokens preserving the spaces as part of tokens
+    // so we can reconstruct faithfully.
+    let words: Vec<&str> = line.split(' ').collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+
+    for (i, word) in words.iter().enumerate() {
+        let wlen = visible_len(word);
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = wlen;
+        } else if current_len + 1 + wlen <= max_visible_width {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + wlen;
+        } else {
+            lines.push(current.clone());
+            current = word.to_string();
+            current_len = wlen;
+        }
+        let _ = i; // suppress unused warning
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
 
 pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {
     if output != OutputFormat::Ansi {
