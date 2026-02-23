@@ -23,7 +23,39 @@ pub enum ProviderType {
 #[command(
     name = "unlost",
     version,
-    about = "Local-first code memory (record, init, query)"
+    about = "Local-first code memory (record, init, query)",
+    help_template = "\
+unlost {version}
+{about}
+
+{usage-heading} {usage}
+
+Memory:
+  query      Semantic search across recorded capsules
+  trace      Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
+  recall     Recall the story so far (proactive overview)
+  explore    Explore future paths grounded in your workspace memory
+  challenge  Pressure-test a past decision or technology choice using your workspace memory
+  brief      Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
+
+Workspace:
+  init       Seed LanceDB from the current codebase (unfault-core graph)
+  reindex    Rebuild LanceDB index from capsules.jsonl
+  clear      Delete all generated data for the current workspace
+  where      Show where the workspace's files are stored
+
+Setup:
+  config     Manage configuration (LLM provider, etc.)
+  model      Manage local models (download, etc.)
+
+Diagnostics:
+  metrics    Show workspace metrics (local, derived from metrics.jsonl)
+  replay     Replay/backfill agent transcripts into unlost
+  inspect    Inspect stored capsules for this workspace
+
+Options:
+{options}
+"
 )]
 pub struct Cli {
     /// Logging level for unlost (overrides RUST_LOG when set)

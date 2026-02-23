@@ -11,9 +11,14 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.command.is_none() {
         Cli::command().print_help()?;
-        println!(
-            "\n\nTry:\n- unlost config agent opencode --path .\n- unlost config agent claude --global\n- unlost config llm anthropic --model claude-3-5-sonnet-20241022\n- unlost init --path .\n- unlost recall\n- unlost query \"what are the routes available?\"\n"
-        );
+        println!("\nTry:");
+        println!("- unlost config agent opencode --path .");
+        println!("- unlost config agent claude --global");
+        println!("- unlost config llm anthropic --model claude-3-5-sonnet-20241022");
+        println!("- unlost init --path .");
+        println!("- unlost recall");
+        println!("- unlost query \"what are the routes available?\"");
+        println!();
         return Ok(());
     }
 
@@ -293,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
 
 async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
     match command {

@@ -8,6 +8,7 @@
 - **`GraphContext` + `build_graph_context_for_workspace`**: New helper in `workspace.rs` that builds the full unfault-core code graph and extracts hotspots (centrality), hub dependencies, routes, and file paths in one call. Used by `challenge` to inject structural ground truth into the LLM prompt.
 
 ### Changed
+- **Grouped help output**: `unlost --help` and `unlost` (no args) now display commands organised into four sections — **Memory** (`query`, `trace`, `recall`, `explore`, `challenge`, `brief`), **Workspace** (`init`, `reindex`, `clear`, `where`), **Setup** (`config`, `model`), and **Diagnostics** (`metrics`, `replay`, `inspect`) — instead of a single flat list. Implemented via a custom `help_template` on the root `Cli` struct (clap's `next_help_heading` derive attribute does not apply to struct-variant subcommands).
 - **`explore` prompt redesign**: Rewritten to be genuinely open-ended and generative — a thinking partner, not an auditor. The LLM is instructed to use workspace memory as background and constraint, then think freely beyond it. Alternatives are labelled `[memory]` or `[outside]` so the user knows what is grounded and what is creative.
 - **`challenge` alternatives format**: Replaced pipe-separated table (unreadable at terminal width) with named card format per alternative. Each card uses circled numbers (①②③④), with dimmed field labels (`Upside:`, `Downside:`, `Cost:`, `Evidence:`) and a blank line between cards for scannability.
 
