@@ -210,10 +210,7 @@ impl From<RecordResult> for Response {
 ///
 /// Reads JSON requests from stdin, processes them via the flow, and writes
 /// JSON responses to stdout. Signals readiness with `{"ready": true}` on startup.
-pub async fn run(
-    embed_model: String,
-    embed_cache_dir: Option<String>,
-) -> anyhow::Result<()> {
+pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -265,7 +262,7 @@ pub async fn run(
             "record" => {
                 let params: RecordParams = serde_json::from_value(req.params).unwrap_or_default();
                 let dir_path = Path::new(&params.directory);
-                
+
                 // Try deduplication if turn_key is provided
                 let should_record = if let Some(ref tk) = params.turn_key {
                     if let Ok(ws) = get_or_create_workspace_paths(dir_path) {
@@ -273,7 +270,10 @@ pub async fn run(
                         if seen.contains(tk) {
                             false
                         } else {
-                            crate::companion::shims::opencode::append_replayed(&ws.id, &[tk.clone()]);
+                            crate::companion::shims::opencode::append_replayed(
+                                &ws.id,
+                                &[tk.clone()],
+                            );
                             true
                         }
                     } else {

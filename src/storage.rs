@@ -561,7 +561,7 @@ pub(crate) async fn query_capsules_lancedb(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+                    questions: vec![],
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -910,7 +910,7 @@ async fn scan_capsules_lancedb_impl(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+                    questions: vec![],
                 },
                 meta: crate::ResponseMeta {
                     source: src.to_string(),
@@ -1038,15 +1038,7 @@ pub(crate) async fn trace_capsules_lancedb(
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
     // Step 1: seed set via vector ANN
     let seeds = query_capsules_lancedb(
-        query,
-        seed_limit,
-        None,
-        None,
-        None,
-        since_ms,
-        until_ms,
-        embedder,
-        ws,
+        query, seed_limit, None, None, None, since_ms, until_ms, embedder, ws,
     )
     .await?;
 
@@ -1071,7 +1063,8 @@ pub(crate) async fn trace_capsules_lancedb(
         Err(_) => return Ok(seeds),
     };
 
-    let mut all_hits: std::collections::HashMap<String, crate::CapsuleHit> = std::collections::HashMap::new();
+    let mut all_hits: std::collections::HashMap<String, crate::CapsuleHit> =
+        std::collections::HashMap::new();
 
     // Add seeds first (they pass the threshold by definition)
     for h in seeds {
@@ -1140,8 +1133,8 @@ pub(crate) async fn trace_capsules_lancedb(
             let assistant_emotion_conf = col_f32("assistant_emotion_conf");
             let assistant_valence = col_f32("assistant_valence");
             let assistant_intensity = col_f32("assistant_intensity");
-            let next_steps_col =
-                idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+            let next_steps_col = idx("next_steps")
+                .and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
             let symbols_col =
                 idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
 
@@ -1166,28 +1159,52 @@ pub(crate) async fn trace_capsules_lancedb(
                 let http_status = http_status_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                     .unwrap_or_default();
-                let cat = category.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                let src = source.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                let up = upstream_host.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                let path = request_path.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let cat = category
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
+                let src = source
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
+                let up = upstream_host
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
+                let path = request_path
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
                 let agent_session = agent_session_id_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
-                let i_text = intent.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                let d_text = decision.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                let r_text = rationale.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
+                let i_text = intent
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
+                let d_text = decision
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
+                let r_text = rationale
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or("");
 
                 let read_emotion_local = |label: Option<&StringArray>,
                                           conf: Option<&Float32Array>,
                                           val: Option<&Float32Array>,
                                           inten: Option<&Float32Array>|
                  -> Option<crate::emotion::EmotionMeta> {
-                    let lbl = label.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or("");
-                    if lbl.trim().is_empty() { return None; }
+                    let lbl = label
+                        .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                        .unwrap_or("");
+                    if lbl.trim().is_empty() {
+                        return None;
+                    }
                     Some(crate::emotion::EmotionMeta {
                         label: lbl.to_string(),
-                        confidence: conf.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
-                        valence: val.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
-                        intensity: inten.and_then(|a| (!a.is_null(row)).then(|| a.value(row))).unwrap_or_default(),
+                        confidence: conf
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                            .unwrap_or_default(),
+                        valence: val
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                            .unwrap_or_default(),
+                        intensity: inten
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                            .unwrap_or_default(),
                     })
                 };
 
@@ -1197,7 +1214,10 @@ pub(crate) async fn trace_capsules_lancedb(
                 {
                     let values = sym_arr.value(row);
                     if let Some(sa) = values.as_any().downcast_ref::<StringArray>() {
-                        syms = (0..sa.len()).filter(|&i| !sa.is_null(i)).map(|i| sa.value(i).to_string()).collect();
+                        syms = (0..sa.len())
+                            .filter(|&i| !sa.is_null(i))
+                            .map(|i| sa.value(i).to_string())
+                            .collect();
                     }
                 }
                 let mut steps: Vec<String> = Vec::new();
@@ -1206,43 +1226,59 @@ pub(crate) async fn trace_capsules_lancedb(
                 {
                     let values = ns_arr.value(row);
                     if let Some(sa) = values.as_any().downcast_ref::<StringArray>() {
-                        steps = (0..sa.len()).filter(|&i| !sa.is_null(i)).map(|i| sa.value(i).to_string()).collect();
+                        steps = (0..sa.len())
+                            .filter(|&i| !sa.is_null(i))
+                            .map(|i| sa.value(i).to_string())
+                            .collect();
                     }
                 }
 
                 // Fan-out hits get distance = threshold (they're linked by symbol, not semantic score)
                 let fan_distance = distance_threshold * 0.9;
 
-                all_hits.insert(id.clone(), crate::CapsuleHit {
-                    id,
-                    ts_ms,
-                    conn_id,
-                    exchange_seq,
-                    distance: fan_distance,
-                    user_emotion: read_emotion_local(user_emotion_label, user_emotion_conf, user_valence, user_intensity),
-                    assistant_emotion: read_emotion_local(assistant_emotion_label, assistant_emotion_conf, assistant_valence, assistant_intensity),
-                    capsule: crate::IntentCapsule {
-                        category: cat.to_string(),
-                        intent: i_text.to_string(),
-                        decision: d_text.to_string(),
-                        rationale: r_text.to_string(),
-                        next_steps: steps,
-                        symbols: syms,
-                        user_symbols: vec![],
-                        failure_mode: crate::types::FailureMode::None,
-                        failure_signals: None,
-                        extraction_mode: crate::types::ExtractionMode::None,
-                        questions: vec![],
+                all_hits.insert(
+                    id.clone(),
+                    crate::CapsuleHit {
+                        id,
+                        ts_ms,
+                        conn_id,
+                        exchange_seq,
+                        distance: fan_distance,
+                        user_emotion: read_emotion_local(
+                            user_emotion_label,
+                            user_emotion_conf,
+                            user_valence,
+                            user_intensity,
+                        ),
+                        assistant_emotion: read_emotion_local(
+                            assistant_emotion_label,
+                            assistant_emotion_conf,
+                            assistant_valence,
+                            assistant_intensity,
+                        ),
+                        capsule: crate::IntentCapsule {
+                            category: cat.to_string(),
+                            intent: i_text.to_string(),
+                            decision: d_text.to_string(),
+                            rationale: r_text.to_string(),
+                            next_steps: steps,
+                            symbols: syms,
+                            user_symbols: vec![],
+                            failure_mode: crate::types::FailureMode::None,
+                            failure_signals: None,
+                            extraction_mode: crate::types::ExtractionMode::None,
+                            questions: vec![],
+                        },
+                        meta: crate::ResponseMeta {
+                            source: src.to_string(),
+                            upstream_host: up.to_string(),
+                            request_path: path.to_string(),
+                            http_status: http_status.max(0) as u16,
+                            agent_session_id: agent_session,
+                            usage: None,
+                        },
                     },
-                    meta: crate::ResponseMeta {
-                        source: src.to_string(),
-                        upstream_host: up.to_string(),
-                        request_path: path.to_string(),
-                        http_status: http_status.max(0) as u16,
-                        agent_session_id: agent_session,
-                        usage: None,
-                    },
-                });
+                );
 
                 if all_hits.len() >= seed_limit * fan_out_per_seed {
                     break;
@@ -1434,5 +1470,203 @@ pub(crate) async fn insert_capsule_row(
         .execute()
         .await
         .context("lancedb insert failed")?;
+    Ok(())
+}
+
+/// A pre-assembled row ready for batch insertion.
+pub(crate) struct CapsuleRow {
+    pub conn_id: u64,
+    pub exchange_seq: u64,
+    pub ts_ms: i64,
+    pub meta: crate::ResponseMeta,
+    pub capsule: crate::IntentCapsule,
+    /// Pre-computed embedding vector (len must be 384).
+    pub embedding: Vec<f32>,
+}
+
+/// Insert a batch of capsule rows in a single LanceDB write.
+/// Callers are responsible for computing embeddings up front
+/// (e.g. via `crate::embed::embed_texts_batch`).
+pub(crate) async fn insert_capsule_batch(
+    table: &lancedb::Table,
+    rows: &[CapsuleRow],
+) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let schema = capsules_schema();
+    let n = rows.len();
+
+    let mut ids: Vec<String> = Vec::with_capacity(n);
+    let mut ts_ms_vec: Vec<i64> = Vec::with_capacity(n);
+    let mut source_vec: Vec<String> = Vec::with_capacity(n);
+    let mut upstream_host_vec: Vec<String> = Vec::with_capacity(n);
+    let mut request_path_vec: Vec<String> = Vec::with_capacity(n);
+    let mut http_status_vec: Vec<i32> = Vec::with_capacity(n);
+    let mut conn_id_vec: Vec<i64> = Vec::with_capacity(n);
+    let mut exchange_seq_vec: Vec<i64> = Vec::with_capacity(n);
+    let mut agent_session_id_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut agent_provider_id_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut agent_model_id_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut agent_cost_vec: Vec<Option<f64>> = Vec::with_capacity(n);
+    let mut tokens_input_vec: Vec<Option<i64>> = Vec::with_capacity(n);
+    let mut tokens_output_vec: Vec<Option<i64>> = Vec::with_capacity(n);
+    let mut tokens_reasoning_vec: Vec<Option<i64>> = Vec::with_capacity(n);
+    let mut tokens_cache_read_vec: Vec<Option<i64>> = Vec::with_capacity(n);
+    let mut tokens_cache_write_vec: Vec<Option<i64>> = Vec::with_capacity(n);
+    // emotions: all None during reindex (not stored in JSONL)
+    let mut category_vec: Vec<String> = Vec::with_capacity(n);
+    let mut intent_vec: Vec<String> = Vec::with_capacity(n);
+    let mut decision_vec: Vec<String> = Vec::with_capacity(n);
+    let mut rationale_vec: Vec<String> = Vec::with_capacity(n);
+    let mut next_steps_builder = ListBuilder::new(StringBuilder::new());
+    let mut symbols_builder = ListBuilder::new(StringBuilder::new());
+    let mut questions_text_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    // Flat embedding storage: n * 384 f32 values
+    let mut embeddings_flat: Vec<Option<Vec<Option<f32>>>> = Vec::with_capacity(n);
+
+    for row in rows {
+        ids.push(Uuid::new_v4().to_string());
+        ts_ms_vec.push(row.ts_ms);
+        source_vec.push(row.meta.source.clone());
+        upstream_host_vec.push(row.meta.upstream_host.clone());
+        request_path_vec.push(row.meta.request_path.clone());
+        http_status_vec.push(row.meta.http_status as i32);
+        conn_id_vec.push(row.conn_id as i64);
+        exchange_seq_vec.push(row.exchange_seq as i64);
+        agent_session_id_vec.push(row.meta.agent_session_id.clone());
+        agent_provider_id_vec.push(row.meta.usage.as_ref().and_then(|u| u.provider_id.clone()));
+        agent_model_id_vec.push(row.meta.usage.as_ref().and_then(|u| u.model_id.clone()));
+        agent_cost_vec.push(row.meta.usage.as_ref().and_then(|u| u.cost));
+        tokens_input_vec.push(row.meta.usage.as_ref().and_then(|u| u.tokens_input));
+        tokens_output_vec.push(row.meta.usage.as_ref().and_then(|u| u.tokens_output));
+        tokens_reasoning_vec.push(row.meta.usage.as_ref().and_then(|u| u.tokens_reasoning));
+        tokens_cache_read_vec.push(row.meta.usage.as_ref().and_then(|u| u.tokens_cache_read));
+        tokens_cache_write_vec.push(row.meta.usage.as_ref().and_then(|u| u.tokens_cache_write));
+        category_vec.push(row.capsule.category.clone());
+        intent_vec.push(row.capsule.intent.clone());
+        decision_vec.push(row.capsule.decision.clone());
+        rationale_vec.push(row.capsule.rationale.clone());
+
+        for step in &row.capsule.next_steps {
+            next_steps_builder.values().append_value(step);
+        }
+        next_steps_builder.append(true);
+
+        for sym in &row.capsule.symbols {
+            symbols_builder.values().append_value(sym);
+        }
+        symbols_builder.append(true);
+
+        questions_text_vec.push(if row.capsule.questions.is_empty() {
+            None
+        } else {
+            Some(row.capsule.questions.join("\n"))
+        });
+
+        if row.embedding.len() != 384 {
+            anyhow::bail!(
+                "embedding dimension mismatch in batch: got {}",
+                row.embedding.len()
+            );
+        }
+        embeddings_flat.push(Some(row.embedding.iter().map(|&v| Some(v)).collect()));
+    }
+
+    let null_f32: Vec<Option<f32>> = vec![None; n];
+    let null_str: Vec<Option<&str>> = vec![None; n];
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(
+                ids.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(ts_ms_vec)),
+            Arc::new(StringArray::from(
+                source_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                upstream_host_vec
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                request_path_vec
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Int32Array::from(http_status_vec)),
+            Arc::new(Int64Array::from(conn_id_vec)),
+            Arc::new(Int64Array::from(exchange_seq_vec)),
+            Arc::new(StringArray::from(
+                agent_session_id_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                agent_provider_id_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                agent_model_id_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Float64Array::from(agent_cost_vec)),
+            Arc::new(Int64Array::from(tokens_input_vec)),
+            Arc::new(Int64Array::from(tokens_output_vec)),
+            Arc::new(Int64Array::from(tokens_reasoning_vec)),
+            Arc::new(Int64Array::from(tokens_cache_read_vec)),
+            Arc::new(Int64Array::from(tokens_cache_write_vec)),
+            // emotions: all null during reindex
+            Arc::new(StringArray::from(null_str.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(StringArray::from(null_str.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(StringArray::from(
+                category_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                intent_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                decision_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                rationale_vec.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(next_steps_builder.finish()),
+            Arc::new(symbols_builder.finish()),
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(embeddings_flat, 384),
+            ),
+            Arc::new(StringArray::from(
+                questions_text_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .context("failed to build batch insert RecordBatch")?;
+
+    let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+    table
+        .add(batches)
+        .execute()
+        .await
+        .context("lancedb batch insert failed")?;
     Ok(())
 }

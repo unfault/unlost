@@ -88,6 +88,30 @@ pub(crate) async fn embed_text(embedder: &Embedder, text: &str) -> anyhow::Resul
     .context("embedding task failed")?
 }
 
+/// Embed a batch of texts in a single ONNX inference call.
+/// Much faster than calling `embed_text` N times: avoids per-call
+/// spawn_blocking overhead and lets the ONNX runtime process all
+/// texts together.
+pub(crate) async fn embed_texts_batch(
+    embedder: &Embedder,
+    texts: Vec<String>,
+) -> anyhow::Result<Vec<Vec<f32>>> {
+    if texts.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = texts.len();
+    let embedder = embedder.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut model = embedder
+            .lock()
+            .map_err(|_| anyhow::anyhow!("embedder lock poisoned"))?;
+        let out = model.embed(texts, Some(n))?;
+        Ok(out)
+    })
+    .await
+    .context("batch embedding task failed")?
+}
+
 pub(crate) async fn download_model(
     model: &str,
     cache_dir: Option<&str>,

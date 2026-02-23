@@ -1,7 +1,7 @@
 //! OpenCode replay shim.
 //!
 //! Replays OpenCode messages from disk storage into unlost capsules.
-//! 
+//!
 //! OpenCode stores data in `~/.local/share/opencode/storage/`:
 //! - `session/<project-hash>/ses_*.json` - Session metadata with `directory` field
 //! - `message/ses_*/msg_*.json` - Messages (mixed across all projects)
@@ -169,9 +169,7 @@ fn xdg_data_home() -> PathBuf {
 }
 
 fn opencode_storage_dir() -> PathBuf {
-    xdg_data_home()
-        .join("opencode")
-        .join("storage")
+    xdg_data_home().join("opencode").join("storage")
 }
 
 /// Find all sessions that map to the given workspace directory.
@@ -183,7 +181,9 @@ fn find_sessions_for_workspace(workspace_dir: &Path) -> anyhow::Result<Vec<(Stri
         return Ok(Vec::new());
     }
 
-    let workspace_canonical = workspace_dir.canonicalize().unwrap_or_else(|_| workspace_dir.to_path_buf());
+    let workspace_canonical = workspace_dir
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_dir.to_path_buf());
     let mut results: Vec<(String, String)> = Vec::new(); // (session_id, project_id)
 
     // Iterate over project hash directories
@@ -214,7 +214,9 @@ fn find_sessions_for_workspace(workspace_dir: &Path) -> anyhow::Result<Vec<(Stri
 
             // Check if this session's directory matches our workspace
             let session_dir = Path::new(&session.directory);
-            let session_canonical = session_dir.canonicalize().unwrap_or_else(|_| session_dir.to_path_buf());
+            let session_canonical = session_dir
+                .canonicalize()
+                .unwrap_or_else(|_| session_dir.to_path_buf());
 
             if session_canonical == workspace_canonical {
                 results.push((session.id, session.project_id));
@@ -329,13 +331,22 @@ fn read_message_full_text(message_id: &str) -> Option<String> {
 
     // Sort by part ID to maintain order
     parts.sort_by(|a, b| a.0.cmp(&b.0));
-    Some(parts.into_iter().map(|p| p.1).collect::<Vec<_>>().join("\n").trim().to_string())
+    Some(
+        parts
+            .into_iter()
+            .map(|p| p.1)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+    )
 }
 
 /// Extract turns from a list of messages.
 fn extract_turns(messages: Vec<MessageFile>) -> Vec<ParsedTurn> {
     // Build a map of message_id -> message for quick lookup
-    let msg_map: HashMap<String, &MessageFile> = messages.iter().map(|m| (m.id.clone(), m)).collect();
+    let msg_map: HashMap<String, &MessageFile> =
+        messages.iter().map(|m| (m.id.clone(), m)).collect();
 
     let mut turns: Vec<ParsedTurn> = Vec::new();
 
@@ -360,29 +371,26 @@ fn extract_turns(messages: Vec<MessageFile>) -> Vec<ParsedTurn> {
         }
 
         // Try reading full text from parts first, fallback to summary.title
-        let user_text = read_message_full_text(&user_msg.id)
-            .unwrap_or_else(|| {
-                user_msg
-                    .summary
-                    .as_ref()
-                    .and_then(|s| s.title.as_ref())
-                    .cloned()
-                    .unwrap_or_default()
-            });
+        let user_text = read_message_full_text(&user_msg.id).unwrap_or_else(|| {
+            user_msg
+                .summary
+                .as_ref()
+                .and_then(|s| s.title.as_ref())
+                .cloned()
+                .unwrap_or_default()
+        });
 
         if user_text.trim().is_empty() {
             continue;
         }
 
-        let assistant_text = read_message_full_text(&msg.id)
-            .unwrap_or_else(|| {
-                msg
-                    .summary
-                    .as_ref()
-                    .and_then(|s| s.title.as_ref())
-                    .cloned()
-                    .unwrap_or_default()
-            });
+        let assistant_text = read_message_full_text(&msg.id).unwrap_or_else(|| {
+            msg.summary
+                .as_ref()
+                .and_then(|s| s.title.as_ref())
+                .cloned()
+                .unwrap_or_default()
+        });
 
         // Extract touched paths from diffs
         let mut touched_paths: Vec<String> = Vec::new();
@@ -447,7 +455,7 @@ fn is_expensive_model(model: &str) -> bool {
     if m.contains("o1") || m.contains("o3") || m.contains("gpt-4o") && !m.contains("mini") {
         return true;
     }
-    // Anthropic expensive models  
+    // Anthropic expensive models
     if m.contains("opus") || (m.contains("sonnet") && !m.contains("3-5") && !m.contains("3.5")) {
         return true;
     }
@@ -455,18 +463,28 @@ fn is_expensive_model(model: &str) -> bool {
 }
 
 /// Suggest a cheaper alternative model for the same provider.
-fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'static str, &'static str)> {
+fn suggest_cheaper_model(
+    provider: &str,
+    current_model: &str,
+) -> Option<(&'static str, &'static str)> {
     let m = current_model.to_lowercase();
-    
+
     match provider {
         "openai" => {
-            if m.contains("o1") || m.contains("o3") || (m.contains("gpt-4") && !m.contains("mini")) {
-                return Some(("gpt-4o-mini", "unlost config llm openai --model gpt-4o-mini"));
+            if m.contains("o1") || m.contains("o3") || (m.contains("gpt-4") && !m.contains("mini"))
+            {
+                return Some((
+                    "gpt-4o-mini",
+                    "unlost config llm openai --model gpt-4o-mini",
+                ));
             }
         }
         "anthropic" => {
             if m.contains("opus") || (m.contains("sonnet") && !m.contains("haiku")) {
-                return Some(("claude-3-5-haiku-20241022", "unlost config llm anthropic --model claude-3-5-haiku-20241022"));
+                return Some((
+                    "claude-3-5-haiku-20241022",
+                    "unlost config llm anthropic --model claude-3-5-haiku-20241022",
+                ));
             }
         }
         _ => {}
@@ -477,9 +495,9 @@ fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'stati
 /// Print a cost warning before replay starts.
 fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use_color: bool) {
     use crate::workspace::load_workspace_config;
-    
+
     let cfg = load_workspace_config();
-    
+
     let (provider, model) = match &cfg.llm {
         Some(crate::config::LlmConfig::Openai { model, .. }) => ("openai", model.as_str()),
         Some(crate::config::LlmConfig::Anthropic { model, .. }) => ("anthropic", model.as_str()),
@@ -487,9 +505,13 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
         Some(crate::config::LlmConfig::Custom { model, .. }) => ("custom", model.as_str()),
         None => {
             if use_color {
-                println!("\x1b[33m!\x1b[0m No LLM provider configured. Replay will proceed with heuristic extraction.");
+                println!(
+                    "\x1b[33m!\x1b[0m No LLM provider configured. Replay will proceed with heuristic extraction."
+                );
             } else {
-                println!("! No LLM provider configured. Replay will proceed with heuristic extraction.");
+                println!(
+                    "! No LLM provider configured. Replay will proceed with heuristic extraction."
+                );
             }
             return;
         }
@@ -501,26 +523,40 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
     }
 
     let is_expensive = is_expensive_model(model);
-    
+
     if use_color {
-        println!("\x1b[34m?\x1b[0m Replaying \x1b[1m{}\x1b[0m turns using \x1b[32m{}/{}\x1b[0m", turn_count, provider, model);
+        println!(
+            "\x1b[34m?\x1b[0m Replaying \x1b[1m{}\x1b[0m turns using \x1b[32m{}/{}\x1b[0m",
+            turn_count, provider, model
+        );
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  \x1b[34m*\x1b[0m Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
+                println!(
+                    "  \x1b[34m*\x1b[0m Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments."
+                );
             }
             crate::types::ExtractionMode::Full => {
-                println!("  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost).");
+                println!(
+                    "  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost)."
+                );
             }
             _ => {}
         }
     } else {
-        println!("? Replaying {} turns using {}/{}", turn_count, provider, model);
+        println!(
+            "? Replaying {} turns using {}/{}",
+            turn_count, provider, model
+        );
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  * Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
+                println!(
+                    "  * Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments."
+                );
             }
             crate::types::ExtractionMode::Full => {
-                println!("  ! Full Extraction: Extracting every turn (highest quality, highest cost).");
+                println!(
+                    "  ! Full Extraction: Extracting every turn (highest quality, highest cost)."
+                );
             }
             _ => {}
         }
@@ -528,20 +564,28 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
 
     if is_expensive {
         if use_color {
-            println!("\x1b[33m!\x1b[0m \x1b[1mWarning:\x1b[0m This model is expensive for bulk replay.");
+            println!(
+                "\x1b[33m!\x1b[0m \x1b[1mWarning:\x1b[0m This model is expensive for bulk replay."
+            );
             if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
-                println!("  Consider using \x1b[32m{}\x1b[0m for faster, cheaper replays:", suggested);
+                println!(
+                    "  Consider using \x1b[32m{}\x1b[0m for faster, cheaper replays:",
+                    suggested
+                );
                 println!("  \x1b[36m{}\x1b[0m", cmd);
             }
         } else {
             println!("! Warning: This model is expensive for bulk replay.");
             if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
-                println!("  Consider using {} for faster, cheaper replays:", suggested);
+                println!(
+                    "  Consider using {} for faster, cheaper replays:",
+                    suggested
+                );
                 println!("  {}", cmd);
             }
         }
     }
-    
+
     println!();
 }
 
@@ -604,8 +648,8 @@ pub async fn replay(
     }
 
     // Spinner setup
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     let sessions_done = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));
@@ -683,7 +727,7 @@ pub async fn replay(
             let mut flow = Flow::new(config);
 
             let turns = extract_turns(messages);
-            
+
             // If git grounding is enabled, fetch commits for the session range
             let commits = if git_grounding {
                 if let Some(ref root) = repo_root_clone {
@@ -761,7 +805,11 @@ pub async fn replay(
                     agent_session_id: Some(session_id_clone.clone()),
                     usage: turn.usage,
                     grounding_note,
-                    source_ts_ms: if turn.timestamp_ms > 0 { Some(turn.timestamp_ms) } else { None },
+                    source_ts_ms: if turn.timestamp_ms > 0 {
+                        Some(turn.timestamp_ms)
+                    } else {
+                        None
+                    },
                 };
 
                 let result = flow.record_turn(event).await;
@@ -827,22 +875,28 @@ pub async fn replay(
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(". The LLM was only needed for \x1b[1;33m{}\x1b[0m pivotal moments (saving \x1b[1;36m{:.1}%\x1b[0m in API calls)", total_llm_calls, saved);
+                print!(
+                    ". The LLM was only needed for \x1b[1;33m{}\x1b[0m pivotal moments (saving \x1b[1;36m{:.1}%\x1b[0m in API calls)",
+                    total_llm_calls, saved
+                );
             } else {
-                print!(". The LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments", total_llm_calls);
+                print!(
+                    ". The LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments",
+                    total_llm_calls
+                );
             }
         }
         println!();
     } else {
-        print!(
-            "Replay complete: {} turns indexed locally",
-            grand_recorded
-        );
+        print!("Replay complete: {} turns indexed locally", grand_recorded);
         if total_llm_calls > 0 && grand_recorded > 0 {
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(". The LLM was only needed for {} pivotal moments (saving {:.1}% in API calls)", total_llm_calls, saved);
+                print!(
+                    ". The LLM was only needed for {} pivotal moments (saving {:.1}% in API calls)",
+                    total_llm_calls, saved
+                );
             } else {
                 print!(". The LLM analyzed {} pivotal moments", total_llm_calls);
             }
@@ -863,31 +917,36 @@ pub async fn replay(
         if let Ok(embedder) = embedder {
             let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
             let changelog_path = root.join("CHANGELOG.md");
-            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color).await;
+            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color)
+                .await;
         }
     }
 
     Ok(())
 }
 
-fn clear_replay_data(ws: &crate::WorkspacePaths, _kind: &str, _session_id: Option<&str>) -> anyhow::Result<()> {
+fn clear_replay_data(
+    ws: &crate::WorkspacePaths,
+    _kind: &str,
+    _session_id: Option<&str>,
+) -> anyhow::Result<()> {
     println!("Clearing existing replay data for workspace: {}", ws.id);
-    
+
     // 1. Clear LanceDB
     if ws.db_dir.exists() {
         std::fs::remove_dir_all(&ws.db_dir)?;
     }
-    
+
     // 2. Clear JSONL
     if ws.capsules_jsonl.exists() {
         std::fs::remove_file(&ws.capsules_jsonl)?;
     }
-    
+
     // 3. Clear replayed trackers
     let opencode_dir = crate::workspace::unlost_workspace_dir(&ws.id).join("opencode");
     if opencode_dir.exists() {
         std::fs::remove_dir_all(&opencode_dir)?;
     }
-    
+
     Ok(())
 }

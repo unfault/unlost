@@ -46,14 +46,17 @@ impl RecentJobDeduper {
     }
 
     fn prune(&mut self, now: std::time::Instant) {
-        self.seen
-            .retain(|_, t| now.duration_since(*t) <= self.ttl);
+        self.seen.retain(|_, t| now.duration_since(*t) <= self.ttl);
         if self.seen.len() <= self.max_entries {
             return;
         }
 
         // Keep the most recent max_entries.
-        let mut items = self.seen.iter().map(|(k, v)| (k.clone(), *v)).collect::<Vec<_>>();
+        let mut items = self
+            .seen
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect::<Vec<_>>();
         items.sort_by(|a, b| b.1.cmp(&a.1));
         items.truncate(self.max_entries);
         self.seen = items.into_iter().collect();
@@ -70,7 +73,13 @@ fn flush_job_dedupe_key(job: &FlushJob) -> String {
     h.update(&[0u8]);
     h.update(job.meta.request_path.as_bytes());
     h.update(&[0u8]);
-    h.update(job.meta.agent_session_id.as_deref().unwrap_or("").as_bytes());
+    h.update(
+        job.meta
+            .agent_session_id
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes(),
+    );
     h.update(&[0u8]);
     h.update(job.input.as_bytes());
     format!(
@@ -467,7 +476,7 @@ impl ServeState {
 }
 
 pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state: ServeState) {
-     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
  Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals, questions (array)}.\n\n\
  Rules:\n\
  - Do NOT include quotes or excerpts from the conversation. No evidence snippets.\n\
@@ -491,59 +500,103 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
         }
 
         let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
-        
+
         let emotion_handle = state.emotion.clone();
         let user_text_clone = user_text.clone();
         let user_emotion = tokio::task::spawn_blocking(move || {
             let mut model = emotion_handle.lock().ok()?;
-            if user_text_clone.trim().is_empty() { return None; }
+            if user_text_clone.trim().is_empty() {
+                return None;
+            }
             let (raw, score) = model.classify_one(&user_text_clone).ok()?;
             let meta = map_go_emotions(&raw, score);
             Some(apply_context_heuristics(&user_text_clone, meta))
-        }).await.ok().flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
         let emotion_handle = state.emotion.clone();
         let assistant_text_clone = assistant_text.clone();
         let assistant_emotion = tokio::task::spawn_blocking(move || {
             let mut model = emotion_handle.lock().ok()?;
-            if assistant_text_clone.trim().is_empty() { return None; }
+            if assistant_text_clone.trim().is_empty() {
+                return None;
+            }
             let (raw, score) = model.classify_one(&assistant_text_clone).ok()?;
             Some(map_go_emotions(&raw, score))
-        }).await.ok().flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
         let symbols = crate::net::extract_symbols_from_text(&job.input);
         let user_symbols = crate::net::extract_symbols_from_text(&user_text);
-        let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
+        let failure_mode = crate::governor::detect_failure_keywords(&job.input)
+            .unwrap_or(crate::types::FailureMode::None);
 
-        let mut capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
-            Ok(mut c) => {
-                for s in symbols { if !c.symbols.contains(&s) { c.symbols.push(s); } }
-                c.user_symbols = user_symbols;
-                c
-            }
-            Err(_) => crate::IntentCapsule {
-                category: "unknown".to_string(),
-                intent: user_text.lines().next().unwrap_or("").to_string(),
-                decision: assistant_text.lines().next().unwrap_or("").to_string(),
-                rationale: String::new(),
-                next_steps: vec![],
-                symbols,
-                user_symbols,
-                failure_mode,
-                failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
-                extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
-            },
-        };
+        let mut capsule =
+            match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
+                Ok(mut c) => {
+                    for s in symbols {
+                        if !c.symbols.contains(&s) {
+                            c.symbols.push(s);
+                        }
+                    }
+                    c.user_symbols = user_symbols;
+                    c
+                }
+                Err(_) => crate::IntentCapsule {
+                    category: "unknown".to_string(),
+                    intent: user_text.lines().next().unwrap_or("").to_string(),
+                    decision: assistant_text.lines().next().unwrap_or("").to_string(),
+                    rationale: String::new(),
+                    next_steps: vec![],
+                    symbols,
+                    user_symbols,
+                    failure_mode,
+                    failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                    extraction_mode: crate::types::ExtractionMode::None,
+                    questions: vec![],
+                },
+            };
 
         crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
 
         let ws_paths = state.workspace_paths(&job.workspace_id);
-        let _ = append_capsule_jsonl(&ws_paths.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule);
-        let _ = crate::metrics::record_capsule_saved(&ws_paths, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule);
+        let _ = append_capsule_jsonl(
+            &ws_paths.capsules_jsonl,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            &capsule,
+        );
+        let _ = crate::metrics::record_capsule_saved(
+            &ws_paths,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            user_emotion.as_ref(),
+            assistant_emotion.as_ref(),
+            &capsule,
+        );
 
         if let Ok(db) = state.db_for(&job.workspace_id).await {
-            let _ = crate::storage::insert_capsule_row(&db, &state.embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, job.prior_decision.as_deref()).await;
+            let _ = crate::storage::insert_capsule_row(
+                &db,
+                &state.embedder,
+                job.conn_id,
+                job.exchange_seq,
+                job.ts_ms,
+                &job.meta,
+                user_emotion.as_ref(),
+                assistant_emotion.as_ref(),
+                &capsule,
+                job.prior_decision.as_deref(),
+            )
+            .await;
         }
     }
 }
@@ -555,7 +608,7 @@ pub(crate) async fn process_flush_jobs_proxy(
     embedder: Embedder,
     emotion: Arc<std::sync::Mutex<EmotionModel>>,
 ) {
-     const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
+    const PREAMBLE: &str = "You are unlost. Extract a short, high-signal intent capsule from this multi-turn conversation slice.\n\
  Return JSON with fields: {category, intent, decision, rationale, next_steps (array), symbols (array), failure_mode, failure_signals, questions (array)}.\n\
  questions: 2-3 natural language questions a developer would ask to find this capsule later.\n\n\
  Failure mode detection: none, drift, rediscovery, decision_conflict, retry_spiral, false_progress, unbounded_horizon.";
@@ -569,59 +622,105 @@ pub(crate) async fn process_flush_jobs_proxy(
         };
 
         let dedupe_key = flush_job_dedupe_key(&job);
-        if deduper.should_skip_and_mark(dedupe_key) { continue; }
+        if deduper.should_skip_and_mark(dedupe_key) {
+            continue;
+        }
 
         let (user_text, assistant_text) = extract_user_and_assistant_text(&job.input);
-        
+
         let emotion_handle = emotion.clone();
         let user_text_clone = user_text.clone();
         let user_emotion = tokio::task::spawn_blocking(move || {
             let mut model = emotion_handle.lock().ok()?;
-            if user_text_clone.trim().is_empty() { return None; }
+            if user_text_clone.trim().is_empty() {
+                return None;
+            }
             let (raw, score) = model.classify_one(&user_text_clone).ok()?;
             let meta = map_go_emotions(&raw, score);
             Some(apply_context_heuristics(&user_text_clone, meta))
-        }).await.ok().flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
         let emotion_handle = emotion.clone();
         let assistant_text_clone = assistant_text.clone();
         let assistant_emotion = tokio::task::spawn_blocking(move || {
             let mut model = emotion_handle.lock().ok()?;
-            if assistant_text_clone.trim().is_empty() { return None; }
+            if assistant_text_clone.trim().is_empty() {
+                return None;
+            }
             let (raw, score) = model.classify_one(&assistant_text_clone).ok()?;
             Some(map_go_emotions(&raw, score))
-        }).await.ok().flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
         let symbols = crate::net::extract_symbols_from_text(&job.input);
         let user_symbols = crate::net::extract_symbols_from_text(&user_text);
-        let failure_mode = crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
+        let failure_mode = crate::governor::detect_failure_keywords(&job.input)
+            .unwrap_or(crate::types::FailureMode::None);
 
-        let mut capsule = match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
-            Ok(mut c) => {
-                for s in symbols { if !c.symbols.contains(&s) { c.symbols.push(s); } }
-                c.user_symbols = user_symbols;
-                c
-            }
-            Err(_) => crate::IntentCapsule {
-                category: "unknown".to_string(),
-                intent: user_text.lines().next().unwrap_or("").to_string(),
-                decision: assistant_text.lines().next().unwrap_or("").to_string(),
-                rationale: String::new(),
-                next_steps: vec![],
-                symbols,
-                user_symbols,
-                failure_mode,
-                failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
-                extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
-            },
-        };
+        let mut capsule =
+            match crate::llm_extract::<crate::IntentCapsule>(None, PREAMBLE, &job.input).await {
+                Ok(mut c) => {
+                    for s in symbols {
+                        if !c.symbols.contains(&s) {
+                            c.symbols.push(s);
+                        }
+                    }
+                    c.user_symbols = user_symbols;
+                    c
+                }
+                Err(_) => crate::IntentCapsule {
+                    category: "unknown".to_string(),
+                    intent: user_text.lines().next().unwrap_or("").to_string(),
+                    decision: assistant_text.lines().next().unwrap_or("").to_string(),
+                    rationale: String::new(),
+                    next_steps: vec![],
+                    symbols,
+                    user_symbols,
+                    failure_mode,
+                    failure_signals: Some("Heuristic extraction (LLM failed)".to_string()),
+                    extraction_mode: crate::types::ExtractionMode::None,
+                    questions: vec![],
+                },
+            };
 
         crate::util::augment_capsule_symbols_from_input(&mut capsule, &job.input);
 
-        let _ = append_capsule_jsonl(&ws.capsules_jsonl, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, &capsule);
-        let _ = crate::metrics::record_capsule_saved(&ws, job.ts_ms, job.conn_id, job.exchange_seq, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule);
-        let _ = crate::storage::insert_capsule_row(&db, &embedder, job.conn_id, job.exchange_seq, job.ts_ms, &job.meta, user_emotion.as_ref(), assistant_emotion.as_ref(), &capsule, job.prior_decision.as_deref()).await;
+        let _ = append_capsule_jsonl(
+            &ws.capsules_jsonl,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            &capsule,
+        );
+        let _ = crate::metrics::record_capsule_saved(
+            &ws,
+            job.ts_ms,
+            job.conn_id,
+            job.exchange_seq,
+            &job.meta,
+            user_emotion.as_ref(),
+            assistant_emotion.as_ref(),
+            &capsule,
+        );
+        let _ = crate::storage::insert_capsule_row(
+            &db,
+            &embedder,
+            job.conn_id,
+            job.exchange_seq,
+            job.ts_ms,
+            &job.meta,
+            user_emotion.as_ref(),
+            assistant_emotion.as_ref(),
+            &capsule,
+            job.prior_decision.as_deref(),
+        )
+        .await;
     }
 }
 
@@ -632,17 +731,25 @@ pub(crate) async fn analysis_worker_multiplex(
 ) {
     let mut pending_start: Option<(AnalysisMeta, Bytes)> = None;
     loop {
-        let (meta, request_body) = if let Some(p) = pending_start.take() { p } else {
+        let (meta, request_body) = if let Some(p) = pending_start.take() {
+            p
+        } else {
             match rx.recv().await {
                 Ok(AnalysisMsg::ExchangeStart { meta, request_body }) => (meta, request_body),
                 _ => break,
             }
         };
 
-        let user_text = crate::net::decode_json_lossy(&request_body).and_then(|v| {
-            if meta.request_path.contains("/v1/messages") { crate::net::extract_anthropic_user_text(&v) }
-            else { crate::net::extract_openai_message_text(&v) }
-        }).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let user_text = crate::net::decode_json_lossy(&request_body)
+            .and_then(|v| {
+                if meta.request_path.contains("/v1/messages") {
+                    crate::net::extract_anthropic_user_text(&v)
+                } else {
+                    crate::net::extract_openai_message_text(&v)
+                }
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let mut assistant_text = String::new();
         let mut sse_buf: Vec<u8> = Vec::new();
@@ -652,13 +759,20 @@ pub(crate) async fn analysis_worker_multiplex(
         loop {
             match rx.recv().await {
                 Ok(AnalysisMsg::ResponseEnd) => break,
-                Ok(AnalysisMsg::ExchangeStart { meta: n_meta, request_body: n_req }) => {
+                Ok(AnalysisMsg::ExchangeStart {
+                    meta: n_meta,
+                    request_body: n_req,
+                }) => {
                     pending_start = Some((n_meta, n_req));
                     break;
                 }
                 Ok(AnalysisMsg::ResponseChunk(b)) => {
-                    if sse { sse_buf.extend_from_slice(&b); crate::net::sse_extract_deltas(&mut sse_buf, &mut assistant_text); }
-                    else { raw_buf.extend_from_slice(&b); }
+                    if sse {
+                        sse_buf.extend_from_slice(&b);
+                        crate::net::sse_extract_deltas(&mut sse_buf, &mut assistant_text);
+                    } else {
+                        raw_buf.extend_from_slice(&b);
+                    }
                 }
                 Err(_) => break,
             }
@@ -666,17 +780,30 @@ pub(crate) async fn analysis_worker_multiplex(
 
         if !sse {
             if let Some(v) = crate::net::decode_json_lossy(&raw_buf) {
-                assistant_text = if meta.request_path.contains("/v1/messages") { crate::net::extract_anthropic_assistant_text_from_json(&v) }
-                else { crate::net::extract_openai_assistant_text_from_json(&v) }.unwrap_or_default();
+                assistant_text = if meta.request_path.contains("/v1/messages") {
+                    crate::net::extract_anthropic_assistant_text_from_json(&v)
+                } else {
+                    crate::net::extract_openai_assistant_text_from_json(&v)
+                }
+                .unwrap_or_default();
             }
         }
 
         let assistant_text = assistant_text.trim().to_string();
-        if user_text.is_none() && assistant_text.is_empty() { continue; }
+        if user_text.is_none() && assistant_text.is_empty() {
+            continue;
+        }
 
         let mut input = String::new();
-        if let Some(u) = user_text.as_deref() { input.push_str("User:\n"); input.push_str(u); input.push_str("\n\n"); }
-        if !assistant_text.is_empty() { input.push_str("Assistant:\n"); input.push_str(&assistant_text); }
+        if let Some(u) = user_text.as_deref() {
+            input.push_str("User:\n");
+            input.push_str(u);
+            input.push_str("\n\n");
+        }
+        if !assistant_text.is_empty() {
+            input.push_str("Assistant:\n");
+            input.push_str(&assistant_text);
+        }
 
         let item = ChunkInput {
             conn_id,
@@ -701,17 +828,25 @@ pub(crate) async fn analysis_worker(
 ) {
     let mut pending_start: Option<(AnalysisMeta, Bytes)> = None;
     loop {
-        let (meta, request_body) = if let Some(p) = pending_start.take() { p } else {
+        let (meta, request_body) = if let Some(p) = pending_start.take() {
+            p
+        } else {
             match rx.recv().await {
                 Ok(AnalysisMsg::ExchangeStart { meta, request_body }) => (meta, request_body),
                 _ => break,
             }
         };
 
-        let user_text = crate::net::decode_json_lossy(&request_body).and_then(|v| {
-            if meta.request_path.contains("/v1/messages") { crate::net::extract_anthropic_user_text(&v) }
-            else { crate::net::extract_openai_message_text(&v) }
-        }).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let user_text = crate::net::decode_json_lossy(&request_body)
+            .and_then(|v| {
+                if meta.request_path.contains("/v1/messages") {
+                    crate::net::extract_anthropic_user_text(&v)
+                } else {
+                    crate::net::extract_openai_message_text(&v)
+                }
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let mut assistant_text = String::new();
         let mut sse_buf: Vec<u8> = Vec::new();
@@ -721,13 +856,20 @@ pub(crate) async fn analysis_worker(
         loop {
             match rx.recv().await {
                 Ok(AnalysisMsg::ResponseEnd) => break,
-                Ok(AnalysisMsg::ExchangeStart { meta: n_meta, request_body: n_req }) => {
+                Ok(AnalysisMsg::ExchangeStart {
+                    meta: n_meta,
+                    request_body: n_req,
+                }) => {
                     pending_start = Some((n_meta, n_req));
                     break;
                 }
                 Ok(AnalysisMsg::ResponseChunk(b)) => {
-                    if sse { sse_buf.extend_from_slice(&b); crate::net::sse_extract_deltas(&mut sse_buf, &mut assistant_text); }
-                    else { raw_buf.extend_from_slice(&b); }
+                    if sse {
+                        sse_buf.extend_from_slice(&b);
+                        crate::net::sse_extract_deltas(&mut sse_buf, &mut assistant_text);
+                    } else {
+                        raw_buf.extend_from_slice(&b);
+                    }
                 }
                 Err(_) => break,
             }
@@ -735,17 +877,30 @@ pub(crate) async fn analysis_worker(
 
         if !sse {
             if let Some(v) = crate::net::decode_json_lossy(&raw_buf) {
-                assistant_text = if meta.request_path.contains("/v1/messages") { crate::net::extract_anthropic_assistant_text_from_json(&v) }
-                else { crate::net::extract_openai_assistant_text_from_json(&v) }.unwrap_or_default();
+                assistant_text = if meta.request_path.contains("/v1/messages") {
+                    crate::net::extract_anthropic_assistant_text_from_json(&v)
+                } else {
+                    crate::net::extract_openai_assistant_text_from_json(&v)
+                }
+                .unwrap_or_default();
             }
         }
 
         let assistant_text = assistant_text.trim().to_string();
-        if user_text.is_none() && assistant_text.is_empty() { continue; }
+        if user_text.is_none() && assistant_text.is_empty() {
+            continue;
+        }
 
         let mut input = String::new();
-        if let Some(u) = user_text.as_deref() { input.push_str("User:\n"); input.push_str(u); input.push_str("\n\n"); }
-        if !assistant_text.is_empty() { input.push_str("Assistant:\n"); input.push_str(&assistant_text); }
+        if let Some(u) = user_text.as_deref() {
+            input.push_str("User:\n");
+            input.push_str(u);
+            input.push_str("\n\n");
+        }
+        if !assistant_text.is_empty() {
+            input.push_str("Assistant:\n");
+            input.push_str(&assistant_text);
+        }
 
         let item = ChunkInput {
             conn_id,

@@ -292,14 +292,33 @@ pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
     let mut out = vec![];
 
     let blacklist = [
-        "NOTE", "REASON", "DECISION", "INTENT", "NEXT_STEPS", "RATIONALE", "SYMBOLS",
-        "USER", "ASSISTANT", "SYSTEM", "SUCCESS", "FAILURE", "ERROR", "WARNING",
+        "NOTE",
+        "REASON",
+        "DECISION",
+        "INTENT",
+        "NEXT_STEPS",
+        "RATIONALE",
+        "SYMBOLS",
+        "USER",
+        "ASSISTANT",
+        "SYSTEM",
+        "SUCCESS",
+        "FAILURE",
+        "ERROR",
+        "WARNING",
     ];
 
     // File paths: src/foo.rs, ./lib/bar.py, auth.ts
     for word in text.split_whitespace() {
         let word = word.trim_matches(|c: char| {
-            c == '`' || c == '\'' || c == '"' || c == '(' || c == ')' || c == ',' || c == ':' || c == '.'
+            c == '`'
+                || c == '\''
+                || c == '"'
+                || c == '('
+                || c == ')'
+                || c == ','
+                || c == ':'
+                || c == '.'
         });
 
         if word.is_empty() {
@@ -332,7 +351,9 @@ pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
             // Exclude common tool-call noise: read/inspect, write/file, etc.
             if word.contains('/') && !word.contains('.') {
                 let parts: Vec<&str> = word.split('/').collect();
-                if parts.iter().any(|&p| p == "read" || p == "write" || p == "inspect" || p == "call" || p == "tool") {
+                if parts.iter().any(|&p| {
+                    p == "read" || p == "write" || p == "inspect" || p == "call" || p == "tool"
+                }) {
                     continue;
                 }
             }
@@ -356,7 +377,9 @@ pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
             if in_backtick && current.len() >= 3 {
                 // If it contains spaces, split it and treat each word as a potential symbol
                 if current.contains(' ') {
-                    for part in current.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/') {
+                    for part in current
+                        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/')
+                    {
                         if part.len() >= 3 {
                             out.push(part.to_string());
                         }
@@ -384,7 +407,9 @@ pub fn extract_symbols_from_text(text: &str) -> Vec<String> {
             if in_bold && current.len() >= 3 {
                 // If it contains spaces, split it
                 if current.contains(' ') {
-                    for part in current.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/') {
+                    for part in current
+                        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '/')
+                    {
                         if part.len() >= 3 {
                             out.push(part.to_string());
                         }

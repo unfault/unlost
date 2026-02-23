@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use serde::Deserialize;
 use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Deserialize)]
 struct JsonCapsule {
@@ -77,25 +77,29 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             .await?;
         stdout.flush().await?;
 
-        let mut input = Vec::new();
-        let mut stdin = tokio::io::stdin();
-        stdin.read_to_end(&mut input).await?;
-        let input_str = String::from_utf8(input)?;
-        if !input_str.trim().eq_ignore_ascii_case("y")
-            && !input_str.trim().eq_ignore_ascii_case("yes")
-        {
+        let mut input = String::new();
+        let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+        stdin.read_line(&mut input).await?;
+        if !input.trim().eq_ignore_ascii_case("y") && !input.trim().eq_ignore_ascii_case("yes") {
             println!("Cancelled.");
             return Ok(());
         }
     }
 
     println!("Deleting LanceDB data...");
-    let lancedb_path = ws.db_dir.join("lancedb");
-    if lancedb_path.exists() {
-        std::fs::remove_dir_all(&lancedb_path)?;
+    if ws.db_dir.exists() {
+        std::fs::remove_dir_all(&ws.db_dir)?;
     }
 
+    // Number of capsules to embed + write per LanceDB flush.
+    // Larger batches = fewer ONNX calls and fewer Parquet fragments.
+    const BATCH_SIZE: usize = 64;
+
+    let mut stdout = tokio::io::stdout();
+    let mut count = 0usize;
+
     println!("Rebuilding LanceDB from JSONL...");
+    println!("Loading embedding model...");
 
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
         .execute()
@@ -104,11 +108,23 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
     let embedder =
         crate::embed::load_embedder(crate::constants::DEFAULT_EMBED_MODEL, None, false).await?;
 
+    // Open/create the table once so all batches share the same handle
+    // and there's no risk of schema mismatch from repeated ensure_capsules_table calls.
+    let table = crate::storage::ensure_capsules_table(&db).await?;
+
     let file = File::open(&jsonl_path).await?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
-    let mut count = 0;
+    // Print initial progress now that we're actually about to start indexing
+    let msg = format!("\r  [  0%] 0/{} capsules", capsules_count);
+    stdout.write_all(msg.as_bytes()).await?;
+    stdout.flush().await?;
+
+    // Pending batch accumulators
+    let mut batch_texts: Vec<String> = Vec::with_capacity(BATCH_SIZE);
+    let mut batch_rows: Vec<BatchRow> = Vec::with_capacity(BATCH_SIZE);
+
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
@@ -156,35 +172,91 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             rationale: capsule.capsule.rationale,
             next_steps: capsule.capsule.next_steps,
             symbols: capsule.capsule.symbols.clone(),
-            user_symbols: vec![], // Can't recover from JSONL easily without parsing
+            user_symbols: vec![],
             failure_mode,
             failure_signals: capsule.capsule.failure_signals,
             extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
-        crate::storage::insert_capsule_row(
-            &db,
-            &embedder,
-            capsule.conn_id,
-            capsule.exchange_seq,
-            capsule.ts_ms,
-            &meta,
-            None,
-            None,
-            &intent_capsule,
-            None,
-        )
-        .await?;
+        let embed_text = crate::storage::capsule_embed_text_with_prior(&intent_capsule, None);
+        batch_texts.push(embed_text);
+        batch_rows.push(BatchRow {
+            conn_id: capsule.conn_id,
+            exchange_seq: capsule.exchange_seq,
+            ts_ms: capsule.ts_ms,
+            meta,
+            capsule: intent_capsule,
+        });
 
-        count += 1;
-        if count % 100 == 0 {
-            println!("  Reindexed {} / {} capsules...", count, capsules_count);
+        if batch_rows.len() >= BATCH_SIZE {
+            count += flush_batch(&table, &embedder, &mut batch_texts, &mut batch_rows).await?;
+            let pct = count * 100 / capsules_count;
+            let msg = format!("\r  [{:3}%] {}/{} capsules", pct, count, capsules_count);
+            stdout.write_all(msg.as_bytes()).await?;
+            stdout.flush().await?;
         }
     }
 
+    // Flush any remaining capsules
+    if !batch_rows.is_empty() {
+        count += flush_batch(&table, &embedder, &mut batch_texts, &mut batch_rows).await?;
+        let pct = count * 100 / capsules_count;
+        let msg = format!("\r  [{:3}%] {}/{} capsules", pct, count, capsules_count);
+        stdout.write_all(msg.as_bytes()).await?;
+        stdout.flush().await?;
+    }
+
+    // Move to a new line after the in-place progress
+    stdout.write_all(b"\n").await?;
+    stdout.flush().await?;
+
     println!("Done! Reindexed {} capsules.", count);
     Ok(())
+}
+
+struct BatchRow {
+    conn_id: u64,
+    exchange_seq: u64,
+    ts_ms: i64,
+    meta: crate::ResponseMeta,
+    capsule: crate::IntentCapsule,
+}
+
+/// Embed `batch_texts` in one ONNX call, pair with `batch_rows`,
+/// write to LanceDB as a single RecordBatch, then clear both vecs.
+/// Returns the number of rows written.
+async fn flush_batch(
+    table: &lancedb::Table,
+    embedder: &crate::embed::Embedder,
+    batch_texts: &mut Vec<String>,
+    batch_rows: &mut Vec<BatchRow>,
+) -> anyhow::Result<usize> {
+    let n = batch_rows.len();
+    let embeddings = crate::embed::embed_texts_batch(embedder, std::mem::take(batch_texts)).await?;
+    if embeddings.len() != n {
+        anyhow::bail!(
+            "embed batch size mismatch: expected {}, got {}",
+            n,
+            embeddings.len()
+        );
+    }
+
+    let rows: Vec<crate::storage::CapsuleRow> = std::mem::take(batch_rows)
+        .into_iter()
+        .zip(embeddings)
+        .map(|(r, emb)| crate::storage::CapsuleRow {
+            conn_id: r.conn_id,
+            exchange_seq: r.exchange_seq,
+            ts_ms: r.ts_ms,
+            meta: r.meta,
+            capsule: r.capsule,
+            embedding: emb,
+        })
+        .collect();
+
+    crate::storage::insert_capsule_batch(table, &rows).await?;
+    Ok(n)
 }
 
 async fn count_capsules(path: &Path) -> anyhow::Result<usize> {

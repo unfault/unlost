@@ -123,7 +123,7 @@ fn commit_to_capsule(c: &CommitDetail) -> crate::IntentCapsule {
         failure_mode: crate::types::FailureMode::None,
         failure_signals: None,
         extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+        questions: vec![],
     }
 }
 
@@ -301,8 +301,7 @@ pub async fn replay_git(
     )
     .await?;
 
-    let ingested =
-        ingest_git_commits(&ws, &repo_root, &embedder, max_commits, use_color).await?;
+    let ingested = ingest_git_commits(&ws, &repo_root, &embedder, max_commits, use_color).await?;
 
     if use_color {
         println!(
@@ -311,10 +310,7 @@ pub async fn replay_git(
             if ingested == 1 { "" } else { "s" }
         );
     } else {
-        println!(
-            "Git replay complete: {} commit(s) ingested",
-            ingested
-        );
+        println!("Git replay complete: {} commit(s) ingested", ingested);
     }
 
     Ok(())

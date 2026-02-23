@@ -10,9 +10,9 @@ use crate::companion::flow::{
 };
 use crate::workspace::get_or_create_workspace_paths;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::collections::HashSet;
 
 // ============================================================================
 // Hook input types (from Claude Code)
@@ -167,7 +167,11 @@ fn append_turnkeys(workspace_id: &str, session_id: &str, keys: &[String]) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    let mut f = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         Ok(f) => f,
         Err(_) => return,
     };
@@ -258,7 +262,10 @@ fn extract_tool_result_blocks_text(content: &serde_json::Value) -> Option<String
             continue;
         }
 
-        let is_error = obj.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_error = obj
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let tool_use_id = obj
             .get("tool_use_id")
             .and_then(|v| v.as_str())
@@ -665,10 +672,7 @@ fn parse_transcript_from_cursor(
 // Main entry point
 // ============================================================================
 
-pub async fn run(
-    embed_model: String,
-    embed_cache_dir: Option<String>,
-) -> anyhow::Result<()> {
+pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow::Result<()> {
     // Read hook input from stdin
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
@@ -722,12 +726,12 @@ async fn handle_user_prompt_submit(flow: &mut Flow, input: &HookInput) -> anyhow
         }
     };
 
-        let event = CheckEvent {
-            directory: input.cwd.clone(),
-            text: prompt.clone(),
-            agent_kind: AgentKind::Claude,
-            agent_session_id: Some(input.session_id.clone()),
-        };
+    let event = CheckEvent {
+        directory: input.cwd.clone(),
+        text: prompt.clone(),
+        agent_kind: AgentKind::Claude,
+        agent_session_id: Some(input.session_id.clone()),
+    };
 
     let result = flow.check_friction(event).await;
 
@@ -838,7 +842,7 @@ fn is_expensive_model(model: &str) -> bool {
     if m.contains("o1") || m.contains("o3") || m.contains("gpt-4o") && !m.contains("mini") {
         return true;
     }
-    // Anthropic expensive models  
+    // Anthropic expensive models
     if m.contains("opus") || (m.contains("sonnet") && !m.contains("3-5") && !m.contains("3.5")) {
         return true;
     }
@@ -846,18 +850,28 @@ fn is_expensive_model(model: &str) -> bool {
 }
 
 /// Suggest a cheaper alternative model for the same provider.
-fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'static str, &'static str)> {
+fn suggest_cheaper_model(
+    provider: &str,
+    current_model: &str,
+) -> Option<(&'static str, &'static str)> {
     let m = current_model.to_lowercase();
-    
+
     match provider {
         "openai" => {
-            if m.contains("o1") || m.contains("o3") || (m.contains("gpt-4") && !m.contains("mini")) {
-                return Some(("gpt-4o-mini", "unlost config llm openai --model gpt-4o-mini"));
+            if m.contains("o1") || m.contains("o3") || (m.contains("gpt-4") && !m.contains("mini"))
+            {
+                return Some((
+                    "gpt-4o-mini",
+                    "unlost config llm openai --model gpt-4o-mini",
+                ));
             }
         }
         "anthropic" => {
             if m.contains("opus") || (m.contains("sonnet") && !m.contains("haiku")) {
-                return Some(("claude-3-5-haiku-20241022", "unlost config llm anthropic --model claude-3-5-haiku-20241022"));
+                return Some((
+                    "claude-3-5-haiku-20241022",
+                    "unlost config llm anthropic --model claude-3-5-haiku-20241022",
+                ));
             }
         }
         _ => {}
@@ -869,9 +883,9 @@ fn suggest_cheaper_model(provider: &str, current_model: &str) -> Option<(&'stati
 fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use_color: bool) {
     use crate::config::LlmConfig;
     use crate::workspace::load_workspace_config;
-    
+
     let cfg = load_workspace_config();
-    
+
     let (provider, model) = match &cfg.llm {
         Some(LlmConfig::Openai { model, .. }) => ("openai", model.as_str()),
         Some(LlmConfig::Anthropic { model, .. }) => ("anthropic", model.as_str()),
@@ -886,7 +900,7 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
             return;
         }
     };
-    
+
     // Always show what we're about to do
     if use_color {
         println!(
@@ -895,26 +909,37 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
         );
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  \x1b[34m*\x1b[0m Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
+                println!(
+                    "  \x1b[34m*\x1b[0m Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments."
+                );
             }
             crate::types::ExtractionMode::Full => {
-                println!("  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost).");
+                println!(
+                    "  \x1b[33m!\x1b[0m Full Extraction: Extracting every turn (highest quality, highest cost)."
+                );
             }
             _ => {}
         }
     } else {
-        println!("Replaying ~{} turns using {}/{}", turn_count, provider, model);
+        println!(
+            "Replaying ~{} turns using {}/{}",
+            turn_count, provider, model
+        );
         match mode {
             crate::types::ExtractionMode::Hybrid => {
-                println!("  * Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments.");
+                println!(
+                    "  * Hybrid Mode: Local search indexing for all turns; LLM analysis only for pivotal moments."
+                );
             }
             crate::types::ExtractionMode::Full => {
-                println!("  ! Full Extraction: Extracting every turn (highest quality, highest cost).");
+                println!(
+                    "  ! Full Extraction: Extracting every turn (highest quality, highest cost)."
+                );
             }
             _ => {}
         }
     }
-    
+
     // Warn about expensive models and suggest alternatives
     if is_expensive_model(model) {
         if let Some((suggested, cmd)) = suggest_cheaper_model(provider, model) {
@@ -925,27 +950,30 @@ fn print_cost_warning(turn_count: usize, mode: crate::types::ExtractionMode, use
                 );
                 println!("  {}", cmd);
             } else {
-                println!("! This model may be expensive for bulk replay. Consider using {}:", suggested);
+                println!(
+                    "! This model may be expensive for bulk replay. Consider using {}:",
+                    suggested
+                );
                 println!("  {}", cmd);
             }
         }
     }
-    
+
     println!();
 }
 
 /// Quick turn count from a transcript file (without full parsing).
 fn count_turns_in_transcript(path: &Path) -> usize {
     use std::io::BufRead;
-    
+
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return 0,
     };
-    
+
     let reader = std::io::BufReader::new(file);
     let mut user_count = 0;
-    
+
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -956,7 +984,7 @@ fn count_turns_in_transcript(path: &Path) -> usize {
             user_count += 1;
         }
     }
-    
+
     user_count
 }
 
@@ -974,7 +1002,7 @@ pub async fn replay(
 ) -> anyhow::Result<()> {
     let dir_path = Path::new(&path);
     let transcript_path = PathBuf::from(transcript_path);
-    
+
     let ws = get_or_create_workspace_paths(dir_path)?;
 
     if clear {
@@ -983,7 +1011,7 @@ pub async fn replay(
 
     let repo_root = crate::workspace::git_toplevel(dir_path);
     let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    
+
     // Count turns for cost warning
     let turn_count = count_turns_in_transcript(&transcript_path);
     if turn_count > 0 && extraction_mode != crate::types::ExtractionMode::None {
@@ -998,7 +1026,9 @@ pub async fn replay(
         let mut files: Vec<PathBuf> = std::fs::read_dir(&transcript_path)?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
-                entry.path().extension()
+                entry
+                    .path()
+                    .extension()
                     .map(|ext| ext == "jsonl")
                     .unwrap_or(false)
             })
@@ -1006,7 +1036,10 @@ pub async fn replay(
             .collect();
         files.sort();
         if files.is_empty() {
-            anyhow::bail!("No .jsonl files found in directory {}", transcript_path.display());
+            anyhow::bail!(
+                "No .jsonl files found in directory {}",
+                transcript_path.display()
+            );
         }
         files
     };
@@ -1017,14 +1050,17 @@ pub async fn replay(
     let use_color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
 
     // Count total turns across all files for cost warning
-    let total_turns: usize = transcript_files.iter().map(|f| count_turns_in_transcript(f)).sum();
+    let total_turns: usize = transcript_files
+        .iter()
+        .map(|f| count_turns_in_transcript(f))
+        .sum();
     if total_turns > 0 && extraction_mode != crate::types::ExtractionMode::None {
         print_cost_warning(total_turns, extraction_mode, use_color);
     }
 
     // Spinner + progress
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     let files_done = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicBool::new(false));
 
@@ -1050,7 +1086,10 @@ pub async fn replay(
             while !done.load(Ordering::Relaxed) {
                 tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
                 let done_count = files_done.load(Ordering::Relaxed);
-                pb.set_message(format!("Replaying {} sessions ({} done)", total_files, done_count));
+                pb.set_message(format!(
+                    "Replaying {} sessions ({} done)",
+                    total_files, done_count
+                ));
                 pb.tick();
             }
         }))
@@ -1068,7 +1107,7 @@ pub async fn replay(
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrency));
 
     let mut handles = Vec::new();
-    
+
     for file_path in transcript_files.clone() {
         let ws_id = ws.id.clone();
         let dir_path = dir_path.to_path_buf();
@@ -1080,7 +1119,7 @@ pub async fn replay(
         let files_done = files_done.clone();
         let semaphore = semaphore.clone();
         let repo_root_clone = repo_root.clone();
-        
+
         let handle = tokio::spawn(async move {
             let _permit = semaphore
                 .acquire_owned()
@@ -1100,7 +1139,12 @@ pub async fn replay(
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string())
-                    .ok_or_else(|| anyhow::anyhow!("could not infer session_id from filename: {}", file_path.display()))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "could not infer session_id from filename: {}",
+                            file_path.display()
+                        )
+                    })?
             } else if let Some(ref s) = session_id {
                 s.clone()
             } else {
@@ -1108,7 +1152,11 @@ pub async fn replay(
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string())
-                    .ok_or_else(|| anyhow::anyhow!("missing --session-id and could not infer from transcript filename"))?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing --session-id and could not infer from transcript filename"
+                        )
+                    })?
             };
 
             let cursor = if from_start {
@@ -1121,16 +1169,27 @@ pub async fn replay(
             };
 
             let (turns, new_cursor) = parse_transcript_from_cursor(&file_path, &cursor, &dir_path)?;
-            
+
             // If git grounding is enabled, fetch commits for the session range
             let commits = if git_grounding {
                 if let Some(ref root) = repo_root_clone {
-                    let min_ts = turns.iter().filter(|t| t.timestamp_ms > 0).map(|t| t.timestamp_ms).min().unwrap_or(0);
-                    let max_ts = turns.iter().filter(|t| t.timestamp_ms > 0).map(|t| t.timestamp_ms).max().unwrap_or(0);
-                    
+                    let min_ts = turns
+                        .iter()
+                        .filter(|t| t.timestamp_ms > 0)
+                        .map(|t| t.timestamp_ms)
+                        .min()
+                        .unwrap_or(0);
+                    let max_ts = turns
+                        .iter()
+                        .filter(|t| t.timestamp_ms > 0)
+                        .map(|t| t.timestamp_ms)
+                        .max()
+                        .unwrap_or(0);
+
                     if min_ts > 0 {
                         // Look up to 15 minutes after the last turn
-                        crate::git::get_commits_for_range(root, min_ts, max_ts + 15 * 60 * 1000).ok()
+                        crate::git::get_commits_for_range(root, min_ts, max_ts + 15 * 60 * 1000)
+                            .ok()
                     } else {
                         None
                     }
@@ -1210,14 +1269,18 @@ pub async fn replay(
                     agent_session_id: Some(sid.clone()),
                     usage: turn.usage,
                     grounding_note,
-                    source_ts_ms: if turn.timestamp_ms > 0 { Some(turn.timestamp_ms) } else { None },
+                    source_ts_ms: if turn.timestamp_ms > 0 {
+                        Some(turn.timestamp_ms)
+                    } else {
+                        None
+                    },
                 };
                 let result = flow.record_turn(event).await;
                 if result.error.is_none() {
                     recorded += 1;
                 }
             }
-            
+
             // Wait for background flush jobs before marking session done
             flow.drain().await;
 
@@ -1230,13 +1293,13 @@ pub async fn replay(
 
             Ok::<_, anyhow::Error>((file_path, recorded, flow.llm_calls().await))
         });
-        
+
         handles.push(handle);
     }
 
     // Wait for all tasks to complete
     let results = join_all(handles).await;
-    
+
     done.store(true, Ordering::Relaxed);
 
     if let Some(task) = spinner_task {
@@ -1275,22 +1338,28 @@ pub async fn replay(
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(". The LLM was only needed for \x1b[1;33m{}\x1b[0m pivotal moments (saving \x1b[1;36m{:.1}%\x1b[0m in API calls)", total_llm_calls, saved);
+                print!(
+                    ". The LLM was only needed for \x1b[1;33m{}\x1b[0m pivotal moments (saving \x1b[1;36m{:.1}%\x1b[0m in API calls)",
+                    total_llm_calls, saved
+                );
             } else {
-                print!(". The LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments", total_llm_calls);
+                print!(
+                    ". The LLM analyzed \x1b[1;33m{}\x1b[0m pivotal moments",
+                    total_llm_calls
+                );
             }
         }
         println!();
     } else {
-        print!(
-            "Replay complete: {} turns indexed locally",
-            grand_recorded
-        );
+        print!("Replay complete: {} turns indexed locally", grand_recorded);
         if total_llm_calls > 0 && grand_recorded > 0 {
             let pct = (total_llm_calls as f64 / grand_recorded as f64) * 100.0;
             let saved = 100.0 - pct;
             if saved > 0.1 {
-                print!(". The LLM was only needed for {} pivotal moments (saving {:.1}% in API calls)", total_llm_calls, saved);
+                print!(
+                    ". The LLM was only needed for {} pivotal moments (saving {:.1}% in API calls)",
+                    total_llm_calls, saved
+                );
             } else {
                 print!(". The LLM analyzed {} pivotal moments", total_llm_calls);
             }
@@ -1311,26 +1380,31 @@ pub async fn replay(
         if let Ok(embedder) = embedder {
             let _ = crate::git::ingest_git_commits(&ws, root, &embedder, 500, use_color).await;
             let changelog_path = root.join("CHANGELOG.md");
-            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color).await;
+            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color)
+                .await;
         }
     }
 
     Ok(())
 }
 
-fn clear_replay_data(ws: &crate::WorkspacePaths, _kind: &str, _session_id: Option<&str>) -> anyhow::Result<()> {
+fn clear_replay_data(
+    ws: &crate::WorkspacePaths,
+    _kind: &str,
+    _session_id: Option<&str>,
+) -> anyhow::Result<()> {
     println!("Clearing existing replay data for workspace: {}", ws.id);
-    
+
     // 1. Clear LanceDB
     if ws.db_dir.exists() {
         std::fs::remove_dir_all(&ws.db_dir)?;
     }
-    
+
     // 2. Clear JSONL
     if ws.capsules_jsonl.exists() {
         std::fs::remove_file(&ws.capsules_jsonl)?;
     }
-    
+
     // 3. Clear replayed trackers (cursors and turnkeys)
     let claude_dir = crate::workspace::unlost_workspace_dir(&ws.id).join("claude");
     if claude_dir.exists() {
@@ -1340,7 +1414,7 @@ fn clear_replay_data(ws: &crate::WorkspacePaths, _kind: &str, _session_id: Optio
     if legacy_dir.exists() {
         std::fs::remove_dir_all(&legacy_dir)?;
     }
-    
+
     Ok(())
 }
 

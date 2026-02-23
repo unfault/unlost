@@ -62,14 +62,7 @@ pub async fn run(
     .await?;
 
     let chain = crate::storage::trace_capsules_lancedb(
-        &query,
-        seeds,
-        fan_out,
-        threshold,
-        since_ms,
-        until_ms,
-        embedder,
-        &ws,
+        &query, seeds, fan_out, threshold, since_ms, until_ms, embedder, &ws,
     )
     .await?;
 
@@ -78,7 +71,9 @@ pub async fn run(
             pb.finish_and_clear();
         }
         println!("No causal chain found for: {query}");
-        println!("Try running `unlost replay opencode` or `unlost replay git` first to seed memory.");
+        println!(
+            "Try running `unlost replay opencode` or `unlost replay git` first to seed memory."
+        );
         return Ok(());
     }
 
@@ -160,10 +155,36 @@ fn print_raw_chain(output: OutputFormat, chain: &[crate::CapsuleHit]) {
     println!("Causal chain: {} capsules (chronological)\n", chain.len());
     for (i, hit) in chain.iter().enumerate() {
         let cap = &hit.capsule;
+        let meta = &hit.meta;
         if output == OutputFormat::Ansi && std::env::var_os("NO_COLOR").is_none() {
             println!("\x1b[2m#{} {}\x1b[0m", i + 1, fmt_ts_short(hit.ts_ms));
         } else {
             println!("#{} {}", i + 1, fmt_ts_short(hit.ts_ms));
+        }
+        if !meta.source.trim().is_empty() {
+            println!("source:    {}", meta.source);
+        }
+        let rp = meta.request_path.trim();
+        if !rp.is_empty() {
+            let looks_like_semver = {
+                let s = rp.strip_prefix('v').unwrap_or(rp);
+                let parts: Vec<&str> = s.split('.').collect();
+                parts.len() >= 2
+                    && parts.len() <= 4
+                    && parts
+                        .iter()
+                        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            };
+            if meta.source == "git" {
+                println!("ref:       commit:{}", rp);
+            } else if meta.source == "changelog" {
+                if looks_like_semver {
+                    let v = rp.strip_prefix('v').unwrap_or(rp);
+                    println!("ref:       version:v{}", v);
+                } else {
+                    println!("ref:       version:{}", rp);
+                }
+            }
         }
         if !cap.category.is_empty() {
             println!("category:  {}", cap.category);

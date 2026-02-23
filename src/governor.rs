@@ -6,9 +6,9 @@
 //!
 //! Total overhead: <15ms (local emotion + LanceDB query + matching)
 
-use crate::types::{SymptomChannels, TrajectoryState};
 use crate::CapsuleHit;
 use crate::IntentCapsule;
+use crate::types::{SymptomChannels, TrajectoryState};
 
 /// Constants for the Trajectory Model (Calibrated Feb 15, 2026)
 const WEIGHT_EFFORT: f32 = 0.34;
@@ -646,7 +646,7 @@ fn select_intervention_with_substance(
         ("drift", _) if is_ambient => {
             let (_, missing_paths) = crate::workspace::validate_paths(workspace_id, &current.symbols);
             let (_, missing_idents) = crate::workspace::validate_identifiers(workspace_id, &current.symbols);
-            
+
             if missing_paths > 0 {
                 Some("[SYSTEM NOTE: Potential drift detected. Some mentioned paths do not exist. Please re-read the relevant files and list 3 verified facts about the current codebase before proceeding.]".to_string())
             } else if missing_idents > 0 {
@@ -790,7 +790,10 @@ fn render_hydration_warning(
     _history_summary: String,
     packet: &[HydrationNode],
 ) -> String {
-    let mut out = format!("[SYSTEM NOTE: Possible loop detected in symbols [{}]. To help break out, here is a hydration packet of the most relevant recent context:\n\n", symbols);
+    let mut out = format!(
+        "[SYSTEM NOTE: Possible loop detected in symbols [{}]. To help break out, here is a hydration packet of the most relevant recent context:\n\n",
+        symbols
+    );
 
     if packet.is_empty() {
         out.push_str("(No recent relevant history found)\n");

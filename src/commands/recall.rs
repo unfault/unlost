@@ -66,7 +66,40 @@ fn hit_session_key(h: &crate::CapsuleHit) -> String {
     format!("conn:{}", h.conn_id)
 }
 
-fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec<crate::CapsuleHit> {
+fn is_low_signal_for_recall(h: &crate::CapsuleHit) -> bool {
+    let cap = &h.capsule;
+    let category = cap.category.trim().to_ascii_lowercase();
+    if category == "replay" {
+        return true;
+    }
+
+    // These are explicit signals that we did not get a real LLM-derived capsule.
+    // They tend to be short echoes like "yes" and crowd out real decisions.
+    if let Some(sig) = cap.failure_signals.as_deref() {
+        if sig.contains("Ghost extraction") {
+            return true;
+        }
+        if sig.contains("Heuristic extraction (LLM failed)") {
+            return true;
+        }
+    }
+
+    // Also drop tiny ack-like capsules that carry no structure.
+    let intent = cap.intent.trim();
+    let decision = cap.decision.trim();
+    let no_structure =
+        cap.rationale.trim().is_empty() && cap.next_steps.is_empty() && cap.symbols.is_empty();
+    if no_structure && intent.len() <= 3 && decision.len() <= 3 {
+        return true;
+    }
+
+    false
+}
+
+fn select_hits_for_recall(
+    mut hits: Vec<crate::CapsuleHit>,
+    limit: usize,
+) -> Vec<crate::CapsuleHit> {
     if hits.len() <= limit {
         return hits;
     }
@@ -77,13 +110,13 @@ fn select_hits_for_recall(mut hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec
     // older-but-important decisions.
     let mut seen_fp: HashSet<String> = HashSet::new();
     let mut per_session: HashMap<String, usize> = HashMap::new();
-    
+
     // We want a mix:
     // 1. High recency (the absolute latest things, even if repetitive)
     // 2. Historical breadth (decisions from older sessions)
-    
+
     // Increase recency priority: take more from the absolute latest window.
-    let recent_threshold = (limit / 2).max(10); 
+    let recent_threshold = (limit / 2).max(10);
     let max_per_old_session = 3; // Reduce historical crowding
 
     let mut selected = Vec::with_capacity(limit);
@@ -239,7 +272,7 @@ pub async fn run(
 
         // Also fetch by symbols field for direct references
         if let Some(expr) = crate::util::scope_filter_expr(scope) {
-            if let Ok(mut scoped) = crate::storage::scan_capsules_lancedb(
+            if let Ok(scoped) = crate::storage::scan_capsules_lancedb_recent(
                 &ws,
                 80,
                 Some(&expr),
@@ -250,7 +283,6 @@ pub async fn run(
             )
             .await
             {
-                scoped.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
                 hits.extend(scoped);
             }
         }
@@ -258,7 +290,7 @@ pub async fn run(
         // Only backfill with recent capsules if we're under the limit
         // This ensures scoped results dominate the narrative
         if hits.len() < want {
-            if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
+            if let Ok(recent) = crate::storage::scan_capsules_lancedb_recent(
                 &ws,
                 want.saturating_sub(hits.len()),
                 None,
@@ -269,15 +301,16 @@ pub async fn run(
             )
             .await
             {
-                recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
                 hits.extend(recent);
             }
         }
     } else {
-        // No scope: fetch recent capsules for general workspace context
-        if let Ok(mut recent) = crate::storage::scan_capsules_lancedb(
+        // No scope: fetch a larger recency window so low-signal "ghost" capsules
+        // don't crowd out the last real decisions.
+        let scan_n = (want.saturating_mul(12)).clamp(120, 600);
+        if let Ok(recent) = crate::storage::scan_capsules_lancedb_recent(
             &ws,
-            120,
+            scan_n,
             None,
             emotion_label.as_deref(),
             provider_label.as_deref(),
@@ -286,7 +319,6 @@ pub async fn run(
         )
         .await
         {
-            recent.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
             hits.extend(recent);
         }
     }
@@ -300,12 +332,19 @@ pub async fn run(
             }
         }
     }
-    // Exclude git capsules from recall: they are facts about merged commits, not
-    // the conversational story so far. They belong in `brief` and `query`, not here.
-    let mut hits = by_id
-        .into_values()
-        .filter(|h| h.meta.source != "git")
+    // Include git capsules in recall by default. Commits are high-signal decisions
+    // and help ground the recent story when conversational capsules are thin.
+    let hits = by_id.into_values().collect::<Vec<_>>();
+
+    // Prefer high-signal capsules for narrative recall. If we don't have enough,
+    // fall back to the full set rather than returning nothing.
+    let filtered = hits
+        .iter()
+        .cloned()
+        .filter(|h| !is_low_signal_for_recall(h))
         .collect::<Vec<_>>();
+    let mut hits = if filtered.len() >= 6 { filtered } else { hits };
+
     hits = select_hits_for_recall(hits, want);
 
     if hits.is_empty() {
@@ -338,9 +377,17 @@ pub async fn run(
         pb.set_message(format!("Weaving threads with {}...", model_name));
     }
 
-    // Fetch recent interventions to include in context
-    let mut recent_interventions =
-        crate::metrics::get_recent_interventions(&ws.metrics_jsonl, 3).unwrap_or_default();
+    // Recent friction interventions are useful to display to the user, but they
+    // shouldn't steer the LLM narrative by default.
+    let hide_interventions = std::env::var_os("UNLOST_RECALL_HIDE_INTERVENTIONS").is_some();
+    let include_interventions_in_context =
+        std::env::var_os("UNLOST_RECALL_INTERVENTIONS_IN_CONTEXT").is_some();
+
+    let mut recent_interventions = if hide_interventions {
+        Vec::new()
+    } else {
+        crate::metrics::get_recent_interventions(&ws.metrics_jsonl, 3).unwrap_or_default()
+    };
 
     // Backfill topics from hits if missing
     for iv in &mut recent_interventions {
@@ -352,13 +399,22 @@ pub async fn run(
         }
     }
 
+    let interventions_for_context: Vec<crate::metrics::Intervention> = if include_interventions_in_context {
+        recent_interventions.clone()
+    } else {
+        Vec::new()
+    };
+
     let narrative = crate::narrative::llm_recall_narrative(
         llm_model.as_deref(),
         scope_opt.as_deref(),
         &ws.id,
         &workspace_root,
         &hits,
-        &recent_interventions,
+        &interventions_for_context,
+        !recent_interventions.is_empty(),
+        include_interventions_in_context,
+        true,
     )
     .await?;
 
@@ -366,6 +422,11 @@ pub async fn run(
         pb.finish_and_clear();
     }
     let mut out = crate::narrative::render_narrative(output, &narrative);
+
+    // Make the "next steps" heading less misleading in common cases where the
+    // narrative is primarily a retrospective recap.
+    out = out.replace("Suggested next steps:", "Next steps (if any):");
+
     let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
     if wrap {
         out = crate::util::wrap_plain_text(&out, 80);
@@ -383,7 +444,7 @@ pub async fn run(
                 .single()
                 .map(|dt| dt.format("%H:%M").to_string())
                 .unwrap_or_else(|| "--:--".to_string());
-            
+
             let ago_str = crate::util::format_elapsed_time(iv.ts_ms, now);
 
             let duration_str = if let Some(start) = iv.watch_start_ts {
@@ -395,7 +456,7 @@ pub async fn run(
 
             let diagnosis = crate::metrics::get_diagnosis(&iv.cause, &iv.top_channels);
             let severity = crate::metrics::get_severity_label(iv.intensity);
-            
+
             let emotion_str = if let Some(ref e) = iv.user_emotion {
                 if crate::governor::FRICTION_EMOTIONS.contains(&e.as_str()) {
                     format!(" (user {})", e)
@@ -408,8 +469,20 @@ pub async fn run(
 
             let mut clean_symbols = Vec::new();
             let blacklist = [
-                "NOTE", "REASON", "DECISION", "INTENT", "NEXT_STEPS", "RATIONALE", "SYMBOLS",
-                "USER", "ASSISTANT", "SYSTEM", "SUCCESS", "FAILURE", "ERROR", "WARNING",
+                "NOTE",
+                "REASON",
+                "DECISION",
+                "INTENT",
+                "NEXT_STEPS",
+                "RATIONALE",
+                "SYMBOLS",
+                "USER",
+                "ASSISTANT",
+                "SYSTEM",
+                "SUCCESS",
+                "FAILURE",
+                "ERROR",
+                "WARNING",
             ];
             for s in &iv.symbols {
                 let trimmed = s.trim_matches(|c: char| c == ':' || c == '.' || c == ',');
@@ -432,7 +505,12 @@ pub async fn run(
             let symbols_str = if clean_symbols.is_empty() {
                 "—".to_string()
             } else if clean_symbols.len() > 3 {
-                format!("{}, {} and {} others", clean_symbols[0], clean_symbols[1], clean_symbols.len() - 2)
+                format!(
+                    "{}, {} and {} others",
+                    clean_symbols[0],
+                    clean_symbols[1],
+                    clean_symbols.len() - 2
+                )
             } else {
                 clean_symbols.join(", ")
             };
@@ -465,7 +543,7 @@ pub async fn run(
                 };
                 println!("\x1b[2m     Topic: \"{}\"\x1b[0m", truncated);
             }
-            
+
             println!("\x1b[2m     Symbols: {}\x1b[0m", symbols_str);
         }
     }

@@ -7,7 +7,7 @@ use tracing::info;
 use unfault_core::{
     FileId, Language as UfLanguage, SourceFile, build_code_graph,
     parse::parse_source_file,
-    semantics::{SourceSemantics, build_source_semantics, CommonSemantics},
+    semantics::{CommonSemantics, SourceSemantics, build_source_semantics},
 };
 
 fn detect_language(path: &std::path::Path) -> Option<UfLanguage> {
@@ -365,8 +365,7 @@ pub async fn run(
         .collect();
 
     // Dependencies of the top hub file (gives the LLM the dependency spine).
-    let deps: Vec<(usize, String)> = if let Some((top_path, _)) = centrality.central_files.first()
-    {
+    let deps: Vec<(usize, String)> = if let Some((top_path, _)) = centrality.central_files.first() {
         let dep_ctx = unfault_core::graph::traversal::get_dependencies(&cg, top_path);
         let mut all: Vec<String> = dep_ctx
             .dependencies
@@ -393,10 +392,7 @@ pub async fn run(
         for route in common.route_patterns() {
             let method = route.method.as_str();
             let path = route.path.as_str();
-            let handler = route
-                .handler_name
-                .as_deref()
-                .unwrap_or(&route.handler_file);
+            let handler = route.handler_name.as_deref().unwrap_or(&route.handler_file);
             top_routes.push((format!("{method} {path}"), handler.to_string()));
         }
     }
@@ -515,7 +511,7 @@ pub async fn run(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+                    questions: vec![],
                 },
                 crate::ResponseMeta {
                     source: "init".to_string(),
@@ -578,11 +574,7 @@ pub async fn run(
                 }
             }
 
-            let symbols: Vec<String> = risk_sites
-                .iter()
-                .take(10)
-                .map(|r| r.file.clone())
-                .collect();
+            let symbols: Vec<String> = risk_sites.iter().take(10).map(|r| r.file.clone()).collect();
 
             capsules.push((
                 crate::IntentCapsule {
@@ -605,7 +597,7 @@ pub async fn run(
                     failure_mode: crate::types::FailureMode::None,
                     failure_signals: None,
                     extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+                    questions: vec![],
                 },
                 crate::ResponseMeta {
                     source: "init".to_string(),
@@ -654,9 +646,11 @@ pub async fn run(
     }
 
     for (cap, meta) in capsules {
-        crate::storage::insert_capsule_row(&db, &embedder, 0, 0, now_ms, &meta, None, None, &cap, None)
-            .await
-            .ok();
+        crate::storage::insert_capsule_row(
+            &db, &embedder, 0, 0, now_ms, &meta, None, None, &cap, None,
+        )
+        .await
+        .ok();
     }
 
     // Ingest git commit history as capsules — zero LLM cost, deduplicates on re-run.
@@ -671,7 +665,8 @@ pub async fn run(
             // Ingest CHANGELOG.md (if present at the repo root) as capsules — grounds
             // `unlost brief` and `unlost query` with shipped-decision history.
             let changelog_path = repo_root.join("CHANGELOG.md");
-            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color).await;
+            let _ = crate::changelog::ingest_changelog(&ws, &changelog_path, &embedder, use_color)
+                .await;
         }
     }
 

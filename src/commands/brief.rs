@@ -177,15 +177,7 @@ pub async fn run(
     // that don't literally mention the scope string in their symbols field.
     if let (Some(scope), Some(embedder)) = (scope_opt, embedder) {
         if let Ok(sem) = crate::storage::query_capsules_lancedb(
-            scope,
-            60,
-            None,
-            None,
-            None,
-            None,
-            None,
-            embedder,
-            &ws,
+            scope, 60, None, None, None, None, None, embedder, &ws,
         )
         .await
         {

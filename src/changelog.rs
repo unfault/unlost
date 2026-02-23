@@ -101,7 +101,11 @@ fn build_entry(version: String, date: String, lines: Vec<String>) -> Option<Chan
     // Trim trailing blank lines
     let body_lines: Vec<&str> = {
         let mut v = body_lines;
-        while v.last().map(|l: &&str| l.trim().is_empty()).unwrap_or(false) {
+        while v
+            .last()
+            .map(|l: &&str| l.trim().is_empty())
+            .unwrap_or(false)
+        {
             v.pop();
         }
         v
@@ -320,7 +324,7 @@ fn entry_to_capsule(e: &ChangelogEntry) -> crate::IntentCapsule {
         failure_mode: crate::types::FailureMode::None,
         failure_signals: None,
         extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+        questions: vec![],
     }
 }
 

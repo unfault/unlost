@@ -28,11 +28,7 @@ impl UsageMeta {
         let sum = self.tokens_input.unwrap_or(0)
             + self.tokens_output.unwrap_or(0)
             + self.tokens_reasoning.unwrap_or(0);
-        if sum > 0 {
-            Some(sum)
-        } else {
-            None
-        }
+        if sum > 0 { Some(sum) } else { None }
     }
 }
 
@@ -212,7 +208,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -249,7 +245,7 @@ mod tests {
                 "User expressed frustration, same symbols touched 3 times".to_string(),
             ),
             extraction_mode: ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();
@@ -328,7 +324,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         }];
 
         let output = InitCapsulesOutput {
@@ -387,7 +383,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
         let meta = ResponseMeta {
@@ -433,7 +429,7 @@ mod tests {
             failure_mode: FailureMode::None,
             failure_signals: None,
             extraction_mode: ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
         let json = serde_json::to_string(&capsule).unwrap();

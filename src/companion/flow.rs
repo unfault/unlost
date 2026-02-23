@@ -10,12 +10,10 @@
 use crate::IntentCapsule;
 use crate::embed::Embedder;
 use crate::emotion::{
-    apply_context_heuristics, extract_user_and_assistant_text, map_go_emotions, EmotionConfig,
-    EmotionModel,
+    EmotionConfig, EmotionModel, apply_context_heuristics, extract_user_and_assistant_text,
+    map_go_emotions,
 };
-use crate::governor::{
-    evaluate_failure_modes, evaluate_friction,
-};
+use crate::governor::{evaluate_failure_modes, evaluate_friction};
 use crate::recording::{ChunkInput, FlushJob, WorkspaceChunker, looks_like_commit_or_pr};
 use crate::storage::{ensure_capsules_table, insert_capsule_row};
 use crate::types::UsageMeta;
@@ -279,7 +277,11 @@ impl Flow {
     }
 
     pub(crate) async fn llm_calls(&self) -> u64 {
-        self._background_state.lock().await.llm_calls.load(std::sync::atomic::Ordering::Relaxed)
+        self._background_state
+            .lock()
+            .await
+            .llm_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Check for friction before an LLM call.
@@ -324,14 +326,17 @@ impl Flow {
         // Query recent history — exclude git capsules: they are facts about merged code,
         // not conversation turns, and their thin signals (no usage, no emotion, failure_mode=None)
         // would skew friction scoring if they land in the last-5 window.
-        let history = match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await {
-            Ok(h) => h.into_iter().filter(|c| c.meta.source != "git").collect(),
-            Err(_) => vec![],
-        };
+        let history =
+            match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await
+            {
+                Ok(h) => h.into_iter().filter(|c| c.meta.source != "git").collect(),
+                Err(_) => vec![],
+            };
 
         let symbols = crate::net::extract_symbols_from_text(&event.text);
         let user_symbols = symbols.clone();
-        let failure_mode = crate::governor::detect_failure_keywords(&event.text).unwrap_or(crate::types::FailureMode::None);
+        let failure_mode = crate::governor::detect_failure_keywords(&event.text)
+            .unwrap_or(crate::types::FailureMode::None);
 
         // Create current capsule for friction evaluation
         let current = IntentCapsule {
@@ -345,18 +350,21 @@ impl Flow {
             failure_mode,
             failure_signals: None,
             extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         };
 
         // NEW: Trajectory-based proactive friction regulation
         let (update, final_session_id) = {
             let controller = self.state.controllers.entry(ws.id.clone()).or_default();
-            
+
             // If event has a session ID, stick it. Otherwise try to use the last one.
             if let Some(ref sid) = event.agent_session_id {
                 controller.last_agent_session_id = Some(sid.clone());
             }
-            let sid = event.agent_session_id.clone().or_else(|| controller.last_agent_session_id.clone());
+            let sid = event
+                .agent_session_id
+                .clone()
+                .or_else(|| controller.last_agent_session_id.clone());
 
             let update = controller.update(
                 &ws.id,
@@ -377,7 +385,7 @@ impl Flow {
                 intensity = %update.intensity,
                 "trajectory controller returned proactive warning"
             );
-            
+
             // Record the intervention metric
             let _ = crate::metrics::record_friction_warning_injected(
                 &ws.id,
@@ -392,7 +400,10 @@ impl Flow {
                 update.watch_start_ts,
             );
 
-            return CheckResult { note: Some(note), error: None };
+            return CheckResult {
+                note: Some(note),
+                error: None,
+            };
         }
 
         // Fallback to legacy friction check (emotion + symbol repetition)
@@ -507,7 +518,8 @@ impl Flow {
             if let Some(ref sid) = event.agent_session_id {
                 controller.last_agent_session_id = Some(sid.clone());
             }
-            event.agent_session_id
+            event
+                .agent_session_id
                 .clone()
                 .or_else(|| controller.last_agent_session_id.clone())
         };
@@ -598,7 +610,9 @@ async fn process_flush_job(
     // snapshot, which may have been taken before the previous job was processed).
     let prior_decision = {
         let st = state.lock().await;
-        st.last_decisions.get(&job.workspace_id).cloned()
+        st.last_decisions
+            .get(&job.workspace_id)
+            .cloned()
             .or_else(|| job.prior_decision.clone())
     };
 
@@ -636,8 +650,8 @@ async fn process_flush_job(
     // Extract capsule metadata locally (fast, zero cost)
     let symbols = crate::net::extract_symbols_from_text(&job.input);
     let user_symbols = crate::net::extract_symbols_from_text(&user_text);
-    let failure_mode =
-        crate::governor::detect_failure_keywords(&job.input).unwrap_or(crate::types::FailureMode::None);
+    let failure_mode = crate::governor::detect_failure_keywords(&job.input)
+        .unwrap_or(crate::types::FailureMode::None);
 
     let extraction_mode = state.lock().await.extraction_mode;
 
@@ -650,7 +664,11 @@ async fn process_flush_job(
     };
 
     if use_llm {
-        state.lock().await.llm_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        state
+            .lock()
+            .await
+            .llm_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     // Extract capsule using LLM (this is the expensive network call)
@@ -701,7 +719,7 @@ async fn process_flush_job(
                 Some("Ghost extraction (no-LLM)".to_string())
             },
             extraction_mode: crate::types::ExtractionMode::None,
-                questions: vec![],
+            questions: vec![],
         }
     };
 
@@ -780,10 +798,11 @@ async fn process_flush_job(
 
     // Record the decision so the next capsule in this workspace can encode causal continuity.
     if !capsule.decision.trim().is_empty() {
-        state.lock().await.last_decisions.insert(
-            job.workspace_id.clone(),
-            capsule.decision.clone(),
-        );
+        state
+            .lock()
+            .await
+            .last_decisions
+            .insert(job.workspace_id.clone(), capsule.decision.clone());
     }
 
     tracing::info!(
