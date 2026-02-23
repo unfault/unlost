@@ -350,17 +350,21 @@ unlost recall src/</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost challenge</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Pressure-test a past decision or technology choice using workspace memory and the live code graph. Produces structured alternatives with tradeoffs and a verdict.</p>
+          <p class="text-midnight-violet-950/60 mb-4">Pressure-test a past decision or technology choice using workspace memory and the live code graph. Concise by default — add <code>--deep</code> for UNKNOWNS and PROBES sections.</p>
           <pre><code>unlost challenge "lancedb"
 unlost challenge "was using fastembed the right call?"
-unlost challenge "the proxy recorder architecture"</code></pre>
+unlost challenge "the proxy recorder architecture" --deep</code></pre>
           <div class="terminal mt-4 overflow-x-auto">
             <div class="text-white/40 mb-1"># Example: unlost challenge "lancedb"</div>
             <div class="text-white font-bold whitespace-nowrap">THE DECISION</div>
             <div class="text-white/80 whitespace-nowrap">LanceDB was chosen as the local vector store for capsule embeddings.</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">ALTERNATIVES</div>
-            <div class="text-white/80 whitespace-nowrap">① SQLite + sqlite-vec  Upside: single file, zero deps  Downside: no ANN index</div>
-            <div class="text-white/80 whitespace-nowrap">② Qdrant embedded     Upside: richer filtering  Downside: heavier binary</div>
+            <div class="text-white/80 whitespace-nowrap">① SQLite + sqlite-vec</div>
+            <div class="text-white/60 whitespace-nowrap">  Upside:   single file, zero native deps</div>
+            <div class="text-white/60 whitespace-nowrap">  Downside: no ANN index, full scan on large workspaces</div>
+            <div class="text-white/80 mt-1 whitespace-nowrap">② Qdrant embedded</div>
+            <div class="text-white/60 whitespace-nowrap">  Upside:   richer filtering and scoring</div>
+            <div class="text-white/60 whitespace-nowrap">  Downside: heavier binary, more complex setup</div>
             <div class="text-white font-bold mt-3 whitespace-nowrap">VERDICT</div>
             <div class="text-white/80 whitespace-nowrap">Keep if: ANN performance matters and binary size is acceptable.</div>
             <div class="text-white/80 whitespace-nowrap">Change if: you need a single-file deploy with zero native deps.</div>
