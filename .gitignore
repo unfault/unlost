@@ -35,3 +35,5 @@ package-lock.json
 
 .fastembed_cache/
 replay_log.txt
+
+.specify/
