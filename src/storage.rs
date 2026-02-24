@@ -10,10 +10,25 @@ use futures_util::TryStreamExt;
 use lancedb::connection::Connection;
 use lancedb::index::{Index, scalar::LabelListIndexBuilder};
 use lancedb::query::{ExecutableQuery, QueryBase};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) const CAPSULES_TABLE: &str = "capsules_v4";
+
+static WARNED_TS_FILTER_FALLBACK: AtomicBool = AtomicBool::new(false);
+
+fn warn_ts_filter_fallback(ws: &crate::WorkspacePaths) {
+    if WARNED_TS_FILTER_FALLBACK.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    eprintln!(
+        "unlost: LanceDB timestamp filter pushdown failed (lhs:Null, rhs:Int64); \
+falling back to client-side time filtering.\n\
+unlost: to repair and restore performance, run: unlost reindex --path '{}' -y",
+        ws.root.to_string_lossy()
+    );
+}
 
 fn capsules_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -587,10 +602,16 @@ pub(crate) async fn query_capsules_lancedb(
         filters.push(format!("upstream_host = '{provider_host}'"));
     }
 
+    // ts_ms filters are useful for performance, but some existing datasets have
+    // fragments where `ts_ms` is represented as `Null` type, which triggers a
+    // DataFusion interval analysis error when planning filters like
+    // `ts_ms >= <int64>` ("lhs:Null, rhs:Int64").
+    //
+    // We try pushdown first; on this specific failure we fall back to over-fetch
+    // and Rust-side filtering.
     if let Some(since_ms) = since {
         filters.push(format!("ts_ms >= {since_ms}"));
     }
-
     if let Some(until_ms) = until {
         filters.push(format!("ts_ms <= {until_ms}"));
     }
@@ -600,7 +621,55 @@ pub(crate) async fn query_capsules_lancedb(
         q = q.only_if(combined);
     }
 
-    let batches = q.execute().await?.try_collect::<Vec<_>>().await?;
+    let mut used_fallback = false;
+    let batches = match q.execute().await {
+        Ok(stream) => stream.try_collect::<Vec<_>>().await?,
+        Err(e) => {
+            let msg = e.to_string();
+            let is_interval_type_mismatch = msg.contains("Only intervals with the same data type are comparable")
+                && msg.contains("lhs:Null")
+                && msg.contains("rhs:Int64");
+            if !(since.is_some() || until.is_some()) || !is_interval_type_mismatch {
+                return Err(e.into());
+            }
+
+            used_fallback = true;
+            warn_ts_filter_fallback(ws);
+
+            // Retry without ts_ms predicates and over-fetch.
+            let mut q2 = table
+                .query()
+                .nearest_to(q_embedding.as_slice())?
+                .column("embedding")
+                .limit(limit.saturating_mul(5).max(limit));
+
+            let mut filters2: Vec<String> = Vec::new();
+            if let Some(sym) = symbol {
+                let sym = crate::util::escape_sql_string(sym);
+                filters2.push(format!("array_contains(symbols, '{sym}')"));
+            }
+            if let Some(emotion) = emotion {
+                let emotion = crate::util::escape_sql_string(emotion);
+                filters2.push(format!(
+                    "user_emotion = '{emotion}' OR assistant_emotion = '{emotion}'"
+                ));
+            }
+            if let Some(provider) = provider {
+                let provider_host = match provider {
+                    "openai" => "api.openai.com",
+                    "anthropic" => "api.anthropic.com",
+                    "opencode" => "opencode.ai",
+                    _ => provider,
+                };
+                filters2.push(format!("upstream_host = '{provider_host}'"));
+            }
+            if !filters2.is_empty() {
+                q2 = q2.only_if(filters2.join(" AND "));
+            }
+
+            q2.execute().await?.try_collect::<Vec<_>>().await?
+        }
+    };
     if batches.is_empty() {
         return Ok(vec![]);
     }
@@ -671,14 +740,14 @@ pub(crate) async fn query_capsules_lancedb(
             idx("agent_cost").and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
         let tokens_input_col =
             idx("tokens_input").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let tokens_output_col = idx("tokens_output")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let tokens_reasoning_col = idx("tokens_reasoning")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let tokens_cache_read_col = idx("tokens_cache_read")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
-        let tokens_cache_write_col = idx("tokens_cache_write")
-            .and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_output_col =
+            idx("tokens_output").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_reasoning_col =
+            idx("tokens_reasoning").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_read_col =
+            idx("tokens_cache_read").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_write_col =
+            idx("tokens_cache_write").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
 
         let user_emotion_label = col_str("user_emotion");
         let user_emotion_conf = col_f32("user_emotion_conf");
@@ -704,7 +773,8 @@ pub(crate) async fn query_capsules_lancedb(
         let commit_sha_col = col_str("commit_sha");
 
         for row in 0..batch.num_rows() {
-            if out.len() >= limit {
+            // In fallback mode, we may over-fetch; we'll filter+truncate below.
+            if !used_fallback && out.len() >= limit {
                 break;
             }
 
@@ -866,6 +936,16 @@ pub(crate) async fn query_capsules_lancedb(
         }
     }
 
+    if let Some(since_ms) = since {
+        out.retain(|h| h.ts_ms >= since_ms);
+    }
+    if let Some(until_ms) = until {
+        out.retain(|h| h.ts_ms <= until_ms);
+    }
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+
     Ok(out)
 }
 
@@ -965,7 +1045,65 @@ async fn scan_capsules_lancedb_impl(
         q = q.only_if(combined);
     }
 
-    let batches = q.execute().await?.try_collect::<Vec<_>>().await?;
+    let mut used_fallback = false;
+    let batches = match q.execute().await {
+        Ok(stream) => stream.try_collect::<Vec<_>>().await?,
+        Err(e) => {
+            let msg = e.to_string();
+            let is_interval_type_mismatch = msg.contains("Only intervals with the same data type are comparable")
+                && msg.contains("lhs:Null")
+                && msg.contains("rhs:Int64");
+            if !(since.is_some() || until.is_some()) || !is_interval_type_mismatch {
+                return Err(e.into());
+            }
+
+            used_fallback = true;
+            warn_ts_filter_fallback(ws);
+
+            // Retry without ts_ms predicates and over-fetch.
+            let mut q2 = table.query();
+            let fallback_limit = if recent_first {
+                limit.saturating_mul(10).max(limit)
+            } else {
+                limit.saturating_mul(5).max(limit)
+            };
+
+            if recent_first {
+                let total = table.count_rows(None).await.unwrap_or(0);
+                if total > fallback_limit {
+                    q2 = q2.offset(total - fallback_limit);
+                }
+            }
+            q2 = q2.limit(fallback_limit);
+
+            // Rebuild the non-ts filters.
+            let mut filters2: Vec<String> = Vec::new();
+            if let Some(sym) = symbol {
+                let sym = crate::util::escape_sql_string(sym);
+                filters2.push(format!("array_contains(symbols, '{sym}')"));
+            }
+            if let Some(emotion) = emotion {
+                let emotion = crate::util::escape_sql_string(emotion);
+                filters2.push(format!(
+                    "user_emotion = '{emotion}' OR assistant_emotion = '{emotion}'"
+                ));
+            }
+            if let Some(provider) = provider {
+                let provider_host = match provider {
+                    "openai" => "api.openai.com",
+                    "anthropic" => "api.anthropic.com",
+                    "opencode" => "opencode.ai",
+                    _ => provider,
+                };
+                filters2.push(format!("upstream_host = '{provider_host}'"));
+            }
+            if !filters2.is_empty() {
+                q2 = q2.only_if(filters2.join(" AND "));
+            }
+
+            q2.execute().await?.try_collect::<Vec<_>>().await?
+        }
+    };
     if batches.is_empty() {
         return Ok(vec![]);
     }
@@ -1065,7 +1203,7 @@ async fn scan_capsules_lancedb_impl(
 
         for row in 0..batch.num_rows() {
             // Skip early-exit when recent_first since we need all rows to sort
-            if !recent_first && out.len() >= limit {
+            if !recent_first && !used_fallback && out.len() >= limit {
                 break;
             }
             let cat = category
@@ -1232,6 +1370,19 @@ async fn scan_capsules_lancedb_impl(
 
     if recent_first {
         out.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+        out.truncate(limit);
+    }
+
+    if used_fallback {
+        if let Some(since_ms) = since {
+            out.retain(|h| h.ts_ms >= since_ms);
+        }
+        if let Some(until_ms) = until {
+            out.retain(|h| h.ts_ms <= until_ms);
+        }
+        if recent_first {
+            out.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+        }
         out.truncate(limit);
     }
 
@@ -1462,7 +1613,9 @@ pub(crate) async fn trace_capsules_lancedb(
         let sym_escaped = crate::util::escape_sql_string(sym);
         let mut filter_parts = vec![format!("array_contains(symbols, '{sym_escaped}')")];
 
-        // Backwards in time: only include capsules older than the newest seed
+        // Time bounds help keep fan-out tight. We'll try pushing them down; if a
+        // fragment has `ts_ms` typed as Null this can fail, in which case we fall
+        // back to Rust-side filtering.
         filter_parts.push(format!("ts_ms <= {newest_seed_ts}"));
         if let Some(since) = since_ms {
             filter_parts.push(format!("ts_ms >= {since}"));
@@ -1476,15 +1629,39 @@ pub(crate) async fn trace_capsules_lancedb(
         }
 
         let filter = filter_parts.join(" AND ");
-        let batches = match table
-            .query()
-            .only_if(filter)
-            .limit(fan_out_per_seed)
-            .execute()
-            .await
-        {
+        let mut used_fallback = false;
+
+        let batches = match table.query().only_if(filter).limit(fan_out_per_seed).execute().await {
             Ok(s) => s.try_collect::<Vec<_>>().await.unwrap_or_default(),
-            Err(_) => continue,
+            Err(e) => {
+                let msg = e.to_string();
+                let is_interval_type_mismatch = msg.contains("Only intervals with the same data type are comparable")
+                    && msg.contains("lhs:Null")
+                    && msg.contains("rhs:Int64");
+                if !is_interval_type_mismatch {
+                    continue;
+                }
+                used_fallback = true;
+                warn_ts_filter_fallback(ws);
+
+                // Retry without ts_ms predicates and filter in Rust.
+                let mut parts = vec![format!("array_contains(symbols, '{sym_escaped}')")];
+                if let Some(sid) = session_id {
+                    let sid_escaped = crate::util::escape_sql_string(sid);
+                    parts.push(format!("agent_session_id = '{sid_escaped}'"));
+                }
+                let filt = parts.join(" AND ");
+                match table
+                    .query()
+                    .only_if(filt)
+                    .limit(fan_out_per_seed.saturating_mul(5).max(fan_out_per_seed))
+                    .execute()
+                    .await
+                {
+                    Ok(s) => s.try_collect::<Vec<_>>().await.unwrap_or_default(),
+                    Err(_) => continue,
+                }
+            }
         };
 
         // Parse rows — reuse the scan row parser via a mini inline parse
@@ -1542,6 +1719,23 @@ pub(crate) async fn trace_capsules_lancedb(
                 let ts_ms = ts_ms_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                     .unwrap_or_default();
+
+                if used_fallback {
+                    // Backwards in time: only include capsules older than the newest seed.
+                    if ts_ms > newest_seed_ts {
+                        continue;
+                    }
+                    if let Some(since) = since_ms {
+                        if ts_ms < since {
+                            continue;
+                        }
+                    }
+                    if let Some(until) = until_ms {
+                        if ts_ms > until {
+                            continue;
+                        }
+                    }
+                }
                 let conn_id = conn_id_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
                     .unwrap_or_default();
