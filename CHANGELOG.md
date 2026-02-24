@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`/unlost-walkthrough` skill**: Installs a walkthrough skill for both OpenCode and Claude Code that guides users through recent changes step-by-step (with VSCode `code --goto` navigation).
+
 ### Changed
 - **`unlost pr-comment` dual-audience comment**: The comment now serves both the author (staying close to code written by AI agents) and the reviewer. Voice changed from "you" to "we". New sections: "What we were navigating" (shared tradeoff framing with emotional signal woven in), "Ripple effects" (functional knock-on effects across commands/features, not just code imports), "Left open" (deferred decisions, open questions, unresolved next_steps from capsules), and "Re-read this" (1-2 linked file:function pointers to non-obvious logic). File references are now clickable GitHub blob links built from the head SHA and repo coordinates. "How To Verify" removed. Em-dashes banned from output. A blockquote hook at the top of every comment shows the decision count and explains what unlost does; if no decisions were found, it says so plainly and suggests a replay command. Fixed: `headRepositoryOwner` is now fetched as a top-level field (the nested `headRepository.owner.login` path was always empty).
 
