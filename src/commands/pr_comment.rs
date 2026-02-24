@@ -473,7 +473,10 @@ async fn build_pr_comment_markdown(
             ));
             if cap.failure_mode != crate::types::FailureMode::None {
                 let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
-                context.push_str(&format!("failure: {}\n", fm.trim_matches('"')));
+                context.push_str(&format!("failure_mode: {}\n", fm.trim_matches('"')));
+                if let Some(ref sig) = cap.failure_signals {
+                    context.push_str(&format!("failure_signals: {}\n", sig.replace('\n', " ")));
+                }
             }
             if !cap.intent.trim().is_empty() {
                 context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
@@ -488,6 +491,26 @@ async fn build_pr_comment_markdown(
                 let syms = cap.symbols.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
                 context.push_str(&format!("symbols: {syms}\n"));
             }
+            // Open questions and deferred work — key for "Left open" section
+            if !cap.next_steps.is_empty() {
+                let steps = cap.next_steps.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
+                context.push_str(&format!("next_steps: {steps}\n"));
+            }
+            if !cap.questions.is_empty() {
+                let qs = cap.questions.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
+                context.push_str(&format!("open_questions: {qs}\n"));
+            }
+            // Emotion signals — surface uncertainty/frustration if present
+            if let Some(ref emo) = hit.assistant_emotion {
+                if !emo.label.is_empty() && emo.label != "neutral" {
+                    context.push_str(&format!("assistant_emotion: {} (intensity {:.2})\n", emo.label, emo.intensity));
+                }
+            }
+            if let Some(ref emo) = hit.user_emotion {
+                if !emo.label.is_empty() && emo.label != "neutral" {
+                    context.push_str(&format!("user_emotion: {} (intensity {:.2})\n", emo.label, emo.intensity));
+                }
+            }
             context.push('\n');
         }
     }
@@ -501,32 +524,47 @@ async fn build_pr_comment_markdown(
 
     // ── Prompt ────────────────────────────────────────────────────────────────
     let preamble = "\
-You are unlost, a staff engineer writing a review-guidance comment on a pull request.\n\
-Your output is read by the developer before a human reviewer sees the PR.\n\
-Your role: surface what changed, why it matters operationally, and what the reviewer must verify.\n\
-You are NOT writing process notes or style feedback.\n\n\
+You are unlost, a staff engineer writing a PR comment for the developer who wrote this code.\n\
+This comment serves two audiences simultaneously:\n\
+  1. The AUTHOR — helping them stay intimate with what they built (the tradeoffs held in mind, \
+what was left open, where the non-obvious logic lives).\n\
+  2. The REVIEWER — understanding what changed operationally and what to verify.\n\
+Write in a clear, direct, staff-engineer voice. Not a private journal. Not a style review.\n\n\
 RULES:\n\
 - Total output: 200–300 words maximum.\n\
-- Use bullet points with actionable verbs: Verify…, Check…, Confirm…, Ensure…\n\
-- Every risk or check must cite a specific file, function, or codepath from the diff.\n\
-- If you lack evidence for a claim, write: \"Cannot confirm from history — would need [specific artifact].\"\n\
-- Omit sections that have nothing concrete to say.\n\
-- Do NOT write generic warnings (e.g. \"make sure tests pass\").\n\
-- Do NOT include process/workflow notes unless they affect correctness (migration, data rewrite, backwards compat).\n\n\
-OUTPUT FORMAT (strict — use exactly these section headings):\n\
+- Every risk/check must cite a specific file, function, or line from the diff.\n\
+- Actionable bullets use verbs: Verify…, Check…, Confirm…, Re-read…\n\
+- If you lack evidence, write: \"Cannot confirm from history — would need [specific artifact].\"\n\
+- Omit any section that has nothing concrete to say (except What Changed and What you were navigating).\n\
+- No generic warnings. No process/workflow notes unless they affect correctness.\n\
+- Emotional signal from capsules (frustration, uncertainty): if present, weave ONE sentence into \
+\"What you were navigating\" — e.g. \"There was uncertainty here around X.\"\n\n\
+OUTPUT FORMAT (strict — use exactly these headings, in this order):\n\
 ## unlost context\n\
 ### What Changed\n\
 1–2 sentences: what the code does differently after this PR.\n\
-### Why\n\
-1–2 sentences: the decision/constraint that drove this change (cite recorded decisions if available).\n\
+### What you were navigating\n\
+1–2 sentences: the tradeoff or constraint you were holding when you wrote this \
+(cite recorded decisions/rationale if available). If emotion signals indicate friction or \
+uncertainty around a specific decision, surface it here in one sentence.\n\
 ### Behavioral Impact\n\
-Bullets: concrete runtime differences a reviewer must understand (latency, ordering, error modes, data shape).\n\
+Bullets: concrete runtime differences (latency, ordering, error modes, data shape). \
+Omit if nothing material.\n\
 ### Risks / Trade-offs\n\
 Bullets: specific risks tied to exact codepaths. Each bullet names a file or symbol.\n\
 ### How To Verify\n\
-Bullets starting with Verify/Check/Confirm: what the reviewer should test or inspect.\n\
+Bullets: Verify/Check/Confirm — what to test or inspect before merging.\n\
+### Left open\n\
+Bullets: deferred decisions, open questions, or unresolved next_steps from the recorded history. \
+Draw from next_steps, open_questions, and unresolved failure modes in the causal history. \
+Omit entirely if nothing was left open.\n\
+### Re-read this\n\
+1–2 bullets pointing to specific file locations (file:function or file:line) that contain \
+non-obvious logic the author should re-read in 3 months. Choose from the correctness-sensitive \
+patterns and the most complex diff hunks. Omit if nothing stands out.\n\
 ### Rollout / Recovery\n\
-Only include if there is a migration, data rewrite, flag, or backwards-compat concern. Otherwise omit entirely.\n\n\
+Only include if there is a migration, data rewrite, flag, or backwards-compat concern. \
+Otherwise omit entirely.\n\n\
 Return the markdown in the `narrative` field.";
 
     let result = crate::llm_extract::<crate::QueryNarrativeOutput>(

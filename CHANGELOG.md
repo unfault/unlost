@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Changed
-- **`unlost pr-comment` output contract**: The generated comment now follows a strict six-section format (What Changed, Why, Behavioral Impact, Risks/Trade-offs, How To Verify, Rollout/Recovery) capped at 200–300 words with actionable-verb bullets (Verify/Check/Confirm) and every risk tied to a specific file or symbol. Diff hunks, commit list, and runtime-impact signals (retry paths, extra I/O, error handling, feature flags, filter/ordering/limit changes) are now extracted from the PR and fed to the LLM for a concrete impact-lens pass.
+- **`unlost pr-comment` dual-audience comment**: The comment now serves both the author (staying intimate with code written by AI agents) and the reviewer. New sections: "What you were navigating" (the tradeoff held when writing, with emotional signal from capsule history woven in), "Left open" (deferred decisions, open questions, unresolved next_steps from capsules), and "Re-read this" (1–2 specific file:function pointers to non-obvious logic). Capsule context now includes `next_steps`, `open_questions`, `failure_signals`, and emotion metadata to ground these sections.
 
 ### Fixed
 - **`unlost inspect` capsule order**: Capsules are now displayed oldest-first (newest at end) instead of newest-first.
