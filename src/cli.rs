@@ -229,6 +229,18 @@ pub enum Command {
         #[arg(long)]
         until: Option<String>,
 
+        /// Restrict trace to capsules from a specific agent session ID
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Restrict trace to commits reachable from this commit (inclusive lower bound, e.g. main)
+        #[arg(long)]
+        from_commit: Option<String>,
+
+        /// Restrict trace to commits up to and including this commit (e.g. HEAD)
+        #[arg(long)]
+        to_commit: Option<String>,
+
         /// LLM model to use for trace narrative
         #[arg(long)]
         llm_model: Option<String>,
@@ -244,6 +256,33 @@ pub enum Command {
         /// Shortcut for `--output plain`
         #[arg(long, default_value_t = false)]
         plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Post an unlost context comment on a GitHub PR (stealth mode — runs automatically when
+    /// the agent creates a PR, but can also be invoked manually)
+    PrComment {
+        /// GitHub PR URL or number (e.g. https://github.com/owner/repo/pull/42 or 42)
+        pr: String,
+
+        /// Agent session ID to scope the trace to (auto-detected when run from shim)
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Base commit for diff scope (e.g. main). Defaults to PR base branch.
+        #[arg(long)]
+        from_commit: Option<String>,
+
+        /// LLM model to use for the PR comment narrative
+        #[arg(long)]
+        llm_model: Option<String>,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]

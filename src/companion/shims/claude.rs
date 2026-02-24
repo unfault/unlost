@@ -830,9 +830,12 @@ async fn handle_stop(
     let mut seen = load_turnkeys(&ws.id, &input.session_id);
     let mut new_keys: Vec<String> = Vec::new();
     let mut all_touched: Vec<String> = Vec::new();
+    // Collect assistant texts to detect PR creation after the turns loop.
+    let mut all_assistant_texts: Vec<String> = Vec::new();
 
     for turn in turns {
         all_touched.extend(turn.touched_paths.iter().cloned());
+        all_assistant_texts.push(turn.assistant_text.clone());
 
         if let Some(k) = turn_key(&turn) {
             if seen.contains(&k) {
@@ -864,6 +867,35 @@ async fn handle_stop(
 
     // Save cursor
     save_cursor(&ws.id, &input.session_id, &new_cursor);
+
+    // Stealth PR comment: scan all assistant texts for a GitHub PR URL created this batch.
+    // If found, spawn `unlost pr-comment` in the background without blocking the Stop hook.
+    {
+        let combined = all_assistant_texts.join("\n");
+        if let Some(pr_url) =
+            crate::companion::shims::opencode_stdio::extract_github_pr_url_pub(&combined)
+        {
+            let session_id = input.session_id.clone();
+            let directory = input.cwd.clone();
+            let em = embed_model.to_string();
+            let ec = embed_cache_dir.map(|s| s.to_string());
+            tokio::spawn(async move {
+                tracing::info!(pr_url, "claude: detected PR creation — posting unlost comment");
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if let Err(e) = crate::companion::shims::opencode_stdio::spawn_pr_comment_pub(
+                    &pr_url,
+                    Some(session_id.as_str()),
+                    &directory,
+                    &em,
+                    ec.as_deref(),
+                )
+                .await
+                {
+                    tracing::warn!(error = ?e, pr_url, "claude: pr-comment spawn failed");
+                }
+            });
+        }
+    }
 
     // ── Incremental ingest: changelog and git tags ────────────────────────────
     // Run after every Stop hook so that:

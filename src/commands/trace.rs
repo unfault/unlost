@@ -10,6 +10,9 @@ pub async fn run(
     threshold: f32,
     since: Option<String>,
     until: Option<String>,
+    session_id: Option<String>,
+    from_commit: Option<String>,
+    to_commit: Option<String>,
     no_llm: bool,
     llm_model: Option<String>,
     output: OutputFormat,
@@ -24,6 +27,8 @@ pub async fn run(
         println!("    unlost trace src/governor.rs");
         println!("    unlost trace \"why is the timeout 30s?\"");
         println!("    unlost trace proxy_request --since 3M");
+        println!("    unlost trace src/governor.rs --session-id ses_abc123");
+        println!("    unlost trace src/governor.rs --from-commit main --to-commit HEAD");
         return Ok(());
     }
 
@@ -37,6 +42,22 @@ pub async fn run(
     };
 
     let cwd = std::env::current_dir()?;
+    let workspace_root = crate::workspace::git_toplevel(&cwd)
+        .unwrap_or_else(|| crate::workspace::canonicalize_dir(&cwd).unwrap_or(cwd.clone()));
+
+    // Resolve commit range to timestamps if provided, merging with explicit --since/--until.
+    let (since_ms, until_ms) = if from_commit.is_some() || to_commit.is_some() {
+        let from_ts = from_commit
+            .as_deref()
+            .and_then(|c| resolve_commit_timestamp(&workspace_root, c));
+        let to_ts = to_commit
+            .as_deref()
+            .and_then(|c| resolve_commit_timestamp(&workspace_root, c));
+        (since_ms.or(from_ts), until_ms.or(to_ts))
+    } else {
+        (since_ms, until_ms)
+    };
+
     let ws = crate::workspace::get_or_create_workspace_paths(&cwd)?;
 
     let spinner = if let Some(target) = crate::narrative::spinner_draw_target(output) {
@@ -72,6 +93,7 @@ pub async fn run(
         threshold,
         since_ms,
         until_ms,
+        session_id.as_deref(),
         embedder,
         &ws,
     )
@@ -100,14 +122,12 @@ pub async fn run(
         pb.set_message("Reconstructing the story...");
     }
 
-    let workspace_root = crate::workspace::git_toplevel(&cwd)
-        .unwrap_or_else(|| crate::workspace::canonicalize_dir(&cwd).unwrap_or(cwd.clone()));
-    let workspace_root = workspace_root.to_string_lossy().to_string();
+    let workspace_root_str = workspace_root.to_string_lossy().to_string();
 
     match crate::narrative::llm_trace_narrative(
         llm_model.as_deref(),
         &query,
-        &workspace_root,
+        &workspace_root_str,
         &chain,
     )
     .await
@@ -151,6 +171,22 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// Resolve a git ref (branch name, commit hash, "HEAD", etc.) to a Unix timestamp in ms.
+/// Returns None if the ref cannot be resolved or git is unavailable.
+pub(crate) fn resolve_commit_timestamp(repo_root: &std::path::Path, git_ref: &str) -> Option<i64> {
+    let output = std::process::Command::new("git")
+        .current_dir(repo_root)
+        .args(["log", "-1", "--format=%ct", git_ref])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let ts_str = String::from_utf8_lossy(&output.stdout);
+    let ts_secs: i64 = ts_str.trim().parse().ok()?;
+    Some(ts_secs * 1000)
 }
 
 fn fmt_ts_short(ts_ms: i64) -> String {
