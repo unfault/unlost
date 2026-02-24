@@ -28,7 +28,11 @@ impl UsageMeta {
         let sum = self.tokens_input.unwrap_or(0)
             + self.tokens_output.unwrap_or(0)
             + self.tokens_reasoning.unwrap_or(0);
-        if sum > 0 { Some(sum) } else { None }
+        if sum > 0 {
+            Some(sum)
+        } else {
+            None
+        }
     }
 }
 
@@ -189,6 +193,10 @@ pub struct CapsuleHit {
     pub assistant_emotion: Option<crate::emotion::EmotionMeta>,
     pub capsule: IntentCapsule,
     pub meta: ResponseMeta,
+    /// git HEAD SHA when the buffer chunk that produced this capsule opened.
+    pub head_sha: Option<String>,
+    /// git SHA of the commit that landed during this turn, if detected (sparse).
+    pub commit_sha: Option<String>,
 }
 
 #[cfg(test)]
@@ -405,6 +413,8 @@ mod tests {
             assistant_emotion: None,
             capsule,
             meta,
+            head_sha: None,
+            commit_sha: None,
         };
 
         assert_eq!(hit.id, "test_id");

@@ -534,6 +534,10 @@ pub enum ShimCommand {
         /// Embedding cache directory (defaults to XDG data dir)
         #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
         embed_cache_dir: Option<String>,
+
+        /// Disable LLM extraction (fast, zero cost)
+        #[arg(long, default_value_t = false)]
+        no_extraction: bool,
     },
 
     /// Run the Claude hooks shim (reads hook JSON from stdin)

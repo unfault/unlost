@@ -390,9 +390,16 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
 
     if (!userText && !assistantText) return
 
-    // Debug: log usage being sent
     const usageToSend = assistantMsg?.usage || null
-    log("info", `recording exchange: session=${sessionId} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}... tool_outcomes=${toolCallsToSend.length} usage=${safeJson(usageToSend)}`)
+    // turn_key is a stable, content-free identity for this exchange.
+    // The shim uses it to deduplicate via replayed.txt so that a plugin
+    // restart never writes the same capsule twice to capsules.jsonl.
+    const turnKey =
+      exchange.userMessageId && exchange.assistantMessageId
+        ? `${exchange.userMessageId}:${exchange.assistantMessageId}`
+        : undefined
+
+    log("info", `recording exchange: session=${sessionId} turn_key=${turnKey} user=${userText.slice(0, 50)}... assistant=${assistantText.slice(0, 50)}... tool_outcomes=${toolCallsToSend.length} usage=${safeJson(usageToSend)}`)
 
     sendRequest<RecordResponse>("record", {
       user_text: userText,
@@ -402,6 +409,7 @@ export const UnlostPlugin: Plugin = async ({ client, directory }) => {
       tool_calls: toolCallsToSend,
       agent_session_id: sessionId,
       usage: usageToSend,
+      turn_key: turnKey,
     }).catch(() => {})
 
     if (exchange.assistantMessageId) {

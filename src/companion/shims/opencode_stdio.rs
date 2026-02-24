@@ -210,14 +210,19 @@ impl From<RecordResult> for Response {
 ///
 /// Reads JSON requests from stdin, processes them via the flow, and writes
 /// JSON responses to stdout. Signals readiness with `{"ready": true}` on startup.
-pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow::Result<()> {
+pub async fn run(embed_model: String, embed_cache_dir: Option<String>, no_extraction: bool) -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
+    let extraction_mode = if no_extraction {
+        crate::types::ExtractionMode::None
+    } else {
+        crate::types::ExtractionMode::Hybrid // stdio shim is for live, so use hybrid by default
+    };
     let config = FlowConfig {
         embed_model: embed_model.clone(),
         embed_cache_dir: embed_cache_dir.clone(),
-        extraction_mode: crate::types::ExtractionMode::Hybrid, // stdio shim is for live, so use hybrid by default
+        extraction_mode,
     };
     let mut flow = Flow::new(config);
 

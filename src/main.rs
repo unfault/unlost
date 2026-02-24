@@ -279,8 +279,9 @@ async fn main() -> anyhow::Result<()> {
             ShimCommand::Opencode {
                 embed_model,
                 embed_cache_dir,
+                no_extraction,
             } => {
-                unlost::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir).await?;
+                unlost::companion::shims::opencode_stdio::run(embed_model, embed_cache_dir, no_extraction).await?;
             }
             ShimCommand::Claude {
                 embed_model,
