@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **`unlost pr-comment`**: New command that posts a staff-engineer-style context comment on a
+  GitHub PR (requires `gh` CLI). The comment explains what the changed code is, where the
+  decisions that shaped it come from (drawing on recorded capsules and git history), and flags
+  high-dependency files that may have wider impact ("Worth noting" section). Accepts a PR URL or
+  number, an optional `--session-id` to scope the trace, and an optional `--from-commit` for
+  diff bounds.
+- **Stealth PR comment — OpenCode shim**: When the agent creates a GitHub PR via `gh pr create`
+  (detected by scanning `bash` tool-call outputs for a GitHub PR URL), the OpenCode stdio shim
+  automatically spawns `unlost pr-comment` in the background without blocking the agent.
+- **Stealth PR comment — Claude shim**: Same stealth detection for the Claude Stop hook: assistant
+  texts from each batch are scanned for a GitHub PR URL and `unlost pr-comment` is spawned if found.
+- **`unlost trace --session-id`**: New flag to restrict the causal chain to capsules from a
+  specific agent session, enabling per-session archaeology.
+- **`unlost trace --from-commit` / `--to-commit`**: New flags to scope the trace to a commit
+  range. Commit refs (branch names, SHAs, `HEAD`, etc.) are resolved to timestamps via
+  `git log -1 --format=%ct`, then used as `since`/`until` filters on the capsule store.
+
 ## [0.10.0] - 2026-02-24
 
 ### Added

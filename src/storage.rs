@@ -1402,6 +1402,7 @@ pub(crate) async fn trace_capsules_lancedb(
     distance_threshold: f32,
     since_ms: Option<i64>,
     until_ms: Option<i64>,
+    session_id: Option<&str>,
     embedder: crate::embed::Embedder,
     ws: &crate::WorkspacePaths,
 ) -> anyhow::Result<Vec<crate::CapsuleHit>> {
@@ -1410,6 +1411,22 @@ pub(crate) async fn trace_capsules_lancedb(
         query, seed_limit, None, None, None, since_ms, until_ms, embedder, ws,
     )
     .await?;
+
+    // If a session_id filter is active, restrict seeds to that session.
+    let seeds: Vec<crate::CapsuleHit> = if let Some(sid) = session_id {
+        seeds
+            .into_iter()
+            .filter(|h| {
+                h.meta
+                    .agent_session_id
+                    .as_deref()
+                    .map(|s| s == sid)
+                    .unwrap_or(false)
+            })
+            .collect()
+    } else {
+        seeds
+    };
 
     if seeds.is_empty() {
         return Ok(vec![]);
@@ -1452,6 +1469,10 @@ pub(crate) async fn trace_capsules_lancedb(
         }
         if let Some(until) = until_ms {
             filter_parts.push(format!("ts_ms <= {until}"));
+        }
+        if let Some(sid) = session_id {
+            let sid_escaped = crate::util::escape_sql_string(sid);
+            filter_parts.push(format!("agent_session_id = '{sid_escaped}'"));
         }
 
         let filter = filter_parts.join(" AND ");

@@ -126,6 +126,9 @@ async fn main() -> anyhow::Result<()> {
             threshold,
             since,
             until,
+            session_id,
+            from_commit,
+            to_commit,
             llm_model,
             no_llm,
             output,
@@ -141,9 +144,30 @@ async fn main() -> anyhow::Result<()> {
                 threshold,
                 since,
                 until,
+                session_id,
+                from_commit,
+                to_commit,
                 no_llm,
                 llm_model,
                 output,
+                embed_model,
+                embed_cache_dir,
+            )
+            .await?;
+        }
+        Command::PrComment {
+            pr,
+            session_id,
+            from_commit,
+            llm_model,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::commands::pr_comment::run(
+                pr,
+                session_id,
+                from_commit,
+                llm_model,
                 embed_model,
                 embed_cache_dir,
             )

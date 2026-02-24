@@ -280,6 +280,33 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>, no_extrac
                 }
                 all_touched.extend(params.touched_paths.iter().cloned());
 
+                // Stealth PR comment: detect when the agent created a GitHub PR and
+                // spawn `unlost pr-comment` in the background without blocking the agent.
+                if let Some(pr_url) =
+                    detect_pr_creation_in_tool_calls(&params.tool_calls)
+                {
+                    let session_id = params.agent_session_id.clone();
+                    let directory = params.directory.clone();
+                    let em = embed_model.clone();
+                    let ec = embed_cache_dir.clone();
+                    tokio::spawn(async move {
+                        tracing::info!(pr_url, "detected PR creation — posting unlost comment");
+                        // Small delay so gh has time to fully register the PR.
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if let Err(e) = spawn_pr_comment(
+                            &pr_url,
+                            session_id.as_deref(),
+                            &directory,
+                            &em,
+                            ec.as_deref(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = ?e, pr_url, "pr-comment spawn failed");
+                        }
+                    });
+                }
+
                 // Try deduplication if turn_key is provided
                 let should_record = if let Some(ref tk) = params.turn_key {
                     if let Ok(ws) = get_or_create_workspace_paths(dir_path) {
@@ -359,5 +386,166 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>, no_extrac
         }
     }
 
+    Ok(())
+}
+
+// ============================================================================
+// Stealth PR comment helpers
+// ============================================================================
+
+/// Scan tool_calls for evidence that the agent just created a GitHub PR.
+/// Returns the PR URL if found, None otherwise.
+fn detect_pr_creation_in_tool_calls(tool_calls: &[crate::types::ToolCall]) -> Option<String> {
+    for tc in tool_calls {
+        // Only inspect bash tool outputs — that's where `gh pr create` runs.
+        if tc.name != "bash" {
+            continue;
+        }
+        // Look for a GitHub PR URL in the output text.
+        if let Some(url) = extract_github_pr_url(&tc.output) {
+            return Some(url);
+        }
+    }
+    None
+}
+
+/// Extract the first GitHub PR URL from a string, or None.
+/// Public alias so sibling shims (e.g. claude) can reuse without duplication.
+pub(crate) fn extract_github_pr_url_pub(text: &str) -> Option<String> {
+    extract_github_pr_url(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_github_pr_url_full_url() {
+        let text = "PR created: https://github.com/owner/repo/pull/42\nDone.";
+        assert_eq!(
+            extract_github_pr_url(text),
+            Some("https://github.com/owner/repo/pull/42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_github_pr_url_trailing_punctuation_stripped() {
+        let text = "See https://github.com/owner/repo/pull/42.";
+        assert_eq!(
+            extract_github_pr_url(text),
+            Some("https://github.com/owner/repo/pull/42".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_github_pr_url_no_pr() {
+        let text = "Pushed to https://github.com/owner/repo/tree/main";
+        assert_eq!(extract_github_pr_url(text), None);
+    }
+
+    #[test]
+    fn test_extract_github_pr_url_empty() {
+        assert_eq!(extract_github_pr_url(""), None);
+    }
+
+    #[test]
+    fn test_detect_pr_creation_bash_tool_call() {
+        let tool_calls = vec![crate::types::ToolCall {
+            name: "bash".to_string(),
+            output: "https://github.com/owner/repo/pull/7 created".to_string(),
+        }];
+        assert_eq!(
+            detect_pr_creation_in_tool_calls(&tool_calls),
+            Some("https://github.com/owner/repo/pull/7".to_string())
+        );
+    }
+
+    #[test]
+    fn test_detect_pr_creation_non_bash_ignored() {
+        let tool_calls = vec![crate::types::ToolCall {
+            name: "read_file".to_string(),
+            output: "https://github.com/owner/repo/pull/7 created".to_string(),
+        }];
+        assert_eq!(detect_pr_creation_in_tool_calls(&tool_calls), None);
+    }
+
+    #[test]
+    fn test_detect_pr_creation_empty() {
+        assert_eq!(detect_pr_creation_in_tool_calls(&[]), None);
+    }
+}
+
+fn extract_github_pr_url(text: &str) -> Option<String> {
+    // Match: https://github.com/<owner>/<repo>/pull/<number>
+    // Simple linear scan — no regex dependency.
+    let marker = "github.com/";
+    let mut pos = 0;
+    while let Some(idx) = text[pos..].find(marker) {
+        let start = pos + idx;
+        // Backtrack to include the scheme.
+        let url_start = text[..start]
+            .rfind("https://")
+            .map(|i| i)
+            .unwrap_or(start);
+        let candidate = &text[url_start..];
+        // Find the end of the URL (whitespace or end of string).
+        let end = candidate
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .unwrap_or(candidate.len());
+        let url = &candidate[..end];
+        if url.contains("/pull/") {
+            return Some(url.trim_end_matches(|c| c == '.' || c == ',').to_string());
+        }
+        pos = start + marker.len();
+    }
+    None
+}
+
+/// Spawn `unlost pr-comment` as a subprocess in the given workspace directory.
+/// Public alias so sibling shims can reuse.
+pub(crate) async fn spawn_pr_comment_pub(
+    pr_url: &str,
+    session_id: Option<&str>,
+    directory: &str,
+    embed_model: &str,
+    embed_cache_dir: Option<&str>,
+) -> anyhow::Result<()> {
+    spawn_pr_comment(pr_url, session_id, directory, embed_model, embed_cache_dir).await
+}
+
+async fn spawn_pr_comment(
+    pr_url: &str,
+    session_id: Option<&str>,
+    directory: &str,
+    embed_model: &str,
+    embed_cache_dir: Option<&str>,
+) -> anyhow::Result<()> {
+    let unlost_bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("unlost"));
+
+    let mut cmd = tokio::process::Command::new(unlost_bin);
+    cmd.arg("pr-comment").arg(pr_url);
+
+    if let Some(sid) = session_id {
+        cmd.arg("--session-id").arg(sid);
+    }
+
+    cmd.arg("--embed-model").arg(embed_model);
+
+    if let Some(ec) = embed_cache_dir {
+        cmd.arg("--embed-cache-dir").arg(ec);
+    }
+
+    // Run in the workspace directory so unlost resolves the correct workspace.
+    if !directory.is_empty() {
+        cmd.current_dir(directory);
+    }
+
+    // Fire and forget — we don't care about the exit status here; failures
+    // are logged inside the spawned process.
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    let _ = cmd.spawn()?;
     Ok(())
 }
