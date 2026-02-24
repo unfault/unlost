@@ -109,11 +109,17 @@ fn select_hits_for_brief(hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec<crat
 }
 
 /// Try to serve brief from stored checkpoint narratives.
+///
+/// Converts checkpoints into synthetic CapsuleHits and passes them through
+/// `llm_brief_narrative` + `render_brief` — the same pipeline normal brief uses.
+/// Output format is identical regardless of which path was taken.
+///
 /// Returns Some(rendered text) on success, None to fall back to full capsule scan.
 async fn try_checkpoint_brief(
     ws: &crate::WorkspacePaths,
+    workspace_root: &str,
     llm_model: Option<&str>,
-    _output: OutputFormat,
+    output: OutputFormat,
 ) -> Option<String> {
     std::fs::create_dir_all(&ws.db_dir).ok()?;
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
@@ -130,58 +136,70 @@ async fn try_checkpoint_brief(
         return None;
     }
 
-    // If there's only one checkpoint, return its narrative directly — no LLM needed.
-    if checkpoints.len() == 1 {
-        return Some(checkpoints[0].narrative.clone());
-    }
+    // Convert each checkpoint into a synthetic CapsuleHit so llm_brief_narrative
+    // receives them as its normal input. The checkpoint narrative goes into
+    // `intent` — brief's prompt reads that field as the primary signal.
+    let hits: Vec<crate::CapsuleHit> = checkpoints
+        .iter()
+        .map(checkpoint_as_capsule_hit)
+        .collect();
 
-    // Multiple checkpoints: ask LLM to synthesize them into a brief.
-    // This is far cheaper than scanning 200 raw capsules.
-    let result = synthesize_checkpoints_for_brief(llm_model, &checkpoints).await.ok()?;
-    Some(result)
+    let narrative = crate::narrative::llm_brief_narrative(
+        llm_model,
+        None, // unscoped
+        &ws.id,
+        workspace_root,
+        &hits,
+    )
+    .await
+    .ok()?;
+
+    let mut out = crate::narrative::render_brief(output, &narrative);
+    let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+    if wrap {
+        out = crate::util::wrap_plain_text(&out, 80);
+    }
+    Some(out)
 }
 
-/// Synthesize multiple checkpoint narratives into a staff-engineer brief.
-async fn synthesize_checkpoints_for_brief(
-    llm_model: Option<&str>,
-    checkpoints: &[crate::storage_checkpoint::CheckpointRow],
-) -> anyhow::Result<String> {
-    use chrono::TimeZone;
-    let mut context = String::new();
-    context.push_str(&format!(
-        "The following are {} checkpoint story segments from this workspace, \
-         ordered from most recent to oldest:\n\n",
-        checkpoints.len()
-    ));
-
-    for (i, cp) in checkpoints.iter().enumerate() {
-        let ts_str = chrono::Utc
-            .timestamp_millis_opt(cp.ts_ms)
-            .single()
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| cp.ts_ms.to_string());
-        context.push_str(&format!("--- Segment {} ({})\n", i + 1, ts_str));
-        context.push_str(&cp.narrative);
-        context.push_str("\n\n");
+/// Convert a CheckpointRow into a synthetic CapsuleHit so it can be fed into
+/// the normal llm_brief_narrative / llm_recall_narrative pipelines.
+fn checkpoint_as_capsule_hit(
+    cp: &crate::storage_checkpoint::CheckpointRow,
+) -> crate::CapsuleHit {
+    use crate::types::{ExtractionMode, FailureMode, IntentCapsule, ResponseMeta};
+    crate::CapsuleHit {
+        id: cp.id.clone(),
+        ts_ms: cp.to_ts_ms,
+        conn_id: 0,
+        exchange_seq: 0,
+        capsule: IntentCapsule {
+            category: "checkpoint".to_string(),
+            intent: cp.narrative.clone(),
+            decision: String::new(),
+            rationale: String::new(),
+            next_steps: vec![],
+            symbols: vec![],
+            user_symbols: vec![],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
+            extraction_mode: ExtractionMode::default(),
+            questions: vec![],
+        },
+        meta: ResponseMeta {
+            source: "checkpoint".to_string(),
+            upstream_host: String::new(),
+            request_path: String::new(),
+            http_status: 200,
+            agent_session_id: cp.session_id.clone(),
+            usage: None,
+        },
+        distance: 0.0,
+        user_emotion: None,
+        assistant_emotion: None,
+        head_sha: None,
+        commit_sha: None,
     }
-
-    let preamble = "You are unlost, acting as a staff engineer giving a debrief. \
-        Given multiple session story segments from a workspace, synthesize them into \
-        a single staff-engineer-level brief that covers: \
-        (1) What is being built and the current state, \
-        (2) The key decisions and trade-offs made (with rationale), \
-        (3) Known failure modes, gotchas, and debt, \
-        (4) What to focus on next. \
-        Be direct and concrete. Cite specific decisions. Max 400 words. \
-        Return the brief in the `narrative` field.";
-
-    let result = crate::llm_extract::<crate::storage_checkpoint::CheckpointNarrativeOutput>(
-        llm_model,
-        preamble,
-        &context,
-    )
-    .await?;
-    Ok(result.narrative)
 }
 
 pub async fn run(
@@ -243,17 +261,11 @@ pub async fn run(
     // When not scoped, try to synthesize from stored checkpoint narratives.
     // This is significantly cheaper than processing 200 raw capsules.
     if scope_opt.is_none() {
-        if let Some(result) = try_checkpoint_brief(&ws, llm_model.as_deref(), output).await {
+        if let Some(result) = try_checkpoint_brief(&ws, &workspace_root, llm_model.as_deref(), output).await {
             if let Some(pb) = spinner.as_ref() {
                 pb.finish_and_clear();
             }
-            let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
-            let out = if wrap {
-                crate::util::wrap_plain_text(&result, 80)
-            } else {
-                result
-            };
-            println!("{}", out);
+            println!("{}", result);
             println!();
             return Ok(());
         }

@@ -164,10 +164,16 @@ fn select_hits_for_recall(
 }
 
 /// Try to serve recall from the most recent checkpoint + delta capsules.
-/// Returns Some(rendered output) on success, None if we should fall back to
-/// full LLM recall.
+///
+/// Instead of printing the raw checkpoint narrative (which uses a different
+/// structured format), we feed the checkpoint as pre-digested context into
+/// `llm_recall_narrative` — the same function and prompt that normal recall
+/// uses. Output format is therefore identical regardless of which path was taken.
+///
+/// Returns Some(rendered output) on success, None to fall back to full recall.
 async fn try_checkpoint_recall(
     ws: &crate::WorkspacePaths,
+    workspace_root: &str,
     llm_model: Option<&str>,
     output: OutputFormat,
 ) -> Option<String> {
@@ -184,7 +190,7 @@ async fn try_checkpoint_recall(
 
     let latest = checkpoints.into_iter().next()?; // newest first
 
-    // Fetch capsules newer than the checkpoint's to_ts_ms
+    // Fetch capsules newer than the checkpoint's to_ts_ms (the delta)
     let delta = crate::storage::scan_capsules_lancedb_recent(
         ws,
         20,
@@ -197,83 +203,82 @@ async fn try_checkpoint_recall(
     .await
     .ok()?;
 
-    // If delta is small enough, we can serve from checkpoint directly
-    let delta_count = delta.len();
-    if delta_count > 5 {
+    if delta.len() > 5 {
         // Too much new content — fall back to full recall so nothing is missed
         return None;
     }
 
-    if delta_count == 0 {
-        // Pure checkpoint hit — render directly
-        let out = format_checkpoint_narrative(&latest.narrative, output);
-        return Some(out);
-    }
+    // Build a synthetic hit list: a single "checkpoint" CapsuleHit carrying the
+    // pre-digested narrative as its intent, followed by any delta capsules.
+    // llm_recall_narrative will see these as its capsule input and produce the
+    // same styled output it always does.
+    let checkpoint_hit = checkpoint_as_capsule_hit(&latest);
+    let mut hits = vec![checkpoint_hit];
+    hits.extend(delta);
 
-    // Small delta: ask LLM to extend the checkpoint narrative with new capsules
-    let extended = extend_narrative_with_delta(llm_model, &latest.narrative, &delta).await.ok()?;
-    let out = format_checkpoint_narrative(&extended, output);
+    let narrative = crate::narrative::llm_recall_narrative(
+        llm_model,
+        None, // unscoped
+        &ws.id,
+        workspace_root,
+        &hits,
+        &[], // no interventions in checkpoint path
+        false,
+        false,
+        false,
+    )
+    .await
+    .ok()?;
+
+    let mut out = crate::narrative::render_narrative(output, &narrative);
+    out = out.replace("Suggested next steps:", "Next steps (if any):");
+    let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+    if wrap {
+        out = crate::util::wrap_plain_text(&out, 80);
+    }
     Some(out)
 }
 
-fn format_checkpoint_narrative(narrative: &str, output: OutputFormat) -> String {
-    let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
-    if wrap {
-        crate::util::wrap_plain_text(narrative, 80)
-    } else {
-        narrative.to_string()
+/// Convert a CheckpointRow into a synthetic CapsuleHit so it can be passed to
+/// `llm_recall_narrative` as pre-digested context alongside any delta capsules.
+fn checkpoint_as_capsule_hit(
+    cp: &crate::storage_checkpoint::CheckpointRow,
+) -> crate::CapsuleHit {
+    use crate::types::{ExtractionMode, FailureMode, IntentCapsule, ResponseMeta};
+    crate::CapsuleHit {
+        id: cp.id.clone(),
+        ts_ms: cp.to_ts_ms, // use the end of the checkpoint window as its timestamp
+        conn_id: 0,
+        exchange_seq: 0,
+        capsule: IntentCapsule {
+            category: "checkpoint".to_string(),
+            // Put the full checkpoint narrative in intent — this is what
+            // llm_recall_narrative will read as context
+            intent: cp.narrative.clone(),
+            decision: String::new(),
+            rationale: String::new(),
+            next_steps: vec![],
+            symbols: vec![],
+            user_symbols: vec![],
+            failure_mode: FailureMode::None,
+            failure_signals: None,
+            extraction_mode: ExtractionMode::default(),
+            questions: vec![],
+        },
+        meta: ResponseMeta {
+            source: "checkpoint".to_string(),
+            upstream_host: String::new(),
+            request_path: String::new(),
+            http_status: 200,
+            agent_session_id: cp.session_id.clone(),
+            usage: None,
+        },
+        distance: 0.0,
+        user_emotion: None,
+        assistant_emotion: None,
+        head_sha: None,
+        commit_sha: None,
     }
-}
-
-/// Ask the LLM to extend an existing checkpoint narrative with new capsules.
-/// Much cheaper than full recall — the checkpoint is already synthesized.
-async fn extend_narrative_with_delta(
-    llm_model: Option<&str>,
-    checkpoint_narrative: &str,
-    delta: &[crate::CapsuleHit],
-) -> anyhow::Result<String> {
-    use chrono::{SecondsFormat, TimeZone};
-    let fmt_ts = |ts_ms: i64| -> String {
-        chrono::Utc
-            .timestamp_millis_opt(ts_ms)
-            .single()
-            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
-            .unwrap_or_else(|| ts_ms.to_string())
-    };
-
-    let mut context = String::new();
-    context.push_str("Existing story so far:\n");
-    context.push_str(checkpoint_narrative);
-    context.push_str("\n\nNew capsules since last checkpoint:\n\n");
-
-    for (i, hit) in delta.iter().enumerate() {
-        let cap = &hit.capsule;
-        context.push_str(&format!("#{} [{}]\n", i + 1, fmt_ts(hit.ts_ms)));
-        if !cap.intent.trim().is_empty() {
-            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
-        }
-        if !cap.decision.trim().is_empty() {
-            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
-        }
-        if !cap.rationale.trim().is_empty() {
-            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
-        }
-        context.push('\n');
-    }
-
-    let preamble = "You are unlost. You have an existing story summary and a few new capsules \
-        that arrived after the summary was written. Update the story to incorporate the new \
-        capsules. Keep the same structure. Do not repeat content already in the story unless \
-        it directly supports new context. Max 350 words. Return the updated story in the \
-        `narrative` field.";
-
-    let result = crate::llm_extract::<crate::storage_checkpoint::CheckpointNarrativeOutput>(
-        llm_model,
-        preamble,
-        &context,
-    )
-    .await?;
-    Ok(result.narrative)
 }
 
 pub async fn run(
@@ -355,7 +360,7 @@ pub async fn run(
         && emotion_label.is_none()
         && provider_label.is_none()
     {
-        if let Some(result) = try_checkpoint_recall(&ws, llm_model.as_deref(), output).await {
+        if let Some(result) = try_checkpoint_recall(&ws, &workspace_root, llm_model.as_deref(), output).await {
             if let Some(pb) = spinner.as_ref() {
                 pb.finish_and_clear();
             }
