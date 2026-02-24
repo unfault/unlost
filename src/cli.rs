@@ -43,6 +43,7 @@ Memory:
 Workspace:
   init       Seed LanceDB from the current codebase (unfault-core graph)
   reindex    Rebuild LanceDB index from capsules.jsonl
+  replay        Replay/backfill agent transcripts into unlost
   clear      Delete all generated data for the current workspace
   where      Show where the workspace's files are stored
 
@@ -53,7 +54,6 @@ Setup:
 Diagnostics:
   metrics       Show workspace metrics (local, derived from metrics.jsonl)
   interventions Show recent friction interventions applied to agents
-  replay        Replay/backfill agent transcripts into unlost
   inspect       Inspect stored capsules for this workspace
 
 Options:
