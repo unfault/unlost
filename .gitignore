@@ -37,3 +37,4 @@ package-lock.json
 replay_log.txt
 
 .specify/
+specs/
