@@ -262,6 +262,52 @@ Everything unlost stores stays on your machine:
 
 The only network call unlost makes is to the LLM provider you configure for extraction. That LLM sees only the exchange text (no tool outputs), and it produces a capsule that never goes back upstream.
 
+## Under the Hood
+
+### Trajectory Sensing
+
+- **Three-state FSM** — Stable → Watch → Intervene controller with hysteresis, per-basin cooldowns, and a one-shot rule preventing repeat intervention types
+- **Weighted multi-channel basin scoring** — Loop, Spec, and Drift intensities computed as calibrated weighted sums of 10 independent symptom channels
+- **EMA smoothing** — All 10 channels smoothed with exponential moving average (α=0.3) to suppress single-turn noise spikes
+- **Sliding window persistence** — State only escalates after 3 consecutive turns above the 0.75 intensity threshold
+- **Coffee Pause soft decay** — >30-minute gaps decay intensity to 0.3× and reset state; injects a resumption brief on return
+- **Grounding stall detection** — User-mentioned file paths tracked with exponential time decay; stall streak increments when the agent ignores them
+- **Jaccard-like logic churn** — Word-set distance between consecutive agent decisions; detects rapid plan changes without progress
+- **Symbol repetition / novelty collapse** — Fraction of current capsule symbols seen in the last 8 capsules; complement is novelty score
+- **Stubbornness boost** — Extra intensity when alignment debt is high but decision churn is low (agent acknowledges errors but keeps the same plan)
+- **Blind Acceptance risk** — Detects fluent long responses followed by passive short user replies; flags over-trust risk
+- **Summary intent damping** — Multiplies intensity by 0.6 on turns the agent is legitimately consolidating, preventing false positives
+- **Stratified intervention policy** — Ambient hint / Structural note / Emergency hard-stop tiered by intensity level
+- **Hydration packet** — For Loop interventions, injects the 3 most relevant recent capsules scored by recency, symbol overlap, emotion, effort, and failure mode
+
+### Emotion & NLP
+
+- **Multi-label emotion classification** — RoBERTa-base fine-tuned on GoEmotions (28 labels → 8 buckets), running locally via ONNX Runtime
+- **Heuristic emotion override** — Pattern-based frustration and doubt detection that corrects misclassifications from the neural model
+- **Affective modulation** — Joy halves trajectory intensity; persistent anger triggers a de-escalation override regardless of basin state
+
+### Retrieval & Memory
+
+- **HyPE** — At indexing time, the LLM generates 2–3 questions each capsule answers; at retrieval time, each command frames your query to match those questions — question-to-question match, not keyword-to-document. ([Ma et al., 2025](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335))
+- **Trajectory-encoded embeddings** — Each capsule is embedded with its category, failure mode, symbols, and the prior decision from the same work thread; causally related capsules cluster together across sessions
+- **BGE-small-en-v1.5 dense embeddings** — 384-dimensional vectors, generated fully locally via fastembed + ONNX Runtime
+- **ANN vector search** — LanceDB `nearest_to` with an auto-tuned approximate nearest-neighbour index on the embedding column
+- **LabelList index** — Scalar index on the symbols array column enabling fast `array_contains` fan-out queries
+- **Causal chain algorithm** — ANN seed → symbol fan-out via LabelList index → similarity threshold pruning → chronological sort; powers `trace`
+- **Cross-session recurrence scoring** — Capsules scored for `brief` by failure mode, explicit rationale/decision, and symbols recurring across multiple sessions (no recency bias)
+- **Recency-weighted fingerprint deduplication** — `recall` collapses near-duplicates by content fingerprint and caps older sessions at 3 results, with a 30-minute recency bypass
+- **Checkpoint summarization** — Background process compresses windows of capsules into narrative checkpoints; `recall` and `brief` use a fast path when the delta since last checkpoint is small
+
+### Storage & Infrastructure
+
+- **Apache Arrow / LanceDB columnar store** — Capsules stored as Arrow RecordBatches with three indexes (ANN, LabelList, scalar timestamp); append-only with schema evolution
+- **Code graph analysis** — `unfault-core` + petgraph builds a live static graph for centrality scoring, dependency/impact traversal, and symbol validation backing Drift detection
+- **LLM structured extraction** — JSON Schema extraction via rig-core + schemars; produces typed `IntentCapsule` structs from raw agent exchanges
+- **Hybrid extraction mode** — Heuristics identify "pivotal" turns before invoking the LLM, reducing extraction cost by skipping routine turns
+- **SHA-256 job deduplication** — Flush jobs hashed by content; identical jobs within a 45-second window are suppressed
+- **Git grounding & SHA provenance** — Git HEAD and commit SHAs stored on every capsule; git commits ingested as first-class capsules, deduplicated by hash
+- **Changelog ingestion** — CHANGELOG.md versions parsed and stored as versioned capsules, surfaced with `ref=version:vX.Y.Z` citations in LLM prompts
+
 ## License
 
 MIT. See [LICENSE](LICENSE) for details.
