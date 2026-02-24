@@ -1,0 +1,17 @@
+# Increase the main thread stack size on Windows to 8 MiB.
+#
+# On Linux/macOS the OS default is 8 MiB; on Windows it is only 1 MiB.
+# The shim binary (`unlost shim opencode`) runs an async tokio runtime whose
+# `block_on` poll loop executes on the main OS thread, and the deeply-nested
+# future state machine can overflow the 1 MiB Windows default at startup —
+# producing a silent crash before the `{"ready":true}` signal is written to
+# stdout, which breaks the shim_dedup integration tests.
+#
+# `/STACK:8388608` matches the Linux/macOS 8 MiB default and is equivalent to
+# the `RUST_MIN_STACK` mechanism that only applies to spawned threads.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]

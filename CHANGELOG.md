@@ -1,12 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [0.10.0] - 2026-02-24
 
 ### Added
 - **`unlost interventions`**: New diagnostics command to show recent friction interventions applied to agents. Displays timestamp, building time (how long friction was building), severity/intensity score, cause/diagnosis, topic (user intent), symbols involved, user emotion, and symptom channels. Supports `--limit`, `--since`, `--until` filters.
 - **`unlost challenge --deep`**: `challenge` is now concise by default — outputs only `THE DECISION`, `ALTERNATIVES` (2-3 options, no Cost/Evidence fields), and `VERDICT`. Pass `--deep` to get the full analysis with `UNKNOWNS` and `PROBES` sections.
+- **Git provenance in capsules**: Each capsule now records `head_sha` (git HEAD at buffer-open time) and `commit_sha` (HEAD at flush time, when it has moved). Both fields are stored in LanceDB and displayed in `unlost inspect`, making it possible to correlate memory entries with exact commits.
+- **HyPE questions surfaced in `inspect` and scan**: `unlost inspect` now displays the pre-generated HyPE questions stored alongside each capsule, so stored vectors can be verified. `scan_capsules` also now reads `questions_text` from LanceDB rather than returning an empty list.
 
 ### Fixed
+- **Windows stack overflow on startup**: The shim binary (`unlost shim opencode`) was crashing on Windows before writing the `{"ready":true}` signal because the default Windows main-thread stack (1 MiB) is too small for the deeply-nested tokio async state machine. Added `.cargo/config.toml` with `/STACK:8388608` for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` targets, matching the 8 MiB default on Linux/macOS.
+- **Duplicate capsules on plugin restart**: The OpenCode plugin now computes a `turn_key` (`${userMessageId}:${assistantMessageId}`) and sends it with every record request, making the server-side deduplication guard reachable across restarts. Previously, restarting the plugin cleared in-memory dedup state and caused any re-surfaced exchange to be written to `capsules.jsonl` a second time.
 - **Failure mode interventions are now session-scoped**: `evaluate_failure_modes` previously read the last 5 capsules from LanceDB with no session boundary awareness. A `Drift`, `RetrySpiral`, `Rediscovery`, or `FalseProgress` tag on the final capsule of a previous session would fire a system note on the very first message of the next session — with no actual friction to detect. The function now accepts a session ID and filters history to the current session only before evaluating. If no capsules from the current session exist yet, it returns `None`. Sessions with no known ID (e.g. the HTTP proxy path) retain the previous cross-session behaviour.
 
 ### Changed
@@ -30,9 +34,7 @@
 ### Changed
 - **`ingest_git_tags` wired into all batch paths**: `unlost init`, `unlost replay claude`, and `unlost replay opencode` now all call `ingest_git_tags` immediately after `ingest_git_commits`, so tag history is backfilled alongside commit history.
 
----
-
-
+## [0.8.0] - 2026-02-23
 
 ### Added
 - **`unlost explore`**: New command for forward-looking planning grounded in workspace memory. Given a scenario or goal (e.g. `unlost explore "should we keep lancedb or move to sqlite+fts?"`), retrieves the most relevant capsules via semantic search combined with an importance-scored full scan (failure modes, rationale, cross-session recurrence). Capsules are context — not a cage — so the LLM can reason beyond them while clearly labelling what comes from memory (`[memory]`) vs. external knowledge (`[outside]`). Output sections: CONTEXT FROM MEMORY, PATHS WORTH CONSIDERING, TENSIONS, QUESTIONS TO SIT WITH, IF YOU GO FURTHER.
@@ -262,6 +264,8 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.10.0]: https://github.com/unfault/unlost/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/unfault/unlost/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/unfault/unlost/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/unfault/unlost/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/unfault/unlost/compare/v0.6.5...v0.7.0
