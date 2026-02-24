@@ -283,7 +283,35 @@ impl TrajectoryController {
         // NEW: "Blind Acceptance" Risk (Feb 16, 2026)
         // High fluency in previous turn + short/passive current user input indicates
         // the user might be blindly accepting verbose output without structural verification.
-        let is_passive_user = current.intent.len() < 30 && current.user_symbols.is_empty();
+        // Exclude clear short directives and confirmations — "yes", "ok", "sure", "do it",
+        // "extend trace." — these are decisive, not passive, and must not inflate intensity.
+        const CONFIRMATION_WORDS: &[&str] = &[
+            "yes",
+            "ok",
+            "okay",
+            "sure",
+            "yep",
+            "yup",
+            "agreed",
+            "correct",
+            "right",
+            "good",
+            "great",
+            "perfect",
+            "fine",
+            "sounds good",
+            "go ahead",
+            "do it",
+            "proceed",
+            "continue",
+            "carry on",
+        ];
+        let intent_lower = current.intent.trim().to_lowercase();
+        let is_confirmation = CONFIRMATION_WORDS
+            .iter()
+            .any(|w| intent_lower == *w || intent_lower == format!("{}.", w));
+        let is_passive_user =
+            !is_confirmation && current.intent.len() < 30 && current.user_symbols.is_empty();
         if self.smoothed_channels.fluency > 0.6 && is_passive_user {
             raw_intensity = (raw_intensity + 0.15).min(1.0);
         }
@@ -610,10 +638,17 @@ fn select_intervention_with_substance(
         ("spec", _) if is_ambient => {
             let intent = current.intent.trim();
             let decision = current.decision.trim();
-            Some(format!(
-                "[SYSTEM NOTE: To ensure we're aligned: my current understanding is \"{}\". Next I'll do \"{}\". Does that sound right?]",
-                intent, decision
-            ))
+            // Only fire if there is enough substance to produce a coherent check-in.
+            // A one-word intent (e.g. "yes") or an empty decision produces a note that
+            // reads as nonsense and erodes trust in the intervention system.
+            if intent.split_whitespace().count() < 4 || decision.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "[SYSTEM NOTE: To ensure we're aligned: my current understanding is \"{}\". Next I'll do \"{}\". Does that sound right?]",
+                    intent, decision
+                ))
+            }
         }
         ("spec", _) => {
             let corrections: Vec<String> = recent
@@ -623,10 +658,24 @@ fn select_intervention_with_substance(
                 .map(|h| h.capsule.intent.trim().to_string())
                 .collect();
 
+            // Only surface a goal that looks like substantive work: at least 6 words,
+            // not a bare confirmation ("yes", "ok", "sure"), and not a meta phrase like
+            // "casual check-in" or "continue".  Surfacing an ambient/meta intent as
+            // "Original Goal" makes the note incoherent and erodes trust.
             let north_star = recent
                 .iter()
                 .rev()
-                .find(|h| !h.capsule.intent.trim().is_empty())
+                .find(|h| {
+                    let t = h.capsule.intent.trim().to_lowercase();
+                    let words = t.split_whitespace().count();
+                    words >= 6
+                        && !t.starts_with("casual")
+                        && !t.starts_with("carry on")
+                        && !t.starts_with("go ahead")
+                        && !t.starts_with("continue")
+                        && !t.starts_with("check-in")
+                        && !t.starts_with("check in")
+                })
                 .map(|h| h.capsule.intent.trim());
 
             let mut note = "[SYSTEM NOTE: Alignment debt is high. Stop and restate the current objective. Ask the user to confirm or pivot before any more code is written.]".to_string();
