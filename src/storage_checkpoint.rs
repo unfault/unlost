@@ -191,7 +191,7 @@ pub(crate) async fn get_checkpoints_in_range(
     let ws_escaped = workspace_id.replace('\'', "\\'");
     // Overlap condition: checkpoint starts before until AND ends after since
     let filter = format!(
-        "workspace_id = '{ws_escaped}' AND from_ts_ms <= {until_ms} AND to_ts_ms >= {since_ms}"
+        "workspace_id = '{ws_escaped}' AND CAST(from_ts_ms AS BIGINT) <= CAST({until_ms} AS BIGINT) AND CAST(to_ts_ms AS BIGINT) >= CAST({since_ms} AS BIGINT)"
     );
 
     let batches: Vec<RecordBatch> = table
@@ -225,7 +225,7 @@ pub(crate) async fn checkpoint_is_current(
     let threshold_ts = latest_capsule_ts - 60_000; // 60s window
     let ws_escaped = workspace_id.replace('\'', "\\'");
     let filter = format!(
-        "workspace_id = '{ws_escaped}' AND to_ts_ms >= {threshold_ts}"
+        "workspace_id = '{ws_escaped}' AND CAST(to_ts_ms AS BIGINT) >= CAST({threshold_ts} AS BIGINT)"
     );
 
     let table = match ensure_checkpoints_table(db).await {
@@ -668,7 +668,7 @@ async fn fetch_session_capsules(
         let from_ts = hits.iter().map(|h| h.ts_ms).min().unwrap_or(0);
         let to_ts = hits.iter().map(|h| h.ts_ms).max().unwrap_or(0);
         let git_filter = format!(
-            "source = 'git' AND ts_ms >= {from_ts} AND ts_ms <= {to_ts}"
+            "source = 'git' AND CAST(ts_ms AS BIGINT) >= CAST({from_ts} AS BIGINT) AND CAST(ts_ms AS BIGINT) <= CAST({to_ts} AS BIGINT)"
         );
         if let Ok(stream) = table.query().only_if(&git_filter).limit(50).execute().await {
             if let Ok(git_batches) = stream.try_collect::<Vec<RecordBatch>>().await {

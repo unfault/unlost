@@ -4,6 +4,7 @@
 
 ### Fixed
 - **`unlost inspect` capsule order**: Capsules are now displayed oldest-first (newest at end) instead of newest-first.
+- **LanceDB timestamp filter crash**: Avoids a DataFusion interval planning error (`lhs:Null, rhs:Int64`) when applying `ts_ms` range filters on mixed-schema datasets; falls back to client-side time filtering and prints a repair command (`unlost reindex`).
 
 ## [0.10.0] - 2026-02-24
 
