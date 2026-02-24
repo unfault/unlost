@@ -31,12 +31,14 @@ unlost {version}
 {usage-heading} {usage}
 
 Memory:
-  query      Semantic search across recorded capsules
-  trace      Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
-  recall     Recall the story so far (proactive overview)
-  explore    Explore future paths grounded in your workspace memory
-  challenge  Pressure-test a past decision or technology choice using your workspace memory
-  brief      Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
+  query       Semantic search across recorded capsules
+  trace       Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
+  recall      Recall the story so far (proactive overview)
+  explore     Explore future paths grounded in your workspace memory
+  challenge   Pressure-test a past decision or technology choice using your workspace memory
+  brief       Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
+  pr-comment  Post an unlost context comment on a GitHub PR
+  checkpoint  Create or list workspace checkpoints (pre-synthesized session stories)
 
 Workspace:
   init       Seed LanceDB from the current codebase (unfault-core graph)
@@ -540,6 +542,25 @@ pub enum Command {
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
+    },
+
+    /// Create or list workspace checkpoints (pre-synthesized session story segments)
+    Checkpoint {
+        /// List recent checkpoints instead of creating a new one
+        #[arg(long, default_value_t = false)]
+        list: bool,
+
+        /// Scope checkpoint to a specific agent session ID
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Filter list to checkpoints after this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// LLM model to use for checkpoint narrative generation
+        #[arg(long)]
+        llm_model: Option<String>,
     },
 }
 
