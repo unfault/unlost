@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- **`unlost inspect` capsule order**: Capsules are now displayed oldest-first (newest at end) instead of newest-first.
+
+## [0.10.0] - 2026-02-24
+
 ### Added
 - **`unlost pr-comment`**: New command that posts a staff-engineer-style context comment on a
   GitHub PR (requires `gh` CLI). The comment explains what the changed code is, where the

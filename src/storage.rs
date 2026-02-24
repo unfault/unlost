@@ -1231,7 +1231,7 @@ async fn scan_capsules_lancedb_impl(
     }
 
     if recent_first {
-        out.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+        out.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
         out.truncate(limit);
     }
 
