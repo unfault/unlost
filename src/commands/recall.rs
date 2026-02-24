@@ -163,6 +163,119 @@ fn select_hits_for_recall(
     selected
 }
 
+/// Try to serve recall from the most recent checkpoint + delta capsules.
+/// Returns Some(rendered output) on success, None if we should fall back to
+/// full LLM recall.
+async fn try_checkpoint_recall(
+    ws: &crate::WorkspacePaths,
+    llm_model: Option<&str>,
+    output: OutputFormat,
+) -> Option<String> {
+    std::fs::create_dir_all(&ws.db_dir).ok()?;
+    let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+        .execute()
+        .await
+        .ok()?;
+
+    let checkpoints =
+        crate::storage_checkpoint::get_recent_checkpoints(&db, &ws.id, 5)
+            .await
+            .ok()?;
+
+    let latest = checkpoints.into_iter().next()?; // newest first
+
+    // Fetch capsules newer than the checkpoint's to_ts_ms
+    let delta = crate::storage::scan_capsules_lancedb_recent(
+        ws,
+        20,
+        None,
+        None,
+        None,
+        Some(latest.to_ts_ms + 1),
+        None,
+    )
+    .await
+    .ok()?;
+
+    // If delta is small enough, we can serve from checkpoint directly
+    let delta_count = delta.len();
+    if delta_count > 5 {
+        // Too much new content — fall back to full recall so nothing is missed
+        return None;
+    }
+
+    if delta_count == 0 {
+        // Pure checkpoint hit — render directly
+        let out = format_checkpoint_narrative(&latest.narrative, output);
+        return Some(out);
+    }
+
+    // Small delta: ask LLM to extend the checkpoint narrative with new capsules
+    let extended = extend_narrative_with_delta(llm_model, &latest.narrative, &delta).await.ok()?;
+    let out = format_checkpoint_narrative(&extended, output);
+    Some(out)
+}
+
+fn format_checkpoint_narrative(narrative: &str, output: OutputFormat) -> String {
+    let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+    if wrap {
+        crate::util::wrap_plain_text(narrative, 80)
+    } else {
+        narrative.to_string()
+    }
+}
+
+/// Ask the LLM to extend an existing checkpoint narrative with new capsules.
+/// Much cheaper than full recall — the checkpoint is already synthesized.
+async fn extend_narrative_with_delta(
+    llm_model: Option<&str>,
+    checkpoint_narrative: &str,
+    delta: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    use chrono::{SecondsFormat, TimeZone};
+    let fmt_ts = |ts_ms: i64| -> String {
+        chrono::Utc
+            .timestamp_millis_opt(ts_ms)
+            .single()
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+            .unwrap_or_else(|| ts_ms.to_string())
+    };
+
+    let mut context = String::new();
+    context.push_str("Existing story so far:\n");
+    context.push_str(checkpoint_narrative);
+    context.push_str("\n\nNew capsules since last checkpoint:\n\n");
+
+    for (i, hit) in delta.iter().enumerate() {
+        let cap = &hit.capsule;
+        context.push_str(&format!("#{} [{}]\n", i + 1, fmt_ts(hit.ts_ms)));
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!("rationale: {}\n", cap.rationale.replace('\n', " ")));
+        }
+        context.push('\n');
+    }
+
+    let preamble = "You are unlost. You have an existing story summary and a few new capsules \
+        that arrived after the summary was written. Update the story to incorporate the new \
+        capsules. Keep the same structure. Do not repeat content already in the story unless \
+        it directly supports new context. Max 350 words. Return the updated story in the \
+        `narrative` field.";
+
+    let result = crate::llm_extract::<crate::storage_checkpoint::CheckpointNarrativeOutput>(
+        llm_model,
+        preamble,
+        &context,
+    )
+    .await?;
+    Ok(result.narrative)
+}
+
 pub async fn run(
     target: Vec<String>,
     limit: usize,
@@ -231,6 +344,26 @@ pub async fn run(
         emotion_label,
         provider_label,
     );
+
+    // ── Checkpoint fast path (unscoped only) ─────────────────────────────────
+    // When there's no scope filter, try to serve from the most recent checkpoint
+    // plus a small delta of new capsules since the checkpoint. This avoids an
+    // LLM call for every recall invocation.
+    if scope_opt.is_none()
+        && since_ms.is_none()
+        && until_ms.is_none()
+        && emotion_label.is_none()
+        && provider_label.is_none()
+    {
+        if let Some(result) = try_checkpoint_recall(&ws, llm_model.as_deref(), output).await {
+            if let Some(pb) = spinner.as_ref() {
+                pb.finish_and_clear();
+            }
+            println!("{}", result);
+            println!();
+            return Ok(());
+        }
+    }
 
     let embedder = crate::embed::load_embedder(
         &embed_model,

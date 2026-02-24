@@ -262,6 +262,279 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
     }
 }
 
+/// Open the capsules table from an existing connection. Returns an error if the
+/// table doesn't exist yet (workspace not initialised).
+pub(crate) async fn open_capsules_table(
+    db: &Connection,
+) -> anyhow::Result<lancedb::Table> {
+    db.open_table(CAPSULES_TABLE)
+        .execute()
+        .await
+        .map_err(|e| anyhow::anyhow!("capsules table not found: {e}"))
+}
+
+/// Convert a slice of Arrow RecordBatches from the capsules table into
+/// `CapsuleHit` values. Shared by the checkpoint module to avoid duplicating
+/// the full inline conversion loop.
+pub(crate) fn record_batches_to_hits(
+    batches: &[RecordBatch],
+    _workspace_id: &str,
+) -> anyhow::Result<Vec<crate::CapsuleHit>> {
+    let mut out: Vec<crate::CapsuleHit> = Vec::new();
+    let limit = usize::MAX;
+
+    for batch in batches {
+        let schema = batch.schema();
+        let idx = |name: &str| schema.index_of(name).ok();
+        let col_str = |name: &str| -> Option<&StringArray> {
+            idx(name).and_then(|i| batch.column(i).as_any().downcast_ref::<StringArray>())
+        };
+        let col_f32 = |name: &str| -> Option<&Float32Array> {
+            idx(name).and_then(|i| batch.column(i).as_any().downcast_ref::<Float32Array>())
+        };
+
+        let read_emotion = |row: usize,
+                            label: Option<&StringArray>,
+                            conf: Option<&Float32Array>,
+                            val: Option<&Float32Array>,
+                            inten: Option<&Float32Array>|
+         -> Option<crate::emotion::EmotionMeta> {
+            let label = label
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("");
+            if label.trim().is_empty() {
+                return None;
+            }
+            let confidence = conf
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let valence = val
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let intensity = inten
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            Some(crate::emotion::EmotionMeta {
+                label: label.to_string(),
+                valence,
+                intensity,
+                confidence,
+            })
+        };
+
+        let id_col = col_str("id");
+        let ts_ms_col =
+            idx("ts_ms").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let conn_id_col =
+            idx("conn_id").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let exchange_seq_col =
+            idx("exchange_seq").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let http_status_col =
+            idx("http_status").and_then(|i| batch.column(i).as_any().downcast_ref::<Int32Array>());
+        let source = col_str("source");
+        let intent = col_str("intent");
+        let decision = col_str("decision");
+        let rationale = col_str("rationale");
+        let category = col_str("category");
+        let upstream_host = col_str("upstream_host");
+        let request_path = col_str("request_path");
+        let agent_session_id_col = col_str("agent_session_id");
+        let agent_provider_id_col = col_str("agent_provider_id");
+        let agent_model_id_col = col_str("agent_model_id");
+        let agent_cost_col =
+            idx("agent_cost").and_then(|i| batch.column(i).as_any().downcast_ref::<Float64Array>());
+        let tokens_input_col =
+            idx("tokens_input").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_output_col =
+            idx("tokens_output").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_reasoning_col =
+            idx("tokens_reasoning").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_read_col =
+            idx("tokens_cache_read").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let tokens_cache_write_col =
+            idx("tokens_cache_write").and_then(|i| batch.column(i).as_any().downcast_ref::<Int64Array>());
+        let user_emotion_label = col_str("user_emotion");
+        let user_emotion_conf = col_f32("user_emotion_conf");
+        let user_valence = col_f32("user_valence");
+        let user_intensity = col_f32("user_intensity");
+        let assistant_emotion_label = col_str("assistant_emotion");
+        let assistant_emotion_conf = col_f32("assistant_emotion_conf");
+        let assistant_valence = col_f32("assistant_valence");
+        let assistant_intensity = col_f32("assistant_intensity");
+        let next_steps_col =
+            idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let symbols_col =
+            idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let head_sha_col = col_str("head_sha");
+        let commit_sha_col = col_str("commit_sha");
+
+        for row in 0..batch.num_rows() {
+            if out.len() >= limit {
+                break;
+            }
+            let id = id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() {
+                continue;
+            }
+            let ts_ms = ts_ms_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let conn_id = conn_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let exchange_seq = exchange_seq_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let http_status = http_status_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or_default();
+            let cat = category
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("");
+            let src = source
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("");
+            let up = upstream_host
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("");
+            let path = request_path
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("");
+            let agent_session = agent_session_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_provider_id = agent_provider_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_model_id = agent_model_id_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let agent_cost =
+                agent_cost_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_input =
+                tokens_input_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_output =
+                tokens_output_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_reasoning =
+                tokens_reasoning_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_read =
+                tokens_cache_read_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let tokens_cache_write =
+                tokens_cache_write_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)));
+            let usage = if agent_provider_id.is_some()
+                || agent_model_id.is_some()
+                || agent_cost.is_some()
+                || tokens_input.is_some()
+                || tokens_output.is_some()
+                || tokens_reasoning.is_some()
+                || tokens_cache_read.is_some()
+                || tokens_cache_write.is_some()
+            {
+                Some(crate::types::UsageMeta {
+                    provider_id: agent_provider_id,
+                    model_id: agent_model_id,
+                    cost: agent_cost,
+                    tokens_input,
+                    tokens_output,
+                    tokens_reasoning,
+                    tokens_cache_read,
+                    tokens_cache_write,
+                })
+            } else {
+                None
+            };
+            let user_emotion = read_emotion(
+                row,
+                user_emotion_label,
+                user_emotion_conf,
+                user_valence,
+                user_intensity,
+            );
+            let assistant_emotion = read_emotion(
+                row,
+                assistant_emotion_label,
+                assistant_emotion_conf,
+                assistant_valence,
+                assistant_intensity,
+            );
+            let int_text = intent
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("")
+                .to_string();
+            let dec_text = decision
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("")
+                .to_string();
+            let rat_text = rationale
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .unwrap_or("")
+                .to_string();
+            let read_string_list = |col: Option<&ListArray>| -> Vec<String> {
+                let col = match col {
+                    Some(c) => c,
+                    None => return vec![],
+                };
+                if col.is_null(row) {
+                    return vec![];
+                }
+                let list = col.value(row);
+                let str_arr = match list.as_any().downcast_ref::<StringArray>() {
+                    Some(a) => a,
+                    None => return vec![],
+                };
+                (0..str_arr.len())
+                    .filter_map(|i| {
+                        (!str_arr.is_null(i)).then(|| str_arr.value(i).to_string())
+                    })
+                    .filter(|s| !s.trim().is_empty())
+                    .collect()
+            };
+            let next_steps_vec = read_string_list(next_steps_col);
+            let symbols_vec = read_string_list(symbols_col);
+            let head_sha = head_sha_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            let commit_sha = commit_sha_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+
+            let cap = crate::types::IntentCapsule {
+                category: cat.to_string(),
+                intent: int_text,
+                decision: dec_text,
+                rationale: rat_text,
+                next_steps: next_steps_vec,
+                symbols: symbols_vec,
+                user_symbols: vec![],
+                failure_mode: crate::types::FailureMode::None,
+                failure_signals: None,
+                extraction_mode: crate::types::ExtractionMode::default(),
+                questions: vec![],
+            };
+            let meta = crate::types::ResponseMeta {
+                source: src.to_string(),
+                upstream_host: up.to_string(),
+                request_path: path.to_string(),
+                http_status: http_status as u16,
+                agent_session_id: agent_session,
+                usage,
+            };
+            out.push(crate::CapsuleHit {
+                id,
+                ts_ms,
+                conn_id,
+                exchange_seq,
+                capsule: cap,
+                meta,
+                distance: 0.0,
+                user_emotion,
+                assistant_emotion,
+                head_sha,
+                commit_sha,
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) async fn query_capsules_lancedb(
     query_text: &str,
     limit: usize,

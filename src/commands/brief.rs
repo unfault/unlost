@@ -108,6 +108,82 @@ fn select_hits_for_brief(hits: Vec<crate::CapsuleHit>, limit: usize) -> Vec<crat
     scored.into_iter().take(limit).map(|(_, h)| h).collect()
 }
 
+/// Try to serve brief from stored checkpoint narratives.
+/// Returns Some(rendered text) on success, None to fall back to full capsule scan.
+async fn try_checkpoint_brief(
+    ws: &crate::WorkspacePaths,
+    llm_model: Option<&str>,
+    _output: OutputFormat,
+) -> Option<String> {
+    std::fs::create_dir_all(&ws.db_dir).ok()?;
+    let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+        .execute()
+        .await
+        .ok()?;
+
+    let checkpoints =
+        crate::storage_checkpoint::get_recent_checkpoints(&db, &ws.id, 10)
+            .await
+            .ok()?;
+
+    if checkpoints.is_empty() {
+        return None;
+    }
+
+    // If there's only one checkpoint, return its narrative directly — no LLM needed.
+    if checkpoints.len() == 1 {
+        return Some(checkpoints[0].narrative.clone());
+    }
+
+    // Multiple checkpoints: ask LLM to synthesize them into a brief.
+    // This is far cheaper than scanning 200 raw capsules.
+    let result = synthesize_checkpoints_for_brief(llm_model, &checkpoints).await.ok()?;
+    Some(result)
+}
+
+/// Synthesize multiple checkpoint narratives into a staff-engineer brief.
+async fn synthesize_checkpoints_for_brief(
+    llm_model: Option<&str>,
+    checkpoints: &[crate::storage_checkpoint::CheckpointRow],
+) -> anyhow::Result<String> {
+    use chrono::TimeZone;
+    let mut context = String::new();
+    context.push_str(&format!(
+        "The following are {} checkpoint story segments from this workspace, \
+         ordered from most recent to oldest:\n\n",
+        checkpoints.len()
+    ));
+
+    for (i, cp) in checkpoints.iter().enumerate() {
+        let ts_str = chrono::Utc
+            .timestamp_millis_opt(cp.ts_ms)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| cp.ts_ms.to_string());
+        context.push_str(&format!("--- Segment {} ({})\n", i + 1, ts_str));
+        context.push_str(&cp.narrative);
+        context.push_str("\n\n");
+    }
+
+    let preamble = "You are unlost, acting as a staff engineer giving a debrief. \
+        Given multiple session story segments from a workspace, synthesize them into \
+        a single staff-engineer-level brief that covers: \
+        (1) What is being built and the current state, \
+        (2) The key decisions and trade-offs made (with rationale), \
+        (3) Known failure modes, gotchas, and debt, \
+        (4) What to focus on next. \
+        Be direct and concrete. Cite specific decisions. Max 400 words. \
+        Return the brief in the `narrative` field.";
+
+    let result = crate::llm_extract::<crate::storage_checkpoint::CheckpointNarrativeOutput>(
+        llm_model,
+        preamble,
+        &context,
+    )
+    .await?;
+    Ok(result.narrative)
+}
+
 pub async fn run(
     target: Vec<String>,
     llm_model: Option<String>,
@@ -161,6 +237,26 @@ pub async fn run(
 
     if let Some(pb) = spinner.as_ref() {
         pb.set_message("Weighing what matters...");
+    }
+
+    // ── Checkpoint fast path (unscoped only) ─────────────────────────────────
+    // When not scoped, try to synthesize from stored checkpoint narratives.
+    // This is significantly cheaper than processing 200 raw capsules.
+    if scope_opt.is_none() {
+        if let Some(result) = try_checkpoint_brief(&ws, llm_model.as_deref(), output).await {
+            if let Some(pb) = spinner.as_ref() {
+                pb.finish_and_clear();
+            }
+            let wrap = output != OutputFormat::Ansi || std::env::var_os("NO_COLOR").is_some();
+            let out = if wrap {
+                crate::util::wrap_plain_text(&result, 80)
+            } else {
+                result
+            };
+            println!("{}", out);
+            println!();
+            return Ok(());
+        }
     }
 
     // Full scan — no recency bias, no emotion/provider/time filters.

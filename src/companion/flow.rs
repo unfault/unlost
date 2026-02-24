@@ -521,12 +521,36 @@ impl Flow {
         let commit_mentioned = looks_like_commit_or_pr(&exchange_text);
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        // Sticky session ID for the controller
+        // Sticky session ID for the controller + session transition detection
         let final_session_id = {
             let controller = self.state.controllers.entry(ws.id.clone()).or_default();
+            let prev_session = controller.last_agent_session_id.clone();
             if let Some(ref sid) = event.agent_session_id {
                 controller.last_agent_session_id = Some(sid.clone());
             }
+
+            // If the session ID has changed and we had a previous session, spawn a
+            // background checkpoint task for the session that just ended.
+            // We do this asynchronously so the current record_turn call is not blocked.
+            if let (Some(prev), Some(cur)) = (&prev_session, &event.agent_session_id) {
+                if prev != cur {
+                    let ws_clone = ws.clone();
+                    let prev_clone = prev.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::storage_checkpoint::maybe_create_checkpoint(
+                            &ws_clone,
+                            Some(&prev_clone),
+                            "new_session_opencode",
+                            None,
+                        )
+                        .await
+                        {
+                            tracing::debug!("checkpoint generation failed (non-fatal): {e}");
+                        }
+                    });
+                }
+            }
+
             event
                 .agent_session_id
                 .clone()

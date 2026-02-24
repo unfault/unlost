@@ -304,6 +304,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Where { path } => {
             unlost::commands::where_cmd::run(path)?;
         }
+        Command::Checkpoint {
+            list,
+            session_id,
+            since,
+            llm_model,
+        } => {
+            unlost::commands::checkpoint::run(list, session_id, since, llm_model).await?;
+        }
     }
 
     Ok(())

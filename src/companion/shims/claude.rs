@@ -793,6 +793,27 @@ async fn handle_stop(
 
     // Load cursor and parse new turns
     let cursor = load_cursor(&ws.id, &input.session_id);
+
+    // If byte_offset == 0 and last_uuid is None, this is the first Stop hook call
+    // for this session_id — a new session has started. Spawn a background checkpoint
+    // for any previous sessions in this workspace (we don't know which session was
+    // last, so we create an unscoped workspace checkpoint).
+    if cursor.byte_offset == 0 && cursor.last_uuid.is_none() {
+        let ws_clone = ws.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::storage_checkpoint::maybe_create_checkpoint(
+                &ws_clone,
+                None, // unscoped: covers all recent unchecked capsules
+                "new_session_claude",
+                None,
+            )
+            .await
+            {
+                tracing::debug!("checkpoint generation failed (non-fatal): {e}");
+            }
+        });
+    }
+
     let cwd_path = std::path::Path::new(&input.cwd);
     let (turns, new_cursor) = parse_transcript_from_cursor(&transcript_path, &cursor, cwd_path)?;
 
