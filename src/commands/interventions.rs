@@ -1,5 +1,32 @@
 use chrono::TimeZone;
 
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{}...", head)
+    } else {
+        head
+    }
+}
+
+fn squash_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !in_ws {
+                out.push(' ');
+                in_ws = true;
+            }
+        } else {
+            in_ws = false;
+            out.push(ch);
+        }
+    }
+    out.trim().to_string()
+}
+
 pub fn run(
     path: String,
     limit: usize,
@@ -19,6 +46,7 @@ pub fn run(
 
     let all_interventions = crate::metrics::get_recent_interventions(&ws.metrics_jsonl, 1000)?;
 
+    // Note: don't apply `limit` until after we collapse identical adjacent items.
     let filtered: Vec<_> = all_interventions
         .into_iter()
         .filter(|iv| {
@@ -26,7 +54,6 @@ pub fn run(
             let before = until_ms.map(|u| iv.ts_ms <= u).unwrap_or(true);
             after && before
         })
-        .take(limit)
         .collect();
 
     if filtered.is_empty() {
@@ -36,6 +63,7 @@ pub fn run(
 
     println!("workspace: {}", ws.id);
     println!();
+    println!("Recent friction interventions:");
 
     let now = crate::workspace::now_ms();
     let blacklist = [
@@ -55,7 +83,22 @@ pub fn run(
         "WARNING",
     ];
 
-    for (i, iv) in filtered.iter().enumerate() {
+    #[derive(Clone)]
+    struct Row {
+        fingerprint: String,
+        ts_str: String,
+        ago_str: String,
+        duration_str: String,
+        severity: String,
+        diagnosis: String,
+        emotion_str: String,
+        topic_preview: Option<String>,
+        symbols_str: Option<String>,
+        count: usize,
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+    for iv in filtered.iter() {
         let ts_str = chrono::Utc
             .timestamp_millis_opt(iv.ts_ms)
             .single()
@@ -66,13 +109,17 @@ pub fn run(
 
         let duration_str = if let Some(start) = iv.watch_start_ts {
             let dur_mins = (iv.ts_ms - start) / 60000;
-            format!("Intervened after {}m", dur_mins)
+            if dur_mins > 0 {
+                format!("Intervened after {}m", dur_mins)
+            } else {
+                "Intervened".to_string()
+            }
         } else {
             "Intervened".to_string()
         };
 
         let diagnosis = crate::metrics::get_diagnosis(&iv.cause, &iv.top_channels);
-        let severity = crate::metrics::get_severity_label(iv.intensity);
+        let severity = crate::metrics::get_severity_label(iv.intensity).to_string();
 
         let emotion_str = if let Some(ref e) = iv.user_emotion {
             if crate::governor::FRICTION_EMOTIONS.contains(&e.as_str()) {
@@ -104,50 +151,86 @@ pub fn run(
         }
 
         let symbols_str = if clean_symbols.is_empty() {
-            "—".to_string()
+            None
         } else if clean_symbols.len() > 3 {
-            format!(
+            Some(format!(
                 "{}, {} and {} others",
                 clean_symbols[0],
                 clean_symbols[1],
                 clean_symbols.len() - 2
-            )
+            ))
         } else {
-            clean_symbols.join(", ")
+            Some(clean_symbols.join(", "))
         };
 
-        let topic = iv.topic.as_deref().unwrap_or("");
-        let topic_line = if !topic.is_empty() {
-            format!("\n     Topic: \"{}\"", truncate(topic, 80))
+        let topic = squash_whitespace(iv.topic.as_deref().unwrap_or(""));
+        let topic_preview = if topic.is_empty() {
+            None
         } else {
-            String::new()
+            Some(truncate_chars(&topic, 200))
         };
 
-        println!(
-            "  {}. {} ({}) | {}: {} - {}{}",
-            i + 1,
+        let fingerprint = format!(
+            "{}|{}|{}|{}|{}|{}",
+            ts_str,
+            duration_str,
+            severity,
+            diagnosis,
+            emotion_str,
+            topic_preview.as_deref().unwrap_or("")
+        );
+        let fingerprint = if let Some(ref sym) = symbols_str {
+            format!("{}|{}", fingerprint, sym)
+        } else {
+            fingerprint
+        };
+
+        if let Some(last) = rows.last_mut() {
+            if last.fingerprint == fingerprint {
+                last.count += 1;
+                continue;
+            }
+        }
+
+        rows.push(Row {
+            fingerprint,
             ts_str,
             ago_str,
             duration_str,
             severity,
             diagnosis,
-            emotion_str
+            emotion_str,
+            topic_preview,
+            symbols_str,
+            count: 1,
+        });
+    }
+
+    rows.truncate(limit);
+    for (i, row) in rows.iter().enumerate() {
+        let repeat = if row.count > 1 {
+            format!(" x{}", row.count)
+        } else {
+            String::new()
+        };
+        println!(
+            "  {}. {} ({}) | {}: {} - {}{}{}",
+            i + 1,
+            row.ts_str,
+            row.ago_str,
+            row.duration_str,
+            row.severity,
+            row.diagnosis,
+            row.emotion_str,
+            repeat
         );
-        println!("     Symbols: {}", symbols_str);
-        print!("{}", topic_line);
-        if !topic_line.is_empty() {
-            println!();
+        if let Some(ref topic) = row.topic_preview {
+            println!("     Topic: {}", topic);
         }
-        println!();
+        if let Some(ref symbols) = row.symbols_str {
+            println!("     Symbols: {}", symbols);
+        }
     }
 
     Ok(())
-}
-
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len])
-    }
 }
