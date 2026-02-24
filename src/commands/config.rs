@@ -138,6 +138,7 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
             println!("configured ({scope}): {}", cfg_path.display());
 
             write_opencode_skill(&cfg_path, global)?;
+            write_opencode_walkthrough_skill(&cfg_path, global)?;
         }
 
         AgentCommand::Claude { path, global } => {
@@ -240,6 +241,8 @@ fn configure_claude(path: &str, global: bool) -> anyhow::Result<()> {
 
     let scope = if global { "global" } else { "project" };
     println!("configured ({scope}): {}", cfg_path.display());
+
+    write_claude_walkthrough_skill(&cfg_path)?;
     Ok(())
 }
 
@@ -372,6 +375,37 @@ unlost brief
 - If unlost is not configured for this project, run: `unlost config agent opencode`
 "#;
 
+const OPENCODE_WALKTHROUGH_SKILL_CONTENT: &str = r#"---
+name: unlost-walkthrough
+description: Guide the user through recent changes step-by-step (open files, explain why)
+compatibility: opencode
+---
+
+## Trigger
+
+User invokes: `/unlost-walkthrough`
+
+## What to do
+
+Walk the user through what you did in this session (or on this branch) so they can follow the changes more intimately.
+
+Guidelines:
+
+- Prefer a step-by-step flow. After each step, pause and wait for the user to say `next`.
+- For each significant change, open the relevant file in VSCode at the most relevant line using:
+  - `code --goto <file>:<line>`
+- Within a file, progress through the change in order (top-to-bottom): jump to the next relevant hunk/region and explain it before moving on. If you can't programmatically highlight lines, explicitly tell the user which line range to highlight.
+- Explain **what changed** and **why** (intent + implications). Keep it concrete.
+- Prioritize files the user is least likely to know (entry points, core modules, config) before low-impact or mechanical edits.
+- If `code` is not available, still provide a precise navigation hint like `path/to/file:line`.
+- Avoid dumping huge diffs; show only small excerpts when helpful.
+- Do not reveal secrets (tokens, credentials, `.env` contents). Redact if needed.
+
+## Suggested interaction
+
+Ask the user where to start if ambiguous ("start with the high-level flow or the riskiest change?"). Otherwise, start with the most impactful change.
+"#;
+
 fn write_opencode_skill(cfg_path: &std::path::Path, global: bool) -> anyhow::Result<()> {
     let skills_dir = if global {
         // cfg_path is ~/.config/opencode/opencode.json
@@ -411,6 +445,111 @@ fn write_opencode_skill(cfg_path: &std::path::Path, global: bool) -> anyhow::Res
 
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(&skill_path, OPENCODE_SKILL_CONTENT)?;
+    println!("skill: {}", skill_path.display());
+    Ok(())
+}
+
+fn write_opencode_walkthrough_skill(
+    cfg_path: &std::path::Path,
+    global: bool,
+) -> anyhow::Result<()> {
+    let skills_dir = if global {
+        // cfg_path is ~/.config/opencode/opencode.json
+        // skill goes to ~/.config/opencode/skills/unlost-walkthrough/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine opencode config directory"))?
+            .join("skills")
+            .join("unlost-walkthrough")
+    } else {
+        // cfg_path is <git-root>/opencode.json
+        // skill goes to <git-root>/.opencode/skills/unlost-walkthrough/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine project root"))?
+            .join(".opencode")
+            .join("skills")
+            .join("unlost-walkthrough")
+    };
+
+    let skill_path = skills_dir.join("SKILL.md");
+
+    if skill_path.exists() {
+        print!(
+            "SKILL.md already exists at {}. Overwrite? [y/N] ",
+            skill_path.display()
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("skill: skipped");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(&skill_path, OPENCODE_WALKTHROUGH_SKILL_CONTENT)?;
+    println!("skill: {}", skill_path.display());
+    Ok(())
+}
+
+const CLAUDE_WALKTHROUGH_SKILL_CONTENT: &str = r#"---
+name: unlost-walkthrough
+description: Guide the user through recent changes step-by-step (open files, explain why)
+compatibility: claude
+---
+
+## Trigger
+
+User invokes: `/unlost-walkthrough`
+
+## What to do
+
+Walk the user through what you did in this session (or on this branch) so they can follow the changes more intimately.
+
+Guidelines:
+
+- Prefer a step-by-step flow. After each step, pause and wait for the user to say `next`.
+- For each significant change, open the relevant file in VSCode at the most relevant line using:
+  - `code --goto <file>:<line>`
+- Within a file, progress through the change in order (top-to-bottom): jump to the next relevant hunk/region and explain it before moving on. If you can't programmatically highlight lines, explicitly tell the user which line range to highlight.
+- Explain **what changed** and **why** (intent + implications). Keep it concrete.
+- Prioritize files the user is least likely to know (entry points, core modules, config) before low-impact or mechanical edits.
+- If `code` is not available, still provide a precise navigation hint like `path/to/file:line`.
+- Avoid dumping huge diffs; show only small excerpts when helpful.
+- Do not reveal secrets (tokens, credentials, `.env` contents). Redact if needed.
+
+## Suggested interaction
+
+Ask the user where to start if ambiguous ("start with the high-level flow or the riskiest change?"). Otherwise, start with the most impactful change.
+"#;
+
+fn write_claude_walkthrough_skill(cfg_path: &std::path::Path) -> anyhow::Result<()> {
+    let claude_dir = cfg_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("could not determine claude config directory"))?;
+    let skills_dir = claude_dir.join("skills").join("unlost-walkthrough");
+    let skill_path = skills_dir.join("SKILL.md");
+
+    if skill_path.exists() {
+        print!(
+            "SKILL.md already exists at {}. Overwrite? [y/N] ",
+            skill_path.display()
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("skill: skipped");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(&skill_path, CLAUDE_WALKTHROUGH_SKILL_CONTENT)?;
     println!("skill: {}", skill_path.display());
     Ok(())
 }
