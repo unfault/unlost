@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`unlost pr-comment` output contract**: The generated comment now follows a strict six-section format (What Changed, Why, Behavioral Impact, Risks/Trade-offs, How To Verify, Rollout/Recovery) capped at 200–300 words with actionable-verb bullets (Verify/Check/Confirm) and every risk tied to a specific file or symbol. Diff hunks, commit list, and runtime-impact signals (retry paths, extra I/O, error handling, feature flags, filter/ordering/limit changes) are now extracted from the PR and fed to the LLM for a concrete impact-lens pass.
+
 ### Fixed
 - **`unlost inspect` capsule order**: Capsules are now displayed oldest-first (newest at end) instead of newest-first.
 - **LanceDB timestamp filter crash**: Avoids a DataFusion interval planning error (`lhs:Null, rhs:Int64`) when applying `ts_ms` range filters on mixed-schema datasets; falls back to client-side time filtering and prints a repair command (`unlost reindex`).
