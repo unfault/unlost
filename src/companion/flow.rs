@@ -249,6 +249,7 @@ impl FlowState {
 pub(crate) struct Flow {
     state: FlowState,
     _background_state: Arc<Mutex<BackgroundState>>,
+    worker_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Flow {
@@ -261,19 +262,27 @@ impl Flow {
         )));
 
         // Start background worker
-        tokio::spawn(background_worker(job_rx, background_state.clone()));
+        let worker_handle = tokio::spawn(background_worker(job_rx, background_state.clone()));
 
         Self {
             state: FlowState::new(job_tx),
             _background_state: background_state,
+            worker_handle: Some(worker_handle),
         }
     }
 
-    /// Wait for all background jobs to finish.
-    pub(crate) async fn drain(&self) {
+    /// Flush all buffered exchanges and wait for the background worker to finish
+    /// writing every capsule before returning. Safe to call only once; subsequent
+    /// calls are no-ops.
+    pub(crate) async fn drain(&mut self) {
+        // Send any buffered turns as flush jobs.
         self.state.chunker.flush_all().await;
-        // background_worker will continue running until Flow is dropped,
-        // but it will process all queued jobs.
+        // Close the sender so the background worker exits after draining the queue.
+        self.state.chunker.close_sender();
+        // Wait for the worker to finish processing all queued jobs.
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.await;
+        }
     }
 
     pub(crate) async fn llm_calls(&self) -> u64 {

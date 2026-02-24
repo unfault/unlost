@@ -308,6 +308,15 @@ impl WorkspaceChunker {
         }
     }
 
+    /// Close the sender so the background worker exits its receive loop after
+    /// draining any already-queued jobs.
+    pub(crate) fn close_sender(&mut self) {
+        // kanal senders are closed when all sender handles are dropped.
+        // Replacing with a fresh closed channel achieves that without unsafe code.
+        let (tx, _rx) = kanal::bounded_async::<FlushJob>(0);
+        drop(std::mem::replace(&mut self.flush_tx, tx));
+    }
+
     pub(crate) async fn ingest(&self, workspace_id: String, item: ChunkInput) {
         let now = Instant::now();
         let mut maybe_flush: Option<FlushJob> = None;
