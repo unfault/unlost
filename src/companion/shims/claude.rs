@@ -801,7 +801,7 @@ async fn handle_stop(
     if cursor.byte_offset == 0 && cursor.last_uuid.is_none() {
         let ws_clone = ws.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::storage_checkpoint::maybe_create_checkpoint(
+            match crate::storage_checkpoint::maybe_create_checkpoint(
                 &ws_clone,
                 None, // unscoped: covers all recent unchecked capsules
                 "new_session_claude",
@@ -809,7 +809,9 @@ async fn handle_stop(
             )
             .await
             {
-                tracing::debug!("checkpoint generation failed (non-fatal): {e}");
+                Err(e) => tracing::debug!("checkpoint generation failed (non-fatal): {e}"),
+                Ok(Err(reason)) => tracing::debug!("checkpoint skipped: {reason:?}"),
+                Ok(Ok(_)) => {}
             }
         });
     }

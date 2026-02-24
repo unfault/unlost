@@ -505,12 +505,20 @@ pub(crate) async fn generate_checkpoint_narrative(
 /// narrative, and store. Returns the new CheckpointRow on success.
 ///
 /// `trigger` should be one of: "new_session_opencode", "new_session_claude", "manual".
+/// Reason a checkpoint was skipped — returned so callers can give specific feedback.
+#[derive(Debug)]
+pub enum CheckpointSkipReason {
+    TooFewCapsules { found: usize, minimum: usize },
+    AlreadyCurrent,
+    NoConversationalCapsules,
+}
+
 pub(crate) async fn maybe_create_checkpoint(
     ws: &crate::WorkspacePaths,
     session_id: Option<&str>,
     trigger: &str,
     llm_model_override: Option<&str>,
-) -> anyhow::Result<Option<CheckpointRow>> {
+) -> anyhow::Result<Result<CheckpointRow, CheckpointSkipReason>> {
     // Open (or create) the LanceDB database
     std::fs::create_dir_all(&ws.db_dir)?;
     let db = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
@@ -519,29 +527,34 @@ pub(crate) async fn maybe_create_checkpoint(
         .context("failed to open lancedb for checkpoint")?;
 
     // Fetch the capsules for this session (or all recent if session_id is None).
-    // We use scan_capsules_lancedb with a session filter via the storage module.
     let all_capsules = fetch_session_capsules(&db, &ws.id, session_id).await?;
 
-    if all_capsules.len() < 3 {
+    const MIN_CAPSULES: usize = 3;
+    if all_capsules.len() < MIN_CAPSULES {
         tracing::debug!(
             "checkpoint: skipping — only {} capsules for session {:?}",
             all_capsules.len(),
             session_id
         );
-        return Ok(None);
+        return Ok(Err(CheckpointSkipReason::TooFewCapsules {
+            found: all_capsules.len(),
+            minimum: MIN_CAPSULES,
+        }));
     }
 
     let capsule_count = all_capsules.len() as i32;
     let from_ts_ms = all_capsules.iter().map(|h| h.ts_ms).min().unwrap_or(0);
     let to_ts_ms = all_capsules.iter().map(|h| h.ts_ms).max().unwrap_or(0);
 
-    // Dedup check: skip if a recent checkpoint already covers this work
-    if checkpoint_is_current(&db, &ws.id, to_ts_ms, capsule_count).await {
+    // Dedup check: skip if a recent checkpoint already covers this work.
+    // Manual trigger ("manual") bypasses this — if the user explicitly asks
+    // for a checkpoint, they get one regardless.
+    if trigger != "manual" && checkpoint_is_current(&db, &ws.id, to_ts_ms, capsule_count).await {
         tracing::debug!(
             "checkpoint: skipping — current checkpoint already covers session {:?}",
             session_id
         );
-        return Ok(None);
+        return Ok(Err(CheckpointSkipReason::AlreadyCurrent));
     }
 
     // Split into conversational and git capsules
@@ -558,7 +571,7 @@ pub(crate) async fn maybe_create_checkpoint(
 
     if conv_capsules.is_empty() {
         tracing::debug!("checkpoint: skipping — no conversational capsules");
-        return Ok(None);
+        return Ok(Err(CheckpointSkipReason::NoConversationalCapsules));
     }
 
     // Generate narrative
@@ -609,7 +622,7 @@ pub(crate) async fn maybe_create_checkpoint(
         trigger
     );
 
-    Ok(Some(row))
+    Ok(Ok(row))
 }
 
 /// Fetch all capsules (conversational + git) for a given session within a

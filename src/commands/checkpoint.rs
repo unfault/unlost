@@ -99,7 +99,7 @@ pub async fn run(
         )
         .await?
         {
-            Some(cp) => {
+            Ok(cp) => {
                 let ts_str = chrono::Utc
                     .timestamp_millis_opt(cp.ts_ms)
                     .single()
@@ -111,12 +111,26 @@ pub async fn run(
                 println!();
                 println!("{}", cp.narrative);
             }
-            None => {
-                println!(
-                    "No new checkpoint created — either not enough capsules, or a current \
-                     checkpoint already covers this workspace."
-                );
-                println!("Run `unlost checkpoint --list` to see existing checkpoints.");
+            Err(reason) => {
+                use crate::storage_checkpoint::CheckpointSkipReason::*;
+                match reason {
+                    TooFewCapsules { found, minimum } => {
+                        println!(
+                            "Not enough capsules to checkpoint: found {found}, need at least {minimum}."
+                        );
+                        println!("Record more sessions and try again.");
+                    }
+                    AlreadyCurrent => {
+                        // Manual trigger bypasses this guard, so this branch should
+                        // not be reachable — but handle it gracefully anyway.
+                        println!("A current checkpoint already covers this workspace.");
+                        println!("Run `unlost checkpoint --list` to see it.");
+                    }
+                    NoConversationalCapsules => {
+                        println!("No conversational capsules found — only git capsules present.");
+                        println!("A checkpoint requires at least some recorded conversation turns.");
+                    }
+                }
             }
         }
     }
