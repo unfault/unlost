@@ -118,6 +118,10 @@ struct PrMeta {
     commits: Vec<String>,
     /// Extracted runtime-impact signals from the diff.
     runtime_signals: RuntimeSignals,
+    /// GitHub repo owner (for constructing file links).
+    repo_owner: String,
+    /// GitHub repo name (for constructing file links).
+    repo_name: String,
 }
 
 /// Signals extracted from the diff text that indicate runtime behaviour changes.
@@ -140,7 +144,7 @@ fn fetch_pr_meta(pr_ref: &str) -> anyhow::Result<PrMeta> {
             "view",
             pr_ref,
             "--json",
-            "number,title,baseRefName,headRefOid,files",
+            "number,title,baseRefName,headRefOid,files,headRepository",
         ])
         .output()
         .context("failed to run gh pr view")?;
@@ -157,6 +161,15 @@ fn fetch_pr_meta(pr_ref: &str) -> anyhow::Result<PrMeta> {
     let title = json["title"].as_str().unwrap_or("").to_string();
     let base_branch = json["baseRefName"].as_str().unwrap_or("main").to_string();
     let head_sha = json["headRefOid"].as_str().unwrap_or("").to_string();
+
+    let repo_owner = json["headRepository"]["owner"]["login"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let repo_name = json["headRepository"]["name"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     // Resolve base branch to a SHA via git (works even if the branch is remote-only).
     let base_sha = {
@@ -195,6 +208,8 @@ fn fetch_pr_meta(pr_ref: &str) -> anyhow::Result<PrMeta> {
         diff_summary,
         commits,
         runtime_signals,
+        repo_owner,
+        repo_name,
     })
 }
 
@@ -411,13 +426,22 @@ async fn build_pr_comment_markdown(
     let mut context = String::new();
 
     // ── PR header ─────────────────────────────────────────────────────────────
-    context.push_str(&format!("PR: #{} — {}\n", pr_meta.number, pr_meta.title));
+    context.push_str(&format!("PR: #{} -- {}\n", pr_meta.number, pr_meta.title));
     context.push_str(&format!("Base branch: {}\n", pr_meta.base_branch));
     context.push_str(&format!(
         "Changed files ({}): {}\n",
         pr_meta.changed_files.len(),
         pr_meta.changed_files.iter().take(15).cloned().collect::<Vec<_>>().join(", ")
     ));
+
+    // Provide the link base so the LLM can construct clickable GitHub links.
+    // Format: https://github.com/{owner}/{repo}/blob/{sha}/{file}#L{line}
+    if !pr_meta.repo_owner.is_empty() && !pr_meta.repo_name.is_empty() {
+        context.push_str(&format!(
+            "GitHub file link base: https://github.com/{}/{}/blob/{}/\n",
+            pr_meta.repo_owner, pr_meta.repo_name, pr_meta.head_sha
+        ));
+    }
 
     // ── Commit list ───────────────────────────────────────────────────────────
     if !pr_meta.commits.is_empty() {
@@ -524,44 +548,53 @@ async fn build_pr_comment_markdown(
 
     // ── Prompt ────────────────────────────────────────────────────────────────
     let preamble = "\
-You are unlost, a staff engineer writing a PR comment for the developer who wrote this code.\n\
-This comment serves two audiences simultaneously:\n\
-  1. The AUTHOR — helping them stay intimate with what they built (the tradeoffs held in mind, \
-what was left open, where the non-obvious logic lives).\n\
-  2. The REVIEWER — understanding what changed operationally and what to verify.\n\
-Write in a clear, direct, staff-engineer voice. Not a private journal. Not a style review.\n\n\
+You are unlost, a staff engineer writing a shared PR note for the team.\n\
+This comment serves two audiences at once:\n\
+  1. The AUTHOR -- helping them stay close to code that an AI agent wrote for them \
+(the tradeoffs we were holding, what we left open, where the non-obvious logic lives).\n\
+  2. The REVIEWER -- understanding what changed functionally and what downstream things it touches.\n\
+Write in a clear, collegial \"we\" voice -- as if briefing a teammate who was in the room. \
+Not a personal journal. Not a style review.\n\n\
 RULES:\n\
-- Total output: 200–300 words maximum.\n\
-- Every risk/check must cite a specific file, function, or line from the diff.\n\
-- Actionable bullets use verbs: Verify…, Check…, Confirm…, Re-read…\n\
-- If you lack evidence, write: \"Cannot confirm from history — would need [specific artifact].\"\n\
-- Omit any section that has nothing concrete to say (except What Changed and What you were navigating).\n\
+- Total output: 200-300 words maximum.\n\
+- Use \"we\" not \"you\" throughout.\n\
+- No em-dashes anywhere in the output. Use a plain hyphen or reword instead.\n\
+- Every file or function reference must be a clickable GitHub link using the link base provided \
+in the context (format: [label](https://github.com/owner/repo/blob/sha/path#Lline)). \
+If you do not have a line number, link to the file without the #L anchor.\n\
+- If you lack evidence for a claim, write: \
+\"Cannot confirm from history -- would need [specific artifact].\"\n\
+- Omit any section that has nothing concrete to say \
+(except What Changed and What we were navigating).\n\
 - No generic warnings. No process/workflow notes unless they affect correctness.\n\
 - Emotional signal from capsules (frustration, uncertainty): if present, weave ONE sentence into \
-\"What you were navigating\" — e.g. \"There was uncertainty here around X.\"\n\n\
-OUTPUT FORMAT (strict — use exactly these headings, in this order):\n\
+\"What we were navigating\" -- e.g. \"There was real uncertainty here around X.\"\n\n\
+OUTPUT FORMAT (strict -- use exactly these headings, in this order):\n\
 ## unlost context\n\
 ### What Changed\n\
-1–2 sentences: what the code does differently after this PR.\n\
-### What you were navigating\n\
-1–2 sentences: the tradeoff or constraint you were holding when you wrote this \
-(cite recorded decisions/rationale if available). If emotion signals indicate friction or \
-uncertainty around a specific decision, surface it here in one sentence.\n\
+1-2 sentences: what the code does differently after this PR.\n\
+### What we were navigating\n\
+1-2 sentences: the tradeoff or constraint we were holding when we wrote this \
+(cite recorded decisions/rationale if available). Surface any friction or uncertainty in one sentence.\n\
 ### Behavioral Impact\n\
 Bullets: concrete runtime differences (latency, ordering, error modes, data shape). \
 Omit if nothing material.\n\
 ### Risks / Trade-offs\n\
-Bullets: specific risks tied to exact codepaths. Each bullet names a file or symbol.\n\
-### How To Verify\n\
-Bullets: Verify/Check/Confirm — what to test or inspect before merging.\n\
+Bullets: specific risks tied to exact codepaths. Each bullet links to a file or symbol.\n\
+### Ripple effects\n\
+Bullets: what OTHER features, commands, flows, or user-facing behaviors this change affects, \
+enables, or potentially makes redundant -- think functionally, not just in terms of code imports. \
+Draw on capsule history and the changed symbols to reason about knock-on effects across the product. \
+Example: introducing a richer context command might make a simpler query command redundant. \
+Omit if nothing meaningful to say.\n\
 ### Left open\n\
 Bullets: deferred decisions, open questions, or unresolved next_steps from the recorded history. \
 Draw from next_steps, open_questions, and unresolved failure modes in the causal history. \
 Omit entirely if nothing was left open.\n\
 ### Re-read this\n\
-1–2 bullets pointing to specific file locations (file:function or file:line) that contain \
-non-obvious logic the author should re-read in 3 months. Choose from the correctness-sensitive \
-patterns and the most complex diff hunks. Omit if nothing stands out.\n\
+1-2 bullets pointing to specific linked file locations that contain non-obvious logic \
+worth re-reading in 3 months. Choose from correctness-sensitive patterns and complex diff hunks. \
+Omit if nothing stands out.\n\
 ### Rollout / Recovery\n\
 Only include if there is a migration, data rewrite, flag, or backwards-compat concern. \
 Otherwise omit entirely.\n\n\

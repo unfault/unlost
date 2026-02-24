@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Changed
-- **`unlost pr-comment` dual-audience comment**: The comment now serves both the author (staying intimate with code written by AI agents) and the reviewer. New sections: "What you were navigating" (the tradeoff held when writing, with emotional signal from capsule history woven in), "Left open" (deferred decisions, open questions, unresolved next_steps from capsules), and "Re-read this" (1–2 specific file:function pointers to non-obvious logic). Capsule context now includes `next_steps`, `open_questions`, `failure_signals`, and emotion metadata to ground these sections.
+- **`unlost pr-comment` dual-audience comment**: The comment now serves both the author (staying close to code written by AI agents) and the reviewer. Voice changed from "you" to "we". New sections: "What we were navigating" (shared tradeoff framing with emotional signal woven in), "Ripple effects" (functional knock-on effects across commands/features, not just code imports), "Left open" (deferred decisions, open questions, unresolved next_steps from capsules), and "Re-read this" (1-2 linked file:function pointers to non-obvious logic). File references are now clickable GitHub blob links built from the head SHA and repo coordinates. "How To Verify" removed. Em-dashes banned from output.
 
 ### Fixed
 - **`unlost inspect` capsule order**: Capsules are now displayed oldest-first (newest at end) instead of newest-first.
