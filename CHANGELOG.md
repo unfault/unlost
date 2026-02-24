@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **`unlost interventions`**: New diagnostics command to show recent friction interventions applied to agents. Displays timestamp, building time (how long friction was building), severity/intensity score, cause/diagnosis, topic (user intent), symbols involved, user emotion, and symptom channels. Supports `--limit`, `--since`, `--until` filters.
 - **`unlost challenge --deep`**: `challenge` is now concise by default — outputs only `THE DECISION`, `ALTERNATIVES` (2-3 options, no Cost/Evidence fields), and `VERDICT`. Pass `--deep` to get the full analysis with `UNKNOWNS` and `PROBES` sections.
 
 ### Fixed

@@ -219,6 +219,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Metrics { path } => {
             unlost::commands::metrics::run(path)?;
         }
+        Command::Interventions {
+            path,
+            limit,
+            since,
+            until,
+        } => {
+            unlost::commands::interventions::run(path, limit, since, until)?;
+        }
         Command::Inspect {
             path,
             limit,

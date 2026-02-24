@@ -6,6 +6,7 @@ pub mod emotion;
 pub mod explore;
 pub mod init;
 pub mod inspect;
+pub mod interventions;
 pub mod metrics;
 pub mod model;
 pub mod query;

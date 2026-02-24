@@ -49,9 +49,10 @@ Setup:
   model      Manage local models (download, etc.)
 
 Diagnostics:
-  metrics    Show workspace metrics (local, derived from metrics.jsonl)
-  replay     Replay/backfill agent transcripts into unlost
-  inspect    Inspect stored capsules for this workspace
+  metrics       Show workspace metrics (local, derived from metrics.jsonl)
+  interventions Show recent friction interventions applied to agents
+  replay        Replay/backfill agent transcripts into unlost
+  inspect       Inspect stored capsules for this workspace
 
 Options:
 {options}
@@ -384,6 +385,25 @@ pub enum Command {
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
+    },
+
+    /// Show recent friction interventions applied to agents
+    Interventions {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Max interventions to show
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+
+        /// Filter to interventions after this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter to interventions before this time (RFC3339 or relative: 1h, 1d, 1w, 1m, 1y)
+        #[arg(long)]
+        until: Option<String>,
     },
 
     /// Replay/backfill agent transcripts into unlost
