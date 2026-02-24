@@ -115,14 +115,14 @@ struct PrMeta {
 }
 
 fn fetch_pr_meta(pr_ref: &str) -> anyhow::Result<PrMeta> {
-    // gh pr view <ref> --json number,title,baseRefName,headRefOid,baseRefOid,files
+    // headRefOid is available; baseRefOid is not in all gh versions — resolve base SHA via git.
     let output = std::process::Command::new("gh")
         .args([
             "pr",
             "view",
             pr_ref,
             "--json",
-            "number,title,baseRefName,headRefOid,baseRefOid,files",
+            "number,title,baseRefName,headRefOid,files",
         ])
         .output()
         .context("failed to run gh pr view")?;
@@ -137,9 +137,19 @@ fn fetch_pr_meta(pr_ref: &str) -> anyhow::Result<PrMeta> {
 
     let number = json["number"].as_u64().unwrap_or(0);
     let title = json["title"].as_str().unwrap_or("").to_string();
-    let base_sha = json["baseRefOid"].as_str().unwrap_or("").to_string();
-    let head_sha = json["headRefOid"].as_str().unwrap_or("").to_string();
     let base_branch = json["baseRefName"].as_str().unwrap_or("main").to_string();
+    let head_sha = json["headRefOid"].as_str().unwrap_or("").to_string();
+
+    // Resolve base branch to a SHA via git (works even if the branch is remote-only).
+    let base_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", &format!("origin/{}", base_branch)])
+            .output()
+            .ok()
+            .filter(|o| o.status.success());
+        out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
 
     let changed_files: Vec<String> = json["files"]
         .as_array()
