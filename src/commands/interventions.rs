@@ -1,4 +1,5 @@
 use chrono::TimeZone;
+use colored::Colorize;
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     let mut it = s.chars();
@@ -57,13 +58,17 @@ pub fn run(
         .collect();
 
     if filtered.is_empty() {
-        println!("No interventions found for workspace: {}", ws.id);
+        println!(
+            "{} {}",
+            "No interventions found for workspace:".dimmed(),
+            ws.id
+        );
         return Ok(());
     }
 
-    println!("workspace: {}", ws.id);
+    println!("{} {}", "workspace:".dimmed(), ws.id.bold());
     println!();
-    println!("Recent friction interventions:");
+    println!("{}", "Recent friction interventions:".dimmed());
 
     let now = crate::workspace::now_ms();
     let blacklist = [
@@ -208,27 +213,43 @@ pub fn run(
 
     rows.truncate(limit);
     for (i, row) in rows.iter().enumerate() {
+        let sev = match row.severity.as_str() {
+            "Acute" => row.severity.red().bold(),
+            "Strong" => row.severity.yellow().bold(),
+            _ => row.severity.cyan().bold(),
+        };
+
         let repeat = if row.count > 1 {
-            format!(" x{}", row.count)
+            format!(" x{}", row.count).dimmed().to_string()
         } else {
             String::new()
         };
+
+        let emotion = if row.emotion_str.contains("disapproval") {
+            row.emotion_str.red().to_string()
+        } else if row.emotion_str.contains("frustr") || row.emotion_str.contains("anger") {
+            row.emotion_str.yellow().to_string()
+        } else {
+            row.emotion_str.dimmed().to_string()
+        };
+
         println!(
-            "  {}. {} ({}) | {}: {} - {}{}{}",
-            i + 1,
-            row.ts_str,
-            row.ago_str,
-            row.duration_str,
-            row.severity,
-            row.diagnosis,
-            row.emotion_str,
+            "  {} {} {} {} {} {}{}{}",
+            format!("{}.", i + 1).dimmed(),
+            row.ts_str.bold(),
+            format!("({})", row.ago_str).dimmed(),
+            "|".dimmed(),
+            format!("{}:", row.duration_str).dimmed(),
+            format!("{} - {}", sev, row.diagnosis.bold()),
+            emotion,
             repeat
         );
+
         if let Some(ref topic) = row.topic_preview {
-            println!("     Topic: {}", topic);
+            println!("     {} {}", "Topic:".dimmed(), topic);
         }
         if let Some(ref symbols) = row.symbols_str {
-            println!("     Symbols: {}", symbols);
+            println!("     {} {}", "Symbols:".dimmed(), symbols);
         }
     }
 
