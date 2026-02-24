@@ -1120,7 +1120,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Weighted multi-channel basin scoring</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Loop, Spec, and Drift intensities are calibrated weighted sums of 10 independent symptom channels — the signal that drives <code>metrics</code> and all interventions.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Loop, Spec, and Drift intensities are calibrated weighted sums of 10 independent symptom channels. This signal drives <code>metrics</code> and all interventions.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">EMA smoothing</div>
@@ -1128,11 +1128,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Sliding window persistence</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">State only escalates after 3 consecutive turns above the 0.75 threshold — one-turn spikes never trigger an intervention.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">State only escalates after 3 consecutive turns above the 0.75 threshold. One-turn spikes never trigger an intervention.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Coffee Pause soft decay</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">&gt;30-minute gaps decay intensity to 0.3× and reset the FSM to Stable. On return, a resumption brief is injected to re-orient the agent — used by the trajectory controller and <code>brief</code>.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">&gt;30-minute gaps decay intensity to 0.3× and reset the FSM to Stable. On return, a resumption brief is injected to re-orient the agent. Used by the trajectory controller and <code>brief</code>.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Grounding stall detection</div>
@@ -1148,7 +1148,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Stubbornness boost</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Extra intensity when alignment debt is high but decision churn is low — the agent acknowledges errors but keeps the same plan. Triggers a Spec-basin escalation.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Extra intensity when alignment debt is high but decision churn is low. The agent acknowledges errors but keeps the same plan. Triggers a Spec-basin escalation.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Blind Acceptance risk</div>
@@ -1156,15 +1156,15 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Summary intent damping</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Multiplies raw intensity by 0.6 on turns the agent is legitimately consolidating — prevents false positives during wrap-up phases.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Multiplies raw intensity by 0.6 on turns the agent is legitimately consolidating. Prevents false positives during wrap-up phases.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Stratified intervention policy</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Ambient hint (&lt;0.8), Structural note (≥0.8), Emergency hard-stop (&gt;0.95) — intervention severity scales with signal confidence.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Ambient hint (&lt;0.8), Structural note (≥0.8), Emergency hard-stop (&gt;0.95). Intervention severity scales with signal confidence.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Hydration packet</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">For Loop interventions, the 3 most relevant recent capsules are selected by scoring recency, symbol overlap, emotion, effort, and failure mode — injected into the intervention text to help the agent break the loop.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">For Loop interventions, the 3 most relevant recent capsules are selected by scoring recency, symbol overlap, emotion, effort, and failure mode. These are injected into the intervention text to help the agent break the loop.</p>
             </div>
           </div>
         </div>
@@ -1179,11 +1179,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Heuristic emotion override</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Pattern-based frustration and doubt detection corrects neural model misclassifications — sarcasm, repetition complaints, and hedging phrases are caught even when the model doesn't fire.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Pattern-based frustration and doubt detection corrects neural model misclassifications. Sarcasm, repetition complaints, and hedging phrases are caught even when the model doesn't fire.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Affective modulation</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Joy halves trajectory intensity. Persistent anger across ≥2 turns triggers a de-escalation override that fires regardless of basin state — based on <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="text-fiery-terracotta hover:underline">EASE'25</a> research on emotional strain in LLM interactions.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Joy halves trajectory intensity. Persistent anger across ≥2 turns triggers a de-escalation override that fires regardless of basin state. Based on <a href="https://dl.acm.org/doi/full/10.1145/3756681.3756951" class="text-fiery-terracotta hover:underline">EASE'25</a> research on emotional strain in LLM interactions.</p>
             </div>
           </div>
         </div>
@@ -1194,11 +1194,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           <div class="space-y-5">
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">HyPE — Hypothetical Prompt Embeddings</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">At indexing time, the LLM generates 2–3 questions each capsule answers. At retrieval time, <code>recall</code>, <code>trace</code>, <code>challenge</code>, <code>explore</code>, and <code>brief</code> each frame your query as a matching question before embedding — turning retrieval into a question-to-question match with no extra LLM cost. <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335" class="text-fiery-terracotta hover:underline" target="_blank" rel="noopener">Ma et al., 2025</a>.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">At indexing time, the LLM generates 2–3 questions each capsule answers. At retrieval time, <code>recall</code>, <code>trace</code>, <code>challenge</code>, <code>explore</code>, and <code>brief</code> each frame your query as a matching question before embedding. This turns retrieval into a question-to-question match with no extra LLM cost. <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5139335" class="text-fiery-terracotta hover:underline" target="_blank" rel="noopener">Ma et al., 2025</a>.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Trajectory-encoded embeddings</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Each capsule is embedded with its category, failure mode, symbols, and the prior decision from the same work thread. Causally related capsules cluster together across sessions — used by every retrieval command.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Each capsule is embedded with its category, failure mode, symbols, and the prior decision from the same work thread. Causally related capsules cluster together across sessions. Used by every retrieval command.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">BGE-small-en-v1.5 dense embeddings</div>
@@ -1210,7 +1210,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">LabelList index</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Scalar index on the symbols array column enabling fast <code>array_contains</code> fan-out queries — used by <code>trace</code> to expand the causal chain.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Scalar index on the symbols array column enabling fast <code>array_contains</code> fan-out queries. Used by <code>trace</code> to expand the causal chain.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Causal chain algorithm</div>
@@ -1218,7 +1218,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Cross-session recurrence scoring</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Capsules scored for <code>brief</code> by failure mode weight, explicit rationale and decision presence, and symbols recurring across multiple distinct sessions — with no recency bias.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Capsules scored for <code>brief</code> by failure mode weight, explicit rationale and decision presence, and symbols recurring across multiple distinct sessions. No recency bias.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Recency-weighted fingerprint deduplication</div>
@@ -1226,7 +1226,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Checkpoint summarization</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">A background process compresses windows of capsules into narrative checkpoints. <code>recall</code> and <code>brief</code> use a fast path when the delta since the last checkpoint is small — reducing LLM token cost significantly.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">A background process compresses windows of capsules into narrative checkpoints. <code>recall</code> and <code>brief</code> use a fast path when the delta since the last checkpoint is small. Reduces LLM token cost significantly.</p>
             </div>
           </div>
         </div>
@@ -1237,11 +1237,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
           <div class="space-y-5">
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Apache Arrow / LanceDB columnar store</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Capsules stored as Arrow RecordBatches with three indexes (ANN, LabelList, scalar timestamp). Append-only with schema evolution — the foundation every command reads from.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Capsules stored as Arrow RecordBatches with three indexes (ANN, LabelList, scalar timestamp). Append-only with schema evolution. The foundation every command reads from.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Code graph analysis</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed"><a href="https://github.com/unfault/core" class="text-fiery-terracotta hover:underline font-mono text-sm">unfault-core</a> + petgraph builds a live static graph for centrality scoring, dependency/impact traversal, and symbol validation — used by <code>brief</code> to expand scope and by Drift detection to validate agent-mentioned identifiers.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed"><a href="https://github.com/unfault/core" class="text-fiery-terracotta hover:underline font-mono text-sm">unfault-core</a> + petgraph builds a live static graph for centrality scoring, dependency/impact traversal, and symbol validation. Used by <code>brief</code> to expand scope and by Drift detection to validate agent-mentioned identifiers.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">LLM structured extraction</div>
@@ -1249,7 +1249,7 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Hybrid extraction mode</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Heuristics identify "pivotal" turns before invoking the LLM — routine exchanges are skipped, reducing extraction cost without losing signal.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Heuristics identify "pivotal" turns before invoking the LLM. Routine exchanges are skipped, reducing extraction cost without losing signal.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">SHA-256 job deduplication</div>
@@ -1257,11 +1257,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Git grounding &amp; SHA provenance</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Git HEAD and commit SHAs stored on every capsule. Git commits ingested as first-class capsules deduplicated by hash — surfaced by <code>brief</code>, <code>trace</code>, <code>challenge</code>, and <code>explore</code>.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">Git HEAD and commit SHAs stored on every capsule. Git commits ingested as first-class capsules deduplicated by hash. Surfaced by <code>brief</code>, <code>trace</code>, <code>challenge</code>, and <code>explore</code>.</p>
             </div>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Changelog ingestion</div>
-              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">CHANGELOG.md versions parsed and stored as versioned capsules, surfaced with <code>ref=version:vX.Y.Z</code> citations in LLM prompts — used by <code>challenge</code> and <code>brief</code> for version-aware context.</p>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">CHANGELOG.md versions parsed and stored as versioned capsules, surfaced with <code>ref=version:vX.Y.Z</code> citations in LLM prompts. Used by <code>challenge</code> and <code>brief</code> for version-aware context.</p>
             </div>
           </div>
         </div>
