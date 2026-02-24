@@ -2,11 +2,8 @@ name: ci
 
 on:
   push:
-    paths-ignore:
-      - 'docs/**'
-      - 'agents/**'
-      - 'README.md'
-  pull_request:
+    branches:
+      - main
     paths-ignore:
       - 'docs/**'
       - 'agents/**'
