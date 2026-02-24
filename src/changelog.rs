@@ -279,6 +279,8 @@ pub async fn ingest_changelog(
             None,
             &capsule,
             None,
+            None, // head_sha: not applicable for changelog ingestion
+            None, // commit_sha: not applicable for changelog ingestion
         )
         .await
         {

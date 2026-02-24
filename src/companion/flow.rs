@@ -535,6 +535,7 @@ impl Flow {
             usage: event.usage.map(UsageMeta::from),
             grounding_note: event.grounding_note,
             source_ts_ms: event.source_ts_ms,
+            workspace_root: ws.root.clone(),
         };
 
         // Ingest into chunker (may or may not produce a flush job depending on boundaries).
@@ -750,6 +751,7 @@ async fn process_flush_job(
     let ws_dir = crate::unlost_workspace_dir(&job.workspace_id);
     let ws = crate::WorkspacePaths {
         id: job.workspace_id.clone(),
+        root: job.workspace_root.clone(),
         db_dir: ws_dir.join("lancedb"),
         capsules_jsonl: ws_dir.join("capsules.jsonl"),
         metrics_jsonl: ws_dir.join("metrics.jsonl"),
@@ -763,6 +765,8 @@ async fn process_flush_job(
         job.exchange_seq,
         &job.meta,
         &capsule,
+        job.head_sha.as_deref(),
+        job.commit_sha.as_deref(),
     )?;
 
     let _ = crate::metrics::record_capsule_saved(
@@ -793,6 +797,8 @@ async fn process_flush_job(
         assistant_emotion.as_ref(),
         &capsule,
         prior_decision.as_deref(),
+        job.head_sha.as_deref(),
+        job.commit_sha.as_deref(),
     )
     .await?;
 
@@ -821,6 +827,8 @@ fn append_capsule_jsonl(
     exchange_seq: u64,
     meta: &crate::ResponseMeta,
     capsule: &IntentCapsule,
+    head_sha: Option<&str>,
+    commit_sha: Option<&str>,
 ) -> anyhow::Result<()> {
     use std::io::Write;
 
@@ -856,6 +864,8 @@ fn append_capsule_jsonl(
         "agent_session_id": meta.agent_session_id,
         "usage": usage,
         "capsule": capsule,
+        "head_sha": head_sha,
+        "commit_sha": commit_sha,
     });
     std::fs::OpenOptions::new()
         .create(true)

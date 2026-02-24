@@ -62,6 +62,12 @@ pub async fn run(
                 if let Some(ref session) = meta.agent_session_id {
                     println!("session:   {}", session);
                 }
+                if let Some(ref sha) = hit.head_sha {
+                    println!("head_sha:  {}", sha);
+                }
+                if let Some(ref sha) = hit.commit_sha {
+                    println!("commit_sha: {}", sha);
+                }
                 println!(
                     "conn:      {} seq: {} status: {}",
                     hit.conn_id, hit.exchange_seq, meta.http_status

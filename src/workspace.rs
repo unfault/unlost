@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
     pub id: String,
+    /// Absolute path to the git root (or directory root if not a git repo).
+    pub root: std::path::PathBuf,
     pub db_dir: std::path::PathBuf,
     pub capsules_jsonl: std::path::PathBuf,
     pub metrics_jsonl: std::path::PathBuf,
@@ -262,6 +264,7 @@ pub(crate) fn get_or_create_workspace_paths(
             let ws_dir = unlost_workspace_dir(&existing_id);
             return Ok(WorkspacePaths {
                 id: existing_id,
+                root: root.clone(),
                 db_dir: ws_dir.join("lancedb"),
                 capsules_jsonl: ws_dir.join("capsules.jsonl"),
                 metrics_jsonl: ws_dir.join("metrics.jsonl"),
@@ -294,6 +297,7 @@ pub(crate) fn get_or_create_workspace_paths(
 
     Ok(WorkspacePaths {
         id,
+        root,
         db_dir,
         capsules_jsonl,
         metrics_jsonl: ws_dir.join("metrics.jsonl"),

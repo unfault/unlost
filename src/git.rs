@@ -240,6 +240,8 @@ pub async fn ingest_git_commits(
             None,
             &capsule,
             Some(&embed_text),
+            None, // head_sha: not applicable for git history ingestion
+            None, // commit_sha: not applicable for git history ingestion
         )
         .await
         {
@@ -490,6 +492,8 @@ pub async fn ingest_git_tags(
             None,
             &capsule,
             Some(&embed_text),
+            None, // head_sha: not applicable for git tag ingestion
+            None, // commit_sha: not applicable for git tag ingestion
         )
         .await
         {

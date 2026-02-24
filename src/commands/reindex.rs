@@ -17,6 +17,10 @@ struct JsonCapsule {
     #[serde(default)]
     usage: Option<Usage>,
     capsule: Caps,
+    #[serde(default)]
+    head_sha: Option<String>,
+    #[serde(default)]
+    commit_sha: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -187,6 +191,8 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             ts_ms: capsule.ts_ms,
             meta,
             capsule: intent_capsule,
+            head_sha: capsule.head_sha,
+            commit_sha: capsule.commit_sha,
         });
 
         if batch_rows.len() >= BATCH_SIZE {
@@ -221,6 +227,8 @@ struct BatchRow {
     ts_ms: i64,
     meta: crate::ResponseMeta,
     capsule: crate::IntentCapsule,
+    head_sha: Option<String>,
+    commit_sha: Option<String>,
 }
 
 /// Embed `batch_texts` in one ONNX call, pair with `batch_rows`,
@@ -252,6 +260,8 @@ async fn flush_batch(
             meta: r.meta,
             capsule: r.capsule,
             embedding: emb,
+            head_sha: r.head_sha,
+            commit_sha: r.commit_sha,
         })
         .collect();
 

@@ -99,6 +99,8 @@ fn append_capsule_jsonl(
     exchange_seq: u64,
     meta: &crate::ResponseMeta,
     capsule: &crate::IntentCapsule,
+    head_sha: Option<&str>,
+    commit_sha: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -132,6 +134,8 @@ fn append_capsule_jsonl(
         "agent_session_id": meta.agent_session_id,
         "usage": usage,
         "capsule": capsule,
+        "head_sha": head_sha,
+        "commit_sha": commit_sha,
     });
     std::fs::OpenOptions::new()
         .create(true)
@@ -154,6 +158,24 @@ fn contains_hex_hash(s: &str) -> bool {
         }
     }
     false
+}
+
+/// Read the short (7-char) git HEAD SHA from the given directory.
+/// Returns None if not a git repo, no commits yet, or git is unavailable.
+pub(crate) fn read_git_head(workspace_root: &std::path::Path) -> Option<String> {
+    if workspace_root.as_os_str().is_empty() {
+        return None;
+    }
+    let out = std::process::Command::new("git")
+        .args(["-C", workspace_root.to_string_lossy().as_ref(), "rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if sha.is_empty() { None } else { Some(sha) }
+    } else {
+        None
+    }
 }
 
 pub(crate) fn looks_like_commit_or_pr(s: &str) -> bool {
@@ -194,11 +216,16 @@ pub(crate) struct ChunkInput {
     /// Original message timestamp (ms since epoch) from replay source.
     /// When set, overrides the wall-clock time so replayed capsules sort correctly.
     pub(crate) source_ts_ms: Option<i64>,
+    /// Absolute path to the workspace root (git toplevel or directory).
+    pub(crate) workspace_root: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct FlushJob {
     pub(crate) workspace_id: String,
+    /// Absolute path to the workspace root (git toplevel or directory).
+    /// Used for git SHA capture at flush time.
+    pub(crate) workspace_root: std::path::PathBuf,
     pub(crate) conn_id: u64,
     pub(crate) exchange_seq: u64,
     pub(crate) ts_ms: i64,
@@ -208,6 +235,12 @@ pub(crate) struct FlushJob {
     /// Decision text from the previous capsule in this workspace's sequence.
     /// Used to encode causal continuity into the embedding.
     pub(crate) prior_decision: Option<String>,
+    /// git HEAD SHA when this buffer chunk opened (short, 7-char).
+    /// Always populated when inside a git repo with at least one commit.
+    pub(crate) head_sha: Option<String>,
+    /// git HEAD SHA after the commit that landed during this turn, if any.
+    /// Sparse: only set when `commit_mentioned` triggered a flush and HEAD moved.
+    pub(crate) commit_sha: Option<String>,
 }
 
 struct WorkspaceBuffer {
@@ -227,10 +260,15 @@ struct WorkspaceBuffer {
     /// Decision from the most recently flushed capsule in this workspace.
     /// Threaded into the next FlushJob so embeddings encode causal continuity.
     last_decision: Option<String>,
+    /// Absolute path to the workspace root, carried from ChunkInput.
+    workspace_root: std::path::PathBuf,
+    /// git HEAD SHA captured when this buffer was first opened (start of chunk).
+    head_sha_at_open: Option<String>,
 }
 
 impl WorkspaceBuffer {
-    fn new(now: Instant) -> Self {
+    fn new(now: Instant, workspace_root: std::path::PathBuf) -> Self {
+        let head_sha_at_open = read_git_head(&workspace_root);
         Self {
             next_seq: 0,
             last_activity: now,
@@ -246,6 +284,8 @@ impl WorkspaceBuffer {
             turns: Vec::new(),
             saw_commit: false,
             last_decision: None,
+            workspace_root,
+            head_sha_at_open,
         }
     }
 }
@@ -274,16 +314,17 @@ impl WorkspaceChunker {
 
         {
             let mut map = self.buffers.lock().await;
+            let workspace_root = item.workspace_root.clone();
             let buf = map
                 .entry(workspace_id.clone())
-                .or_insert_with(|| WorkspaceBuffer::new(now));
+                .or_insert_with(|| WorkspaceBuffer::new(now, workspace_root.clone()));
 
             // If this buffer has been idle, flush it before appending new content.
             if !buf.turns.is_empty()
                 && now.duration_since(buf.last_activity) >= Self::IDLE_FLUSH_AFTER
             {
                 maybe_flush = Some(build_flush_job(workspace_id.clone(), buf));
-                *buf = WorkspaceBuffer::new(now);
+                *buf = WorkspaceBuffer::new(now, workspace_root.clone());
             }
 
             buf.last_activity = now;
@@ -309,7 +350,7 @@ impl WorkspaceChunker {
             if too_big || too_many || milestone {
                 if maybe_flush.is_none() {
                     maybe_flush = Some(build_flush_job(workspace_id.clone(), buf));
-                    *buf = WorkspaceBuffer::new(now);
+                    *buf = WorkspaceBuffer::new(now, workspace_root.clone());
                 }
             }
         }
@@ -332,8 +373,9 @@ impl WorkspaceChunker {
                 if now.duration_since(buf.last_activity) < Self::IDLE_FLUSH_AFTER {
                     continue;
                 }
+                let root = buf.workspace_root.clone();
                 jobs.push(build_flush_job(ws_id.clone(), buf));
-                *buf = WorkspaceBuffer::new(now);
+                *buf = WorkspaceBuffer::new(now, root);
             }
         }
 
@@ -351,8 +393,9 @@ impl WorkspaceChunker {
             let mut map = self.buffers.lock().await;
             if let Some(buf) = map.get_mut(workspace_id) {
                 if !buf.turns.is_empty() {
+                    let root = buf.workspace_root.clone();
                     job = Some(build_flush_job(workspace_id.to_string(), buf));
-                    *buf = WorkspaceBuffer::new(now);
+                    *buf = WorkspaceBuffer::new(now, root);
                 }
             }
         }
@@ -371,8 +414,9 @@ impl WorkspaceChunker {
             let mut map = self.buffers.lock().await;
             for (ws_id, buf) in map.iter_mut() {
                 if !buf.turns.is_empty() {
+                    let root = buf.workspace_root.clone();
                     jobs.push(build_flush_job(ws_id.clone(), buf));
-                    *buf = WorkspaceBuffer::new(now);
+                    *buf = WorkspaceBuffer::new(now, root);
                 }
             }
         }
@@ -387,6 +431,20 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
     buf.next_seq += 1;
     let exchange_seq = buf.next_seq;
     let ts_ms = buf.last_source_ts_ms.unwrap_or_else(crate::now_ms);
+
+    // Determine commit_sha: if a commit was mentioned this chunk, compare HEAD now
+    // to HEAD at buffer-open time. If they differ, a commit landed during this turn.
+    let commit_sha = if buf.saw_commit {
+        let head_now = read_git_head(&buf.workspace_root);
+        match (&buf.head_sha_at_open, &head_now) {
+            (Some(open), Some(now)) if open != now => Some(now.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    // head_sha is what HEAD was when this buffer chunk opened.
+    let head_sha = buf.head_sha_at_open.clone();
 
     let mut input = String::new();
     input.push_str("Signals:\n");
@@ -409,6 +467,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
 
     FlushJob {
         workspace_id,
+        workspace_root: buf.workspace_root.clone(),
         conn_id: buf.last_conn_id,
         exchange_seq,
         ts_ms,
@@ -416,6 +475,8 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         input,
         grounding_note: buf.last_grounding_note.clone(),
         prior_decision: buf.last_decision.clone(),
+        head_sha,
+        commit_sha,
     }
 }
 
@@ -439,6 +500,9 @@ impl ServeState {
         let ws_dir = crate::unlost_workspace_dir(workspace_id);
         crate::WorkspacePaths {
             id: workspace_id.to_string(),
+            // root is not available in serve mode without a path lookup;
+            // callers that need it (SHA capture) use ws_root_for_id instead.
+            root: std::path::PathBuf::new(),
             db_dir: ws_dir.join("lancedb"),
             capsules_jsonl: ws_dir.join("capsules.jsonl"),
             metrics_jsonl: ws_dir.join("metrics.jsonl"),
@@ -571,6 +635,8 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
             job.exchange_seq,
             &job.meta,
             &capsule,
+            job.head_sha.as_deref(),
+            job.commit_sha.as_deref(),
         );
         let _ = crate::metrics::record_capsule_saved(
             &ws_paths,
@@ -595,6 +661,8 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
                 assistant_emotion.as_ref(),
                 &capsule,
                 job.prior_decision.as_deref(),
+                job.head_sha.as_deref(),
+                job.commit_sha.as_deref(),
             )
             .await;
         }
@@ -697,6 +765,8 @@ pub(crate) async fn process_flush_jobs_proxy(
             job.exchange_seq,
             &job.meta,
             &capsule,
+            job.head_sha.as_deref(),
+            job.commit_sha.as_deref(),
         );
         let _ = crate::metrics::record_capsule_saved(
             &ws,
@@ -719,6 +789,8 @@ pub(crate) async fn process_flush_jobs_proxy(
             assistant_emotion.as_ref(),
             &capsule,
             job.prior_decision.as_deref(),
+            job.head_sha.as_deref(),
+            job.commit_sha.as_deref(),
         )
         .await;
     }
@@ -816,6 +888,8 @@ pub(crate) async fn analysis_worker_multiplex(
             usage: None,
             grounding_note: None,
             source_ts_ms: None,
+            // Proxy mode doesn't have the workspace root readily available.
+            workspace_root: std::path::PathBuf::new(),
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -913,6 +987,7 @@ pub(crate) async fn analysis_worker(
             usage: None,
             grounding_note: None,
             source_ts_ms: None,
+            workspace_root: std::path::PathBuf::new(),
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }

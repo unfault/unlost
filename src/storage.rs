@@ -13,7 +13,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) const CAPSULES_TABLE: &str = "capsules_v3";
+pub(crate) const CAPSULES_TABLE: &str = "capsules_v4";
 
 fn capsules_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -64,6 +64,10 @@ fn capsules_schema() -> Arc<Schema> {
         ),
         // HyPE: pre-generated questions this capsule answers; stored as a joined string for FTS.
         Field::new("questions_text", DataType::Utf8, true),
+        // Git provenance: HEAD SHA when the buffer opened (always present in git repos).
+        Field::new("head_sha", DataType::Utf8, true),
+        // Git provenance: SHA of the commit that landed during this turn (sparse).
+        Field::new("commit_sha", DataType::Utf8, true),
     ]))
 }
 
@@ -101,6 +105,8 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_i64("tokens_cache_read", &mut exprs);
                 add_i64("tokens_cache_write", &mut exprs);
                 add_str("questions_text", &mut exprs);
+                add_str("head_sha", &mut exprs);
+                add_str("commit_sha", &mut exprs);
 
                 if !exprs.is_empty() {
                     let _ = t
@@ -178,6 +184,10 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
 
             let questions_text =
                 Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let head_sha =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            let commit_sha =
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
@@ -215,6 +225,8 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     symbols,
                     embedding,
                     questions_text,
+                    head_sha,
+                    commit_sha,
                 ],
             )
             .context("failed to build empty schema batch")?;
@@ -415,6 +427,8 @@ pub(crate) async fn query_capsules_lancedb(
             idx("next_steps").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let symbols =
             idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+        let head_sha_col = col_str("head_sha");
+        let commit_sha_col = col_str("commit_sha");
 
         for row in 0..batch.num_rows() {
             if out.len() >= limit {
@@ -571,6 +585,10 @@ pub(crate) async fn query_capsules_lancedb(
                     agent_session_id: agent_session,
                     usage,
                 },
+                head_sha: head_sha_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                commit_sha: commit_sha_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
             });
         }
     }
@@ -769,6 +787,8 @@ async fn scan_capsules_lancedb_impl(
         let symbols =
             idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let questions_text_col = col_str("questions_text");
+        let head_sha_col = col_str("head_sha");
+        let commit_sha_col = col_str("commit_sha");
 
         for row in 0..batch.num_rows() {
             // Skip early-exit when recent_first since we need all rows to sort
@@ -929,6 +949,10 @@ async fn scan_capsules_lancedb_impl(
                     agent_session_id: agent_session,
                     usage,
                 },
+                head_sha: head_sha_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                commit_sha: commit_sha_col
+                    .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
             });
         }
     }
@@ -1209,6 +1233,8 @@ pub(crate) async fn trace_capsules_lancedb(
                 .and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
             let symbols_col =
                 idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
+            let head_sha_col = col_str("head_sha");
+            let commit_sha_col = col_str("commit_sha");
 
             for row in 0..batch.num_rows() {
                 let id = match id_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row))) {
@@ -1357,6 +1383,10 @@ pub(crate) async fn trace_capsules_lancedb(
                             agent_session_id: agent_session,
                             usage: None,
                         },
+                        head_sha: head_sha_col
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                        commit_sha: commit_sha_col
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                     },
                 );
 
@@ -1387,6 +1417,10 @@ pub(crate) async fn insert_capsule_row(
     // Prior decision text from the preceding capsule in the same session/sequence.
     // Encodes causal continuity into the embedding so work threads cluster in vector space.
     prior_decision: Option<&str>,
+    // git HEAD SHA when the buffer opened (short, 7-char). None if not a git repo.
+    head_sha: Option<&str>,
+    // git SHA of the commit that landed during this turn, if detected. Sparse.
+    commit_sha: Option<&str>,
 ) -> anyhow::Result<()> {
     tracing::info!(
         conn_id,
@@ -1503,6 +1537,8 @@ pub(crate) async fn insert_capsule_row(
         Some(capsule.questions.join("\n"))
     };
     let questions_text_arr = Arc::new(StringArray::from(vec![questions_joined.as_deref()]));
+    let head_sha_arr = Arc::new(StringArray::from(vec![head_sha]));
+    let commit_sha_arr = Arc::new(StringArray::from(vec![commit_sha]));
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -1540,6 +1576,8 @@ pub(crate) async fn insert_capsule_row(
             symbols_arr,
             embedding_arr,
             questions_text_arr,
+            head_sha_arr,
+            commit_sha_arr,
         ],
     )
     .context("failed to build insert batch")?;
@@ -1562,6 +1600,10 @@ pub(crate) struct CapsuleRow {
     pub capsule: crate::IntentCapsule,
     /// Pre-computed embedding vector (len must be 384).
     pub embedding: Vec<f32>,
+    /// git HEAD SHA when the buffer opened. None for reindexed/replayed rows.
+    pub head_sha: Option<String>,
+    /// git SHA of the commit that landed during this turn, if detected.
+    pub commit_sha: Option<String>,
 }
 
 /// Insert a batch of capsule rows in a single LanceDB write.
@@ -1603,6 +1645,8 @@ pub(crate) async fn insert_capsule_batch(
     let mut next_steps_builder = ListBuilder::new(StringBuilder::new());
     let mut symbols_builder = ListBuilder::new(StringBuilder::new());
     let mut questions_text_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut head_sha_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut commit_sha_vec: Vec<Option<String>> = Vec::with_capacity(n);
     // Flat embedding storage: n * 384 f32 values
     let mut embeddings_flat: Vec<Option<Vec<Option<f32>>>> = Vec::with_capacity(n);
 
@@ -1644,6 +1688,8 @@ pub(crate) async fn insert_capsule_batch(
         } else {
             Some(row.capsule.questions.join("\n"))
         });
+        head_sha_vec.push(row.head_sha.clone());
+        commit_sha_vec.push(row.commit_sha.clone());
 
         if row.embedding.len() != 384 {
             anyhow::bail!(
@@ -1734,6 +1780,18 @@ pub(crate) async fn insert_capsule_batch(
             ),
             Arc::new(StringArray::from(
                 questions_text_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                head_sha_vec
+                    .iter()
+                    .map(|o| o.as_deref())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                commit_sha_vec
                     .iter()
                     .map(|o| o.as_deref())
                     .collect::<Vec<_>>(),
