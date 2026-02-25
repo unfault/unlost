@@ -139,6 +139,7 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
 
             write_opencode_skill(&cfg_path, global)?;
             write_opencode_walkthrough_skill(&cfg_path, global)?;
+            write_opencode_pr_comment_command(&cfg_path, global)?;
         }
 
         AgentCommand::Claude { path, global } => {
@@ -492,6 +493,58 @@ fn write_opencode_walkthrough_skill(
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(&skill_path, OPENCODE_WALKTHROUGH_SKILL_CONTENT)?;
     println!("skill: {}", skill_path.display());
+    Ok(())
+}
+
+const OPENCODE_PR_COMMENT_COMMAND_CONTENT: &str = r#"---
+description: Run unlost pr-comment on a PR
+---
+Please run the `unlost pr-comment` command for the provided PR:
+
+unlost pr-comment $ARGUMENTS
+"#;
+
+fn write_opencode_pr_comment_command(
+    cfg_path: &std::path::Path,
+    global: bool,
+) -> anyhow::Result<()> {
+    let commands_dir = if global {
+        // cfg_path is ~/.config/opencode/opencode.json
+        // command goes to ~/.config/opencode/commands/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine opencode config directory"))?
+            .join("commands")
+    } else {
+        // cfg_path is <git-root>/opencode.json
+        // command goes to <git-root>/.opencode/commands/
+        cfg_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("could not determine project root"))?
+            .join(".opencode")
+            .join("commands")
+    };
+
+    let command_path = commands_dir.join("unlost-pr-comment.md");
+
+    if command_path.exists() {
+        print!(
+            "unlost-pr-comment.md already exists at {}. Overwrite? [y/N] ",
+            command_path.display()
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("command: skipped");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&commands_dir)?;
+    std::fs::write(&command_path, OPENCODE_PR_COMMENT_COMMAND_CONTENT)?;
+    println!("command: {}", command_path.display());
     Ok(())
 }
 
