@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+- **README**: Restructured for better readability, moving installation to top and collapsing technical details.
+
+
 ## [0.11.0] - 2026-02-24
 
 ### Added
