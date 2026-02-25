@@ -226,9 +226,12 @@ impl TrajectoryController {
         let s_stat = if self.static_streak >= 2 { 1.0 } else { 0.0 };
 
         // Anger escalation streak: track consecutive turns where the user is angry/frustrated.
+        // Note: "disapproval" is excluded here — it maps to intellectual disagreement in go_emotions
+        // and should not increment the streak. It still affects trajectory intensity via affective
+        // modulation (valence contribution), so it is not ignored entirely.
         let is_angry = matches!(
             current_emotion.map(|e| e.label.as_str()),
-            Some("anger" | "frustration" | "disapproval")
+            Some("anger" | "frustration")
         );
         if is_angry {
             self.anger_streak += 1;
@@ -391,10 +394,11 @@ impl TrajectoryController {
         };
 
         // Anger escalation override: if the user has been angry/frustrated for 2+ consecutive
-        // turns, fire a de-escalation note regardless of the normal trajectory cause.
-        // This short-circuits the basin dispatch so we never instruct the agent to apologize
-        // or keep executing — we want it to stop, acknowledge, and propose a recovery plan.
-        let anger_override = if self.anger_streak >= 2 {
+        // turns AND the trajectory intensity is already elevated (>= Watch threshold), fire a
+        // de-escalation note. The trajectory gate prevents pure emotion-classification noise
+        // (e.g. a fruitful back-and-forth discussion) from triggering this path — there must
+        // be corroborating behavioral evidence before we short-circuit normal dispatch.
+        let anger_override = if self.anger_streak >= 2 && self.intensity >= THRESHOLD_WATCH {
             let key = "anger_escalation";
             if self.basin_cooldowns.get(key).map_or(0, |c| *c) == 0 {
                 self.basin_cooldowns.insert(key.to_string(), 3);

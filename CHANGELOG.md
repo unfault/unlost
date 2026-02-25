@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Friction detection false positives**: Three targeted changes reduce spurious de-escalation interventions during productive back-and-forth discussions. (1) The `anger_streak` fast path now requires trajectory intensity >= Watch threshold (0.5) in addition to 2+ consecutive negative turns — pure emotion-classification noise can no longer trigger an intervention without corroborating behavioral evidence. (2) The go_emotions `disapproval` label is excluded from the anger streak counter, since it maps to intellectual disagreement rather than user upset; it still contributes to trajectory intensity via valence. (3) The heuristic override that mapped `neutral + 1 frustration signal → disapproval` is removed — a single matched keyword (e.g. `"broken"` in a technical description) is too weak a signal to override a neutral classification.
+
 ### Changed
 - **`README`**: Reframed mission around ownership vs. authorship. The README now leads with the human engineer's perspective — accountability in incidents, reviews, and architecture decisions — rather than agent failure modes. Removed the babysitting tax framing and failure mode table from the lead; commands are now grouped by the moment you reach for them (understanding, deciding, handing off).
 
