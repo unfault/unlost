@@ -13,6 +13,7 @@
 ## [0.11.0] - 2026-02-24
 
 ### Added
+- **`unlost config agent`**: Automatically install the `unlost-pr-comment` command when configuring the agent.
 - **`/unlost-walkthrough` skill**: Installs a walkthrough skill for both OpenCode and Claude Code that guides users through recent changes step-by-step (with VSCode `code --goto` navigation).
 - **"Under the Hood" section**: Added to both `README.md` and `docs/index.html` — a grouped inventory of every technique, algorithm, and strategy Unlost uses (trajectory sensing, emotion/NLP, retrieval/memory, storage/infrastructure), with "where it's used" context on the landing page.
 
