@@ -6,25 +6,32 @@
   </picture>
 </h2>
 
-<h4 align="center">Ownership isn't authorship anymore</h4>
+<h2 align="center">
+Ownership isn't authorship anymore
+<br />
+<img alt="Crates.io Version" src="https://img.shields.io/crates/v/unlost">
+<img alt="GitHub License" src="https://img.shields.io/github/license/unfault/unlost">
+<img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/unfault/unlost/ci.yml">
+<img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/unfault/unlost">
 
----
+</h2>
 
-It used to be. You wrote the code, so you understood it. The tradeoffs,
-the dead ends, the reason the timeout is 30 seconds. That understanding
-*was* ownership.
 
-Agents have changed the writing part. They haven't changed the rest.
-You're still the one accountable when something breaks. Still the one
-who has to explain it, extend it, or defend it. Ownership without
-authorship only works if the context stays close to you. Right now it
-lives in the chat, and the chat doesn't last.
 
-Unlost keeps it close.
+**Before**: You wrote the code, you owned the consequences.
 
----
+**Now**: AI writes the code, you still own the consequences.
 
-## When it matters
+
+Agents have changed the writing part. You're still the one accountable for it.
+You are the one who has to explain it or defend it. Unlost keeps that context
+close to you.
+
+I built Unlost because something was slipping away from me with coding agents.
+Unlost tries to keep some adherence between the agent's authorship and my
+owership as an engineer.
+
+## When do you need to "Get Unlost"?
 
 **A colleague asks why it's built this way.**
 You know it works. You're less sure you can explain it. The reasoning
@@ -86,7 +93,7 @@ unlost config llm openai --model gpt-4o-mini
 
 ---
 
-## Commands
+## Commands Overview
 
 ### Understanding what was built
 
