@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`README`**: Reframed mission around ownership vs. authorship. The README now leads with the human engineer's perspective — accountability in incidents, reviews, and architecture decisions — rather than agent failure modes. Removed the babysitting tax framing and failure mode table from the lead; commands are now grouped by the moment you reach for them (understanding, deciding, handing off).
+
 ## [0.11.1] - 2026-02-25
 
 ### Changed
