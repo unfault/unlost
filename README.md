@@ -6,33 +6,29 @@
   </picture>
 </h2>
 
-<h4 align="center">Unlost - Agent orientation that prevents the babysitting tax</h4>
+<h4 align="center">Ownership isn't authorship anymore</h4>
 
 ---
 
-## Mission
+It used to be. You wrote the code, so you understood it — the tradeoffs, the dead ends, the reason the timeout is 30 seconds. That understanding *was* ownership.
 
-Keep your agents oriented.
+Agents have changed the writing. They haven't changed the rest. You're still accountable when something breaks in production, when a teammate asks why the architecture is shaped this way, when you have to make a call about what to build next. Ownership without authorship only works if the context that used to live in your head — and now lives in the chat — stays close to you.
 
-You know the drill:
+Unlost keeps it close.
 
-- You ask an agent to rename a function. It renames it, then renames it again. Then again. You finally intervene: "stop renaming, just add a wrapper."
-- An agent spent forty minutes "implementing" a feature. Turns out it only modified the README.
-- You come back after the weekend. The agent made decisions you don't understand. Nobody remembers why.
-- An agent says it finished. It didn't. It created a file that was never committed.
+---
 
-That's the babysitting tax. It adds up fast.
+## When it matters
 
-Unlost intercepts before you pay. It detects these failure modes and guides agents back on track:
+**Production is down.** You're reading code the agent wrote last week. You don't know if the retry logic was intentional or accidental. `unlost trace` reconstructs the decision chain that led here.
 
-| Failure Mode | What It Looks Like | What Unlost Does |
-|--------------|-------------------|------------------|
-| **Drift** | Agent thinks the system works one way. The code says otherwise. | Surfaces the contradiction before the agent compounds the error. |
-| **Rediscovery** | You explain the same thing you explained last week. | Reminds the agent of what was already decided. |
-| **Decision Conflict** | Agent starts implementing something that contradicts a project decision. | Flags the conflict and reminds the agent of the constraint. |
-| **Retry Spiral** | Agent tries the same failed approach. Again. And again. | Catches the loop before another hour burns. |
-| **False Progress** | Agent claims done. Verification would fail. | Detects the claim and flags it for review. |
-| **Unbounded Horizon** | Agent wanders into unrelated side-quests. | Nudges back toward the original goal. |
+**Something is slow.** You're not sure if the architecture allows the optimization you're thinking of, or if someone already tried it. `unlost challenge` argues from memory before you commit.
+
+**You're in a review.** The diff is clean but you can't tell if the structure is deliberate or incidental. `unlost pr-comment` posts a note explaining intent, tradeoffs, and what was left open — written from session history, not the diff.
+
+**You feel like a passenger.** The agent shipped something and you're not sure you understand it well enough to own it. `unlost brief` or `unlost walkthrough` put you back in the room.
+
+---
 
 ## Install
 
@@ -68,71 +64,64 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022
 unlost config llm openai --model gpt-4o-mini
 ```
 
-## How it works
+---
 
-1. **Check:** Your agent is about to send a prompt → unlost checks for friction (drift, loops, etc.).
-2. **Guide:** If something feels off → injects guidance before the agent goes off-track.
-3. **Capture:** After each exchange → extracts a structured capsule (intent, decision, rationale).
-4. **Recall:** Capsules stay local → query anytime: "why did we do X?"
+## Commands
 
-## Features
-
-### Memory Commands
-
-Your agents build a memory trail. Here's how to use it:
+### Understanding what was built
 
 ```bash
-# Get a staff engineer's debrief — what matters, what bites, where to start
+# Staff engineer's debrief on any file or module
 unlost brief
-
-# Drill into a specific area
 unlost brief src/governor.rs
 
 # What happened recently in this file?
 unlost recall src/http_proxy.rs
 
-# Reconstruct the causal chain that led to the current state
+# Reconstruct the decision chain that led to the current state
 unlost trace src/governor.rs
 unlost trace "why is the connection timeout 30 seconds?"
+```
 
-# Pressure-test a past technology choice
+- **`unlost brief`**: Scans all recorded memory and git commits. Scores by importance, not recency. Answers: *what is this, what are the non-obvious choices, where do I start.*
+- **`unlost trace`**: Builds a chronological causal chain seeded by semantic similarity. Answers: *why is the code the way it is* — not just what happened recently.
+- **`unlost recall`**: Narrates the recent story for a file or concept. Useful for catching up after time away.
+
+### Before you commit to a direction
+
+```bash
+# Argue with a past decision before you reverse it
 unlost challenge "was using fastembed the right call?"
 
-# Explore future paths grounded in workspace memory
+# Think through options using what this repo already knows
 unlost explore "should we keep lancedb or move to sqlite+fts?"
 ```
 
-#### Key Commands Explained:
-- **`unlost brief`**: A one-command orientation for any codebase. Answers "Here's what this system is, the non-obvious choices, and where to start reading." Scans all recorded memory and git commits.
-- **`unlost trace`**: Reconstructs the **causal chain** of decisions. Unlike `recall` (which narrates recent history), `trace` asks: *why is the code the way it is?* It builds a chronological chain seeded by semantic similarity.
+- **`unlost challenge`**: Surfaces recorded rationale, failure modes, and alternatives. Gives you a verdict grounded in history before you make a call.
+- **`unlost explore`**: Forward-looking planning. Labels what comes from memory `[memory]` vs. external knowledge `[outside]` so you know what you're actually standing on.
 
-### The Cognitive Mirror (Metrics)
-
-Unlost tracks the **trajectory** of your collaboration. Use `metrics` to see friction points:
+### Handing it off
 
 ```bash
-unlost metrics
+# Post a PR comment from session history — intent, tradeoffs, risks
+unlost pr-comment 42
+unlost pr-comment https://github.com/owner/repo/pull/42
 ```
 
-This reveals:
-- **Friction vs Context Size**: When does the agent get lost?
-- **Average Verbosity**: A leading indicator for over-trust.
-- **Top Friction Files**: Codebase "hotspots" causing stalls.
+- **`unlost pr-comment`**: Posts a "staff engineer" style note on the PR. Not a diff summary — a note from someone who was in the room: what changed functionally, what we were navigating, what's left open, what to re-read in three months.
 
-### Replay & Git History
+The `/unlost-walkthrough` agent skill does the same thing interactively: step through what changed, in order, with reasons — so you can review with confidence rather than just approve.
 
-Seed your memory from past sessions or git history:
+---
 
-```bash
-# Replay OpenCode sessions (ingests git history automatically)
-unlost replay opencode
+## How it works
 
-# Replay a Claude transcript
-unlost replay claude --transcript-path history.json
+1. **Capture:** After each agent exchange → extracts a structured capsule (intent, decision, rationale, symbols).
+2. **Store:** Capsules stay local, embedded with fastembed, indexed in LanceDB. Nothing leaves your machine.
+3. **Guide:** Before each prompt → checks for friction (loops, drift, misalignment). Injects a correction if something is off.
+4. **Recall:** Capsules are queryable anytime — by file, symbol, question, or concept.
 
-# Ingest only git history
-unlost replay git --max-commits 200
-```
+---
 
 ## Privacy First
 
@@ -192,6 +181,8 @@ The only network call unlost makes is to the LLM provider you configure for extr
 - **Changelog ingestion** — CHANGELOG.md versions parsed and stored as versioned capsules, surfaced with `ref=version:vX.Y.Z` citations in LLM prompts
 
 </details>
+
+---
 
 ## Dev
 
