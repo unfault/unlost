@@ -4,18 +4,16 @@
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png">
     <img alt="Unfault" src="https://raw.githubusercontent.com/unfault/unlost/main/public/logo.png" >
   </picture>
-</h2>
-
-<h2 align="center">
+  <br>
+  <br>
 Ownership isn't authorship anymore
-<br />
+<br>
+<br>
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/unlost">
 <img alt="GitHub License" src="https://img.shields.io/github/license/unfault/unlost">
 <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/unfault/unlost/ci.yml">
 <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/unfault/unlost">
-
 </h2>
-
 
 
 **Before**: You wrote the code, you owned the consequences.
