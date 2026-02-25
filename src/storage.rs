@@ -996,18 +996,6 @@ async fn scan_capsules_lancedb_impl(
 
     let mut q = table.query();
 
-    // For recent_first, we skip to near the end of the table and fetch more rows to account for filtering
-    if recent_first {
-        let total = table.count_rows(None).await.unwrap_or(0);
-        let fetch_count = limit * 3; // fetch extra to handle potential filter reduction
-        if total > fetch_count {
-            q = q.offset(total - fetch_count);
-        }
-        q = q.limit(fetch_count);
-    } else {
-        q = q.limit(limit);
-    }
-
     let mut filters: Vec<String> = Vec::new();
 
     if let Some(sym) = symbol {
@@ -1040,9 +1028,29 @@ async fn scan_capsules_lancedb_impl(
         filters.push(format!("ts_ms <= {until_ms}"));
     }
 
-    if !filters.is_empty() {
-        let combined = filters.join(" AND ");
-        q = q.only_if(combined);
+    let combined_filter = if !filters.is_empty() {
+        Some(filters.join(" AND "))
+    } else {
+        None
+    };
+
+    // For recent_first, we skip to near the end of the table and fetch more rows to account for filtering
+    if recent_first {
+        let total = table
+            .count_rows(combined_filter.clone())
+            .await
+            .unwrap_or(0);
+        let fetch_count = limit * 3; // fetch extra to handle potential filter reduction
+        if total > fetch_count {
+            q = q.offset(total - fetch_count);
+        }
+        q = q.limit(fetch_count);
+    } else {
+        q = q.limit(limit);
+    }
+
+    if let Some(filter) = combined_filter {
+        q = q.only_if(filter);
     }
 
     let mut used_fallback = false;
