@@ -20,13 +20,13 @@ Unlost keeps it close.
 
 ## When it matters
 
-**Production is down.** You're reading code the agent wrote last week. You don't know if the retry logic was intentional or accidental. `unlost trace` reconstructs the decision chain that led here.
+**A colleague asks why it's built this way.** You know it works. You're less sure you can explain it. The reasoning lived in the chat — which is gone. `unlost trace` or `unlost brief` reconstruct what was decided and why, so you can answer like someone who was in the room.
 
-**Something is slow.** You're not sure if the architecture allows the optimization you're thinking of, or if someone already tried it. `unlost challenge` argues from memory before you commit.
+**Six months later, someone needs to change it.** Maybe it's you. The agent that wrote it doesn't remember. The chat is gone. The commit message says "feat: add retry logic." `unlost trace` gives you the decision chain. `unlost challenge` tells you whether the original call still holds.
 
-**You're in a review.** The diff is clean but you can't tell if the structure is deliberate or incidental. `unlost pr-comment` posts a note explaining intent, tradeoffs, and what was left open — written from session history, not the diff.
+**Production is down.** You're reading code under pressure that you didn't write and didn't fully review. You don't know if the retry logic was intentional or a guess. `unlost trace` reconstructs the decision chain. `unlost brief` tells you what bites.
 
-**You feel like a passenger.** The agent shipped something and you're not sure you understand it well enough to own it. `unlost brief` or `unlost walkthrough` put you back in the room.
+**The PR is the handoff.** To your team, to your future self. The diff shows what changed. It doesn't show what was tried and rejected, what constraint was being navigated, what's still open. `unlost pr-comment` posts that note automatically — written from session memory, not the diff. Ownership transfers with the code.
 
 ---
 
