@@ -409,20 +409,10 @@ fn boost_negative_emotions(text: &str, meta: EmotionMeta) -> EmotionMeta {
         };
     }
 
-    // If model said neutral and we have 1 signal, boost to mild disapproval
-    if meta.label == "neutral" && signal_count == 1 {
-        tracing::debug!(
-            original_label = %meta.label,
-            original_confidence = meta.confidence,
-            "boosting emotion from neutral to disapproval based on text signal"
-        );
-        return EmotionMeta {
-            label: "disapproval".to_string(),
-            valence: -0.4,
-            intensity: 0.4,
-            confidence: 0.5,
-        };
-    }
+    // If model said neutral and we have exactly 1 signal, do not override — one matched
+    // keyword on an otherwise neutral message is too weak a signal (e.g. the word "broken"
+    // in a technical description, or "seriously" as an intensifier in a positive context).
+    // Two signals are required to conclude even mild disapproval (handled above at signal_count >= 2).
 
     meta
 }
