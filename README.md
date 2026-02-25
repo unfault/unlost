@@ -10,9 +10,15 @@
 
 ---
 
-It used to be. You wrote the code, so you understood it — the tradeoffs, the dead ends, the reason the timeout is 30 seconds. That understanding *was* ownership.
+It used to be. You wrote the code, so you understood it. The tradeoffs,
+the dead ends, the reason the timeout is 30 seconds. That understanding
+*was* ownership.
 
-Agents have changed the writing. They haven't changed the rest. You're still accountable when something breaks in production, when a teammate asks why the architecture is shaped this way, when you have to make a call about what to build next. Ownership without authorship only works if the context that used to live in your head — and now lives in the chat — stays close to you.
+Agents have changed the writing part. They haven't changed the rest.
+You're still the one accountable when something breaks. Still the one
+who has to explain it, extend it, or defend it. Ownership without
+authorship only works if the context stays close to you. Right now it
+lives in the chat, and the chat doesn't last.
 
 Unlost keeps it close.
 
@@ -20,13 +26,27 @@ Unlost keeps it close.
 
 ## When it matters
 
-**A colleague asks why it's built this way.** You know it works. You're less sure you can explain it. The reasoning lived in the chat — which is gone. `unlost trace` or `unlost brief` reconstruct what was decided and why, so you can answer like someone who was in the room.
+**A colleague asks why it's built this way.**
+You know it works. You're less sure you can explain it. The reasoning
+was in the chat. `unlost trace` or `unlost brief` give you the answer,
+not from memory, from the record.
 
-**Six months later, someone needs to change it.** Maybe it's you. The agent that wrote it doesn't remember. The chat is gone. The commit message says "feat: add retry logic." `unlost trace` gives you the decision chain. `unlost challenge` tells you whether the original call still holds.
+**Six months later, someone needs to change it.**
+Maybe it's you. The agent doesn't remember. The chat is gone. The
+commit message says "feat: add retry logic." `unlost trace` gives you
+the decision chain. `unlost challenge` tells you whether the original
+call still holds before you undo it.
 
-**Production is down.** You're reading code under pressure that you didn't write and didn't fully review. You don't know if the retry logic was intentional or a guess. `unlost trace` reconstructs the decision chain. `unlost brief` tells you what bites.
+**Production is down.**
+You're reading code under pressure that you didn't write. You don't
+know if the retry logic was intentional or a guess. `unlost trace`
+reconstructs the chain. `unlost brief` tells you what bites.
 
-**The PR is the handoff.** To your team, to your future self. The diff shows what changed. It doesn't show what was tried and rejected, what constraint was being navigated, what's still open. `unlost pr-comment` posts that note automatically — written from session memory, not the diff. Ownership transfers with the code.
+**The PR is the handoff.**
+To your team, and to your future self. The diff shows what changed.
+It doesn't show what was tried and rejected, what constraint you were
+navigating, what's still open. `unlost pr-comment` posts that note
+from session memory, not the diff. Ownership transfers with the code.
 
 ---
 
