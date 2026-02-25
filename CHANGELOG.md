@@ -7,6 +7,7 @@
 
 
 ### Fixed
+- **`unlost checkpoint` output**: Fixed narrative output not wrapping at 80 columns. Now uses `render_narrative` to ensure proper formatting and ANSI coloring.
 - **Recall/inspect filtering bug**: Fixed an issue where `unlost recall` and `unlost inspect` with filters (e.g. `--emotion joy`) would return no results. The optimization to fetch only the most recent rows was calculating the offset based on the total row count instead of the filtered row count, often skipping all matching rows.
 
 ## [0.11.0] - 2026-02-24

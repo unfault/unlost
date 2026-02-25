@@ -109,7 +109,10 @@ pub async fn run(
                 println!("  session:  {}", cp.session_id.as_deref().unwrap_or("(all)"));
                 println!("  capsules: {}  |  model: {}", cp.capsule_count, cp.model_used);
                 println!();
-                println!("{}", cp.narrative);
+                println!(
+                    "{}",
+                    crate::narrative::render_narrative(crate::cli::OutputFormat::Ansi, &cp.narrative)
+                );
             }
             Err(reason) => {
                 use crate::storage_checkpoint::CheckpointSkipReason::*;
