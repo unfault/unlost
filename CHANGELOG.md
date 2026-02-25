@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-02-25
+
 ### Changed
 - **README**: Restructured for better readability, moving installation to top and collapsing technical details.
 
@@ -309,6 +311,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.11.1]: https://github.com/unfault/unlost/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/unfault/unlost/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/unfault/unlost/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/unfault/unlost/compare/v0.8.0...v0.9.0
