@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>Unlost - Trajectory-based proactive regulator for human–AI coding collaboration</title>
+  <title>Unlost - Ownership isn't authorship anymore</title>
 
-  <meta name="description" content="Unlost keeps your agents oriented. It models trajectory across Loop, Spec, and Drift basins, detects friction, and lets you recall and query what happened in a codebase.">
+  <meta name="description" content="Agents write the code. You carry the consequences. Unlost keeps the context that lived in the chat close to you — so you can own the work, not just approve it.">
 
   <meta property="og:title" content="Unlost">
-  <meta property="og:description" content="Stop paying the Babysitting Tax. Unlost models agent trajectory to catch stalls and drift before they burn your time.">
+  <meta property="og:description" content="Agents write the code. You carry the consequences. Unlost keeps the context that lived in the chat close to you.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://unlost.unfault.dev/">
   <meta property="og:image" content="https://unlost.unfault.dev/og.png">
@@ -17,7 +17,7 @@
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Unlost">
-  <meta name="twitter:description" content="Keep your agents from going off track. Detect friction, record decisions, and recall/query what happened.">
+  <meta name="twitter:description" content="Agents write the code. You carry the consequences. Unlost keeps the context that lived in the chat close to you.">
   <meta name="twitter:image" content="https://unlost.unfault.dev/og.png">
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -112,12 +112,13 @@
   <section class="section pt-24 sm:pt-28 lg:pt-32">
     <div class="container-narrow">
       <h1 class="text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-4 sm:mb-6 leading-tight font-medium">
-        Trajectory-based regulation for your AI agents
+        Ownership isn't authorship anymore
       </h1>
       
       <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-6 sm:mb-8 leading-relaxed">
-        Unlost is a local-first proactive regulator. It models collaboration trajectory 
-        across Loop, Spec, and Drift basins to catch stalls before they burn your time.
+        Agents write the code. You carry the consequences. Unlost keeps
+        the context that used to live in your head — and now lives in
+        the chat — close to you. So when the moment comes, you're ready.
       </p>
 
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-12 sm:mb-16">
@@ -171,45 +172,56 @@
   <section id="problem" class="section">
     <div class="container-narrow">
       <h2 class="text-2xl sm:text-3xl font-medium mb-8 sm:mb-12 flex items-baseline flex-wrap gap-2">
-        The Babysitting Tax 
+        When it matters
         <span class="inline-block w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-fiery-terracotta mt-1"></span>
       </h2>
       <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-8 sm:mb-12 leading-relaxed">
-        Agents are wonderful until they are not. Research shows that as context load grows, 
-        frustration spikes and stability decays. Unlost models this "Trajectory" to intervene 
-        at the inflection point.
+        It used to be that writing the code meant understanding it. That's
+        changed. These are the moments where the gap shows.
       </p>
       <div class="space-y-8 sm:space-y-10">
         <div>
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
-            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Drift</div>
-            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">The Apology Loop</h3>
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">A colleague asks why</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta"><code>unlost brief</code> / <code>unlost trace</code></h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
-            "I'm sorry, you're right. Let me fix that." 
-            <span class="text-midnight-violet-950/40">[Proceeds to break the exact same thing for the 4th time]</span>
+            You know it works. You're less sure you can explain it. The
+            reasoning was in the chat, which is gone.
           </p>
         </div>
 
         <div>
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
-            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Re-discovery</div>
-            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">Context Gaslighting</h3>
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Six months later</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta"><code>unlost trace</code> / <code>unlost challenge</code></h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
-            The agent is convinced it fixed the bug. The terminal is a sea of red. 
-            The agent tells you you're wrong.
+            Someone needs to change it. Maybe it's you. The agent doesn't
+            remember. The commit message says "feat: add retry logic."
           </p>
         </div>
 
         <div>
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
-            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">False Progress</div>
-            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">The $50 Side-Quest</h3>
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">Production is down</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta"><code>unlost trace</code> / <code>unlost brief</code></h3>
           </div>
           <p class="text-midnight-violet-950/70 leading-relaxed">
-            You asked for a CSS tweak; you come back 10 minutes later and it's 
-            refactoring your entire auth flow for no reason.
+            You're reading code under pressure that you didn't write. You
+            don't know if the retry logic was intentional or a guess.
+          </p>
+        </div>
+
+        <div>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">The PR is the handoff</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta"><code>unlost pr-comment</code></h3>
+          </div>
+          <p class="text-midnight-violet-950/70 leading-relaxed">
+            To your team, and to your future self. The diff shows what
+            changed. It doesn't show what was tried and rejected, what
+            constraint you were navigating, what's still open.
           </p>
         </div>
       </div>
@@ -1279,9 +1291,11 @@ unlost config llm anthropic --model claude-3-5-sonnet-20241022</code></pre>
       </h2>
 
       <p class="text-midnight-violet-950/60 leading-relaxed">
-        I built Unlost because I keep coming back to codebases (including my own) and spending the first hour
-        rebuilding context. Agents make that worse when they drift and I usually got upset with them. 
-        Unlost is my attempt at keeping the joy alive.
+        I built Unlost because the intimacy I had with code started slipping
+        once agents were doing the writing. I still wanted to feel close to
+        what was being built — to understand the tradeoffs, to own the
+        decisions, not just approve the diff. Unlost is my attempt to keep
+        that feeling alive in a world where I'm not the one typing every line.
       </p>
       <p class="text-midnight-violet-950/60 leading-relaxed mt-4">
         If something feels rough, open an issue. I read them.
