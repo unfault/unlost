@@ -104,7 +104,7 @@ unlost trace "why is the connection timeout 30 seconds?"
 ```
 
 - **`unlost brief`**: Scans all recorded memory and git commits. Scores by importance, not recency. Answers: *what is this, what are the non-obvious choices, where do I start.*
-- **`unlost trace`**: Builds a chronological causal chain seeded by semantic similarity. Answers: *why is the code the way it is* — not just what happened recently.
+- **`unlost trace`**: Builds a chronological causal chain seeded by semantic similarity. Answers: *why is the code the way it is*, not just what happened recently.
 - **`unlost recall`**: Narrates the recent story for a file or concept. Useful for catching up after time away.
 
 ### Before you commit to a direction
@@ -123,14 +123,14 @@ unlost explore "should we keep lancedb or move to sqlite+fts?"
 ### Handing it off
 
 ```bash
-# Post a PR comment from session history — intent, tradeoffs, risks
+# Post a PR comment from session history: intent, tradeoffs, risks
 unlost pr-comment 42
 unlost pr-comment https://github.com/owner/repo/pull/42
 ```
 
-- **`unlost pr-comment`**: Posts a "staff engineer" style note on the PR. Not a diff summary — a note from someone who was in the room: what changed functionally, what we were navigating, what's left open, what to re-read in three months.
+- **`unlost pr-comment`**: Posts a "staff engineer" style note on the PR. Not a diff summary. A note from someone who was in the room: what changed functionally, what we were navigating, what's left open, what to re-read in three months.
 
-The `/unlost-walkthrough` agent skill does the same thing interactively: step through what changed, in order, with reasons — so you can review with confidence rather than just approve.
+The `/unlost-walkthrough` agent skill does the same thing interactively: step through what changed, in order, with reasons, so you can review with confidence rather than just approve.
 
 ---
 
@@ -139,7 +139,7 @@ The `/unlost-walkthrough` agent skill does the same thing interactively: step th
 1. **Capture:** After each agent exchange → extracts a structured capsule (intent, decision, rationale, symbols).
 2. **Store:** Capsules stay local, embedded with fastembed, indexed in LanceDB. Nothing leaves your machine.
 3. **Guide:** Before each prompt → checks for friction (loops, drift, misalignment). Injects a correction if something is off.
-4. **Recall:** Capsules are queryable anytime — by file, symbol, question, or concept.
+4. **Recall:** Capsules are queryable anytime, by file, symbol, question, or concept.
 
 ---
 
