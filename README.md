@@ -6,7 +6,7 @@
   </picture>
   <br>
   <br>
-Ownership isn't authorship anymore
+Bridging code authorship and ownership.
 <br>
 <br>
 <img alt="Crates.io Version" src="https://img.shields.io/crates/v/unlost">
