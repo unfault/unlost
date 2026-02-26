@@ -17,17 +17,29 @@
   <g transform="translate(72 72)">
     <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="28" font-weight="600">Unlost</text>
     <circle cx="104" cy="-8" r="6" fill="#E74F26"/>
-    <text x="0" y="28" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Local-first memory for agent work</text>
+    <text x="0" y="28" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="16" font-weight="400" opacity="0.65">Local-first context ownership</text>
   </g>
 
   <!-- Title -->
   <g transform="translate(72 220)">
-    <text x="0" y="0" fill="url(#titleGradient)" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">Keep your agents from going off track</text>
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">AI gets code authorship.</text>
+    <text x="0" y="72" fill="url(#titleGradient)" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">Context ownership stays with you.</text>
   </g>
 
   <!-- Subline -->
-  <g transform="translate(72 288)">
-    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="22" font-weight="400" opacity="0.70">Detect friction. Record decisions. Recall the story.</text>
+  <g transform="translate(72 360)">
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="22" font-weight="400" opacity="0.70">Record decisions. Ground in git. Recall the why.</text>
+  </g>
+
+  <!-- Title -->
+  <g transform="translate(72 220)">
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">AI gets code authorship.</text>
+    <text x="0" y="72" fill="url(#titleGradient)" font-family="Lexend, DejaVu Sans, sans-serif" font-size="56" font-weight="600">Context ownership stays with you.</text>
+  </g>
+
+  <!-- Subline -->
+  <g transform="translate(72 360)">
+    <text x="0" y="0" fill="#241D45" font-family="Lexend, DejaVu Sans, sans-serif" font-size="22" font-weight="400" opacity="0.70">Record decisions. Ground in git. Recall the why.</text>
   </g>
 
   <!-- Footer -->
