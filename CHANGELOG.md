@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`docs/index.html`**: Restructured landing page to prioritize Context Ownership and Memory over control. "How It Works" now follows the Memory Lifecycle (Record → Extract → Ground). Added "One Memory. Many Lenses" section to showcase `trace`, `challenge`, and `explore` as different views on the same grounded context. Moved "Cognitive Mirror" technical details to a dedicated deep-dive section at the bottom.
+
 ## [0.11.2] - 2026-02-26
 
 ### Fixed
