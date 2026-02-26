@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-02-26
+
 ### Fixed
 - **Friction detection false positives**: Three targeted changes reduce spurious de-escalation interventions during productive back-and-forth discussions. (1) The `anger_streak` fast path now requires trajectory intensity >= Watch threshold (0.5) in addition to 2+ consecutive negative turns — pure emotion-classification noise can no longer trigger an intervention without corroborating behavioral evidence. (2) The go_emotions `disapproval` label is excluded from the anger streak counter, since it maps to intellectual disagreement rather than user upset; it still contributes to trajectory intensity via valence. (3) The heuristic override that mapped `neutral + 1 frustration signal → disapproval` is removed — a single matched keyword (e.g. `"broken"` in a technical description) is too weak a signal to override a neutral classification.
 
@@ -317,6 +319,7 @@ Initial public version.
   - `unlost inspect` for raw capsule inspection
   - `unlost init` seeds capsules from code graph + optional bounded git history
 
+[0.11.2]: https://github.com/unfault/unlost/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/unfault/unlost/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/unfault/unlost/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/unfault/unlost/compare/v0.9.0...v0.10.0
