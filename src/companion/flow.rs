@@ -866,7 +866,7 @@ async fn process_flush_job(
 
         crate::types::TurnEval {
             version: "v1".to_string(),
-            // Agent tuning (diagnose)
+            // Agent tuning (tune)
             repetition: channels.repetition,
             novelty_collapse: channels.novelty_collapse,
             semantic_stall: channels.semantic_stall,

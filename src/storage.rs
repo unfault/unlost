@@ -83,7 +83,7 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("head_sha", DataType::Utf8, true),
         // Git provenance: SHA of the commit that landed during this turn (sparse).
         Field::new("commit_sha", DataType::Utf8, true),
-        // TurnEval: agent tuning (diagnose) dimensions — persisted governor SymptomChannels.
+        // TurnEval: agent tuning (tune) dimensions — persisted governor SymptomChannels.
         Field::new("te_repetition", DataType::Float32, true),
         Field::new("te_novelty_collapse", DataType::Float32, true),
         Field::new("te_semantic_stall", DataType::Float32, true),
@@ -2261,7 +2261,7 @@ pub(crate) async fn insert_capsule_row(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
-    // Turn-level evaluation metadata (diagnose + coach dimensions).
+    // Turn-level evaluation metadata (tune + coach dimensions).
     turn_eval: &crate::types::TurnEval,
     // Prior decision text from the preceding capsule in the same session/sequence.
     // Encodes causal continuity into the embedding so work threads cluster in vector space.
@@ -2514,7 +2514,7 @@ pub(crate) struct CapsuleRow {
     pub commit_sha: Option<String>,
     /// Turn-level evaluation metadata. Populated from JSONL for post-v0.13 capsules,
     /// or computed from coach heuristics during reindex for older capsules.
-    /// Diagnose channels (governor EMA) remain at 0 for pre-v0.13 capsules since
+    /// Tune channels (governor EMA) remain at 0 for pre-v0.13 capsules since
     /// that state is not recoverable from JSONL alone.
     pub turn_eval: Option<crate::types::TurnEval>,
 }

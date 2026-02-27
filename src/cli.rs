@@ -25,8 +25,8 @@ pub enum ReflectMode {
     /// Developer coaching: how can I collaborate better with the agent?
     #[default]
     Coach,
-    /// Agent tuning diagnostics: where did the agent drift, loop, or hallucinate?
-    Diagnose,
+    /// Agent tuning: where did the agent drift, loop, or hallucinate?
+    Tune,
     /// Both personas combined in a single report.
     Both,
 }
@@ -380,7 +380,7 @@ pub enum Command {
 
     /// Reflect on how you and the agent worked together — coaching and diagnostics
     Reflect {
-        /// Reflection persona: coach (default), diagnose, or both
+        /// Reflection persona: coach (default), tune, or both
         #[arg(long, value_enum, default_value_t = ReflectMode::Coach)]
         mode: ReflectMode,
 
