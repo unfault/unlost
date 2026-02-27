@@ -1377,8 +1377,11 @@ async fn scan_capsules_lancedb_impl(
     }
 
     if recent_first {
-        out.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+        // Sort descending to pick the most recent `limit` entries, then
+        // reverse so the output reads oldest-to-newest (newest at the bottom).
+        out.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
         out.truncate(limit);
+        out.reverse();
     }
 
     if used_fallback {
@@ -1389,9 +1392,12 @@ async fn scan_capsules_lancedb_impl(
             out.retain(|h| h.ts_ms <= until_ms);
         }
         if recent_first {
-            out.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms));
+            out.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
+            out.truncate(limit);
+            out.reverse();
+        } else {
+            out.truncate(limit);
         }
-        out.truncate(limit);
     }
 
     Ok(out)
