@@ -44,6 +44,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Deserialize)]
 struct HookInput {
     /// Present in all events — the Copilot session UUID.
+    #[serde(rename = "sessionId")]
     session_id: String,
     /// Unix timestamp in milliseconds (reserved for future use).
     #[allow(dead_code)]
@@ -54,7 +55,7 @@ struct HookInput {
     #[allow(dead_code)]
     source: Option<String>,
     /// sessionStart only
-    #[serde(default)]
+    #[serde(default, rename = "initialPrompt")]
     initial_prompt: Option<String>,
     /// userPromptSubmitted only
     #[serde(default)]
