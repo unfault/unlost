@@ -647,7 +647,8 @@ pub async fn run(
 
     for (cap, meta) in capsules {
         crate::storage::insert_capsule_row(
-            &db, &embedder, 0, 0, now_ms, &meta, None, None, &cap, None, None, None,
+            &db, &embedder, 0, 0, now_ms, &meta, None, None, &cap,
+            &crate::types::TurnEval::default(), None, None, None,
         )
         .await
         .ok();

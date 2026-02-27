@@ -199,6 +199,7 @@ fn checkpoint_as_capsule_hit(
         assistant_emotion: None,
         head_sha: None,
         commit_sha: None,
+        turn_eval: None,
     }
 }
 

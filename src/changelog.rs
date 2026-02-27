@@ -278,6 +278,7 @@ pub async fn ingest_changelog(
             None,
             None,
             &capsule,
+            &crate::types::TurnEval::default(),
             None,
             None, // head_sha: not applicable for changelog ingestion
             None, // commit_sha: not applicable for changelog ingestion

@@ -239,6 +239,7 @@ pub async fn ingest_git_commits(
             None,
             None,
             &capsule,
+            &crate::types::TurnEval::default(),
             Some(&embed_text),
             None, // head_sha: not applicable for git history ingestion
             None, // commit_sha: not applicable for git history ingestion
@@ -491,6 +492,7 @@ pub async fn ingest_git_tags(
             None,
             None,
             &capsule,
+            &crate::types::TurnEval::default(),
             Some(&embed_text),
             None, // head_sha: not applicable for git tag ingestion
             None, // commit_sha: not applicable for git tag ingestion

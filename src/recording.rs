@@ -218,6 +218,9 @@ pub(crate) struct ChunkInput {
     pub(crate) source_ts_ms: Option<i64>,
     /// Absolute path to the workspace root (git toplevel or directory).
     pub(crate) workspace_root: std::path::PathBuf,
+    /// Governor channels snapshot captured in check_friction for this turn.
+    /// Carries (smoothed_channels, intensity, state) into the background flush worker.
+    pub(crate) turn_eval_channels: Option<(crate::types::SymptomChannels, f32, crate::types::TrajectoryState)>,
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +244,8 @@ pub(crate) struct FlushJob {
     /// git HEAD SHA after the commit that landed during this turn, if any.
     /// Sparse: only set when `commit_mentioned` triggered a flush and HEAD moved.
     pub(crate) commit_sha: Option<String>,
+    /// Governor channels snapshot for TurnEval construction in the background worker.
+    pub(crate) turn_eval_channels: Option<(crate::types::SymptomChannels, f32, crate::types::TrajectoryState)>,
 }
 
 struct WorkspaceBuffer {
@@ -264,6 +269,9 @@ struct WorkspaceBuffer {
     workspace_root: std::path::PathBuf,
     /// git HEAD SHA captured when this buffer was first opened (start of chunk).
     head_sha_at_open: Option<String>,
+    /// Governor channels for the most recent turn ingested into this buffer.
+    /// Carried into FlushJob so the background worker can build TurnEval.
+    last_turn_eval_channels: Option<(crate::types::SymptomChannels, f32, crate::types::TrajectoryState)>,
 }
 
 impl WorkspaceBuffer {
@@ -286,6 +294,7 @@ impl WorkspaceBuffer {
             last_decision: None,
             workspace_root,
             head_sha_at_open,
+            last_turn_eval_channels: None,
         }
     }
 }
@@ -348,6 +357,9 @@ impl WorkspaceChunker {
                 buf.last_source_ts_ms = item.source_ts_ms;
             }
             buf.saw_commit |= item.commit_mentioned;
+            if item.turn_eval_channels.is_some() {
+                buf.last_turn_eval_channels = item.turn_eval_channels;
+            }
 
             buf.total_chars = buf.total_chars.saturating_add(item.exchange_text.len());
             buf.turns.push(item.exchange_text);
@@ -486,6 +498,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         prior_decision: buf.last_decision.clone(),
         head_sha,
         commit_sha,
+        turn_eval_channels: buf.last_turn_eval_channels.take(),
     }
 }
 
@@ -656,6 +669,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
             user_emotion.as_ref(),
             assistant_emotion.as_ref(),
             &capsule,
+            &crate::types::TurnEval::default(),
         );
 
         if let Ok(db) = state.db_for(&job.workspace_id).await {
@@ -669,6 +683,7 @@ pub(crate) async fn process_flush_jobs_serve(rx: AsyncReceiver<FlushJob>, state:
                 user_emotion.as_ref(),
                 assistant_emotion.as_ref(),
                 &capsule,
+                &crate::types::TurnEval::default(),
                 job.prior_decision.as_deref(),
                 job.head_sha.as_deref(),
                 job.commit_sha.as_deref(),
@@ -786,6 +801,7 @@ pub(crate) async fn process_flush_jobs_proxy(
             user_emotion.as_ref(),
             assistant_emotion.as_ref(),
             &capsule,
+            &crate::types::TurnEval::default(),
         );
         let _ = crate::storage::insert_capsule_row(
             &db,
@@ -797,6 +813,7 @@ pub(crate) async fn process_flush_jobs_proxy(
             user_emotion.as_ref(),
             assistant_emotion.as_ref(),
             &capsule,
+            &crate::types::TurnEval::default(),
             job.prior_decision.as_deref(),
             job.head_sha.as_deref(),
             job.commit_sha.as_deref(),
@@ -899,6 +916,8 @@ pub(crate) async fn analysis_worker_multiplex(
             source_ts_ms: None,
             // Proxy mode doesn't have the workspace root readily available.
             workspace_root: std::path::PathBuf::new(),
+            // Proxy mode doesn't run the governor; no channels available.
+            turn_eval_channels: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
@@ -997,6 +1016,7 @@ pub(crate) async fn analysis_worker(
             grounding_note: None,
             source_ts_ms: None,
             workspace_root: std::path::PathBuf::new(),
+            turn_eval_channels: None,
         };
         chunker.ingest(meta.workspace_id.clone(), item).await;
     }
