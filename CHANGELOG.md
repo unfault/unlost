@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **GitHub Copilot CLI integration**: `unlost shim copilot` and `unlost config agent copilot` provide hooks-based integration with GitHub Copilot CLI. Session transcripts are read directly from `~/.copilot/session-state/<uuid>/events.jsonl`, giving access to full user and assistant text without synthesis. Session discovery uses `workspace.yaml` `created_at` proximity and `summary` cross-check at `sessionStart`, and `updated_at` proximity at `sessionEnd`. Installs `sessionStart`, `userPromptSubmitted`, and `sessionEnd` hooks via `.github/hooks/unlost.json`, and writes a Copilot-compatible skill to `.github/copilot/skills/unlost/`.
+
 ### Changed
 - **`docs/index.html`**: Restructured landing page to prioritize Context Ownership and Memory over control. "How It Works" now follows the Memory Lifecycle (Record → Extract → Ground). Added "One Memory. Many Lenses" section to showcase `trace`, `challenge`, and `explore` as different views on the same grounded context. Moved "Cognitive Mirror" technical details to a dedicated deep-dive section at the bottom.
 

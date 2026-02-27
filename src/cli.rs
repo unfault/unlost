@@ -632,6 +632,17 @@ pub enum ShimCommand {
         embed_cache_dir: Option<String>,
     },
 
+    /// Run the GitHub Copilot CLI hooks shim (reads hook JSON from stdin)
+    Copilot {
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Replay/backfill agent transcripts into unlost
     Replay {
         #[command(subcommand)]
@@ -786,6 +797,13 @@ pub enum AgentCommand {
         /// Install globally in ~/.claude/settings.json instead of per-project
         #[arg(long)]
         global: bool,
+    },
+
+    /// Configure GitHub Copilot CLI hooks to use unlost
+    Copilot {
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
     },
 }
 

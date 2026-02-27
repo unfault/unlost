@@ -145,6 +145,10 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
         AgentCommand::Claude { path, global } => {
             configure_claude(&path, global)?;
         }
+
+        AgentCommand::Copilot { path } => {
+            configure_copilot(&path)?;
+        }
     }
     Ok(())
 }
@@ -603,6 +607,168 @@ fn write_claude_walkthrough_skill(cfg_path: &std::path::Path) -> anyhow::Result<
 
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(&skill_path, CLAUDE_WALKTHROUGH_SKILL_CONTENT)?;
+    println!("skill: {}", skill_path.display());
+    Ok(())
+}
+
+// ============================================================================
+// GitHub Copilot CLI configuration
+// ============================================================================
+
+const COPILOT_SKILL_CONTENT: &str = r#"---
+name: unlost
+description: Query project memory, retrieve past decisions, and check agent orientation via the unlost capsule store
+compatibility: copilot
+---
+
+## What unlost does
+
+Unlost runs silently as a Copilot CLI hook. At session start it checks for
+friction patterns (drift, retry spirals, false progress, unbounded scope) and
+logs a warning when something is off. At session end it extracts the full
+exchange from the session transcript and stores capsules locally.
+
+You do not need to invoke unlost for friction detection. It runs automatically.
+
+## Querying project memory
+
+There are two tiers. The fast path you run proactively. The LLM path you run only
+when the user explicitly asks for a deep recall or narrative summary.
+
+### Fast path — run proactively (no LLM, instant)
+
+These commands are safe to run at any time without asking the user. They are
+entirely local: no LLM call, no network, no meaningful latency.
+
+| Command | What it returns |
+|---------|-----------------|
+| `unlost query --no-llm "<question>"` | Raw capsule hits from vector search, ranked by relevance |
+| `unlost metrics` | Friction hotspots, loop patterns, verbosity trends from local metrics log |
+
+Run these when:
+- You are about to work on something and want to check if a relevant decision exists
+- You want to orient yourself after a context gap
+- You need to know *if* something was recorded, not a full explanation
+
+### LLM path — on demand only (narrative, slower)
+
+These commands call the configured LLM and should only be run when the user
+explicitly asks for a recall, summary, or brief. Do not run them proactively.
+
+| Command | What it returns |
+|---------|-----------------|
+| `unlost query "<question>"` | Narrative answer grounded in matching capsules |
+| `unlost recall` | Chronological decision trail with LLM-written summaries |
+| `unlost brief` | Structured brief: what happened, key decisions, what's next |
+
+Run these when the user says things like:
+- "catch me up", "what did we decide about X", "summarize what happened"
+- "give me a brief before we continue"
+- "why did we do Y"
+
+## Examples
+
+```bash
+# Proactive: check if a topic was ever decided before starting work
+unlost query --no-llm "error handling strategy"
+
+# Proactive: inspect friction and loop patterns
+unlost metrics
+
+# On demand: explain a past decision (user asked)
+unlost query "why did we switch to lancedb"
+
+# On demand: full decision trail (user asked to be caught up)
+unlost recall
+
+# On demand: structured brief before resuming (user asked)
+unlost brief
+```
+
+## Notes
+
+- All data is stored locally. No transcripts leave the machine.
+- Capsules are workspace-scoped (git toplevel).
+- If unlost is not configured for this project, run: `unlost config agent copilot`
+- Friction detection output is currently logged for metrics only; Copilot CLI
+  does not surface `userPromptSubmitted` hook output to the conversation.
+"#;
+
+fn configure_copilot(path: &str) -> anyhow::Result<()> {
+    let root = crate::workspace::git_toplevel(std::path::Path::new(path)).unwrap_or_else(|| {
+        crate::workspace::canonicalize_dir(std::path::Path::new(path))
+            .unwrap_or_else(|_| std::path::PathBuf::from(path))
+    });
+    let root = crate::workspace::canonicalize_dir(&root)?;
+
+    // Write .github/hooks/unlost.json
+    let hooks_dir = root.join(".github").join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+    let hooks_path = hooks_dir.join("unlost.json");
+
+    let hooks_json = serde_json::json!({
+        "version": 1,
+        "hooks": {
+            "sessionStart": [
+                {
+                    "type": "command",
+                    "bash": "unlost shim copilot",
+                    "timeoutSec": 30
+                }
+            ],
+            "userPromptSubmitted": [
+                {
+                    "type": "command",
+                    "bash": "unlost shim copilot",
+                    "timeoutSec": 15
+                }
+            ],
+            "sessionEnd": [
+                {
+                    "type": "command",
+                    "bash": "unlost shim copilot",
+                    "timeoutSec": 60
+                }
+            ]
+        }
+    });
+
+    let rendered = serde_json::to_string_pretty(&hooks_json)?;
+    std::fs::write(&hooks_path, rendered)?;
+    println!("hooks: {}", hooks_path.display());
+
+    // Write skill
+    write_copilot_skill(&root)?;
+
+    Ok(())
+}
+
+fn write_copilot_skill(project_root: &std::path::Path) -> anyhow::Result<()> {
+    // Copilot CLI loads skills from .github/copilot/skills/<name>/
+    let skills_dir = project_root
+        .join(".github")
+        .join("copilot")
+        .join("skills")
+        .join("unlost");
+    let skill_path = skills_dir.join("SKILL.md");
+
+    if skill_path.exists() {
+        print!(
+            "SKILL.md already exists at {}. Overwrite? [y/N] ",
+            skill_path.display()
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("skill: skipped");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(&skills_dir)?;
+    std::fs::write(&skill_path, COPILOT_SKILL_CONTENT)?;
     println!("skill: {}", skill_path.display());
     Ok(())
 }
