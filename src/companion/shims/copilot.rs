@@ -3,20 +3,23 @@
 //! Invoked by Copilot CLI hooks (sessionStart, userPromptSubmitted, sessionEnd)
 //! via stdin JSON. Dispatches to Flow.check_friction() or events.jsonl ingestion.
 //!
-//! # Session discovery
+//! # Hook payload format (actual, from observation)
 //!
-//! Copilot CLI does not pass a session ID in hook payloads. Instead, Copilot
-//! maintains per-session state in `~/.copilot/session-state/<uuid>/`. At
-//! `sessionStart` we discover the UUID by scanning `workspace.yaml` files for a
-//! matching `cwd` whose `created_at` is within 5 seconds of the hook timestamp,
-//! cross-checked against the `summary` field (which Copilot sets to the initial
-//! prompt). We then write a cursor file keyed by UUID.
+//! Copilot CLI does NOT send a `hook_event_name` field. Event type is inferred
+//! from which fields are present:
+//!   - `initialPrompt` present → sessionStart
+//!   - `prompt` present (no `initialPrompt`) → userPromptSubmitted
+//!   - `reason` present → sessionEnd
 //!
-//! At `sessionEnd` we find the right cursor file by matching `cwd` and picking
-//! the session-state directory whose `updated_at` is closest to the hook
-//! timestamp (most-recently-active session for that cwd wins). This is a
-//! heuristic that fails only when two sessions in the same directory end
-//! simultaneously — an accepted limitation documented in the README.
+//! All payloads include `sessionId` directly — no discovery heuristics needed.
+//!
+//! Example payloads (from /tmp/z session capture):
+//!   sessionStart:          {"sessionId":"...","timestamp":...,"cwd":"...","source":"new","initialPrompt":"hi"}
+//!   userPromptSubmitted:   {"sessionId":"...","timestamp":...,"cwd":"...","prompt":"hi"}
+//!   sessionEnd:            {"sessionId":"...","timestamp":...,"cwd":"...","reason":"complete"}
+//!
+//! Note: userPromptSubmitted fires *before* sessionStart for the initial prompt.
+//! This is fine because both use the same sessionId.
 //!
 //! # Transcript format
 //!
@@ -24,7 +27,7 @@
 //! events. Relevant types: `user.message`, `assistant.message`,
 //! `assistant.turn_start`, `assistant.turn_end`, `tool.execution_complete`.
 //! The `session.shutdown` event exists in the schema but is NOT flushed to
-//! disk — the file simply ends at the last `assistant.turn_end`.
+//! disk — the file simply ends after the last assistant turn.
 
 use crate::companion::flow::{AgentKind, CheckEvent, Flow, FlowConfig, RecordTurnEvent};
 use crate::workspace::get_or_create_workspace_paths;
@@ -37,16 +40,15 @@ use std::path::{Path, PathBuf};
 // Hook input types (from Copilot CLI)
 // ============================================================================
 
-/// Raw hook payload — all hooks share the same outer envelope.
+/// Raw hook payload. Event type is inferred from which fields are present.
 #[derive(Debug, Deserialize)]
 struct HookInput {
-    /// One of: sessionStart, userPromptSubmitted, sessionEnd
-    #[serde(default)]
-    hook_event_name: Option<String>,
-    /// Unix timestamp in milliseconds
+    /// Present in all events — the Copilot session UUID.
+    session_id: String,
+    /// Unix timestamp in milliseconds.
     timestamp: i64,
     cwd: String,
-    /// sessionStart only — "new" | "resume" | "startup" (not used, kept for completeness)
+    /// sessionStart only — "new" | "resume" | "startup"
     #[serde(default)]
     #[allow(dead_code)]
     source: Option<String>,
@@ -61,48 +63,79 @@ struct HookInput {
     reason: Option<String>,
 }
 
-// ============================================================================
-// Copilot session-state types
-// ============================================================================
-
-/// Parsed from ~/.copilot/session-state/<uuid>/workspace.yaml
-#[derive(Debug, Deserialize)]
-struct WorkspaceYaml {
-    #[allow(dead_code)]
-    id: String,
-    cwd: String,
-    #[serde(default)]
-    summary: Option<String>,
-    created_at: String,
-    updated_at: String,
+enum HookEvent<'a> {
+    SessionStart,
+    UserPromptSubmitted { prompt: &'a str },
+    SessionEnd,
+    Unknown,
 }
 
-/// Cursor state persisted per Copilot session UUID.
+impl HookInput {
+    fn event(&self) -> HookEvent<'_> {
+        if self.initial_prompt.is_some() {
+            HookEvent::SessionStart
+        } else if let Some(ref p) = self.prompt {
+            HookEvent::UserPromptSubmitted { prompt: p.as_str() }
+        } else if self.reason.is_some() {
+            HookEvent::SessionEnd
+        } else {
+            HookEvent::Unknown
+        }
+    }
+}
+
+// ============================================================================
+// Cursor state (persisted per session UUID)
+// ============================================================================
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct CursorState {
     byte_offset: u64,
-    /// Last event ID processed (for resync after rotation)
     last_event_id: Option<String>,
 }
 
-// ============================================================================
-// events.jsonl event types
-// ============================================================================
+fn cursor_path(workspace_id: &str, session_id: &str) -> PathBuf {
+    crate::workspace::unlost_workspace_dir(workspace_id)
+        .join("copilot")
+        .join(format!("{}.cursor", session_id))
+}
 
-/// Minimal envelope for every event in events.jsonl
-#[derive(Debug, Deserialize)]
-struct CopilotEvent {
-    #[serde(rename = "type")]
-    event_type: String,
-    id: Option<String>,
-    timestamp: Option<String>,
-    data: Option<serde_json::Value>,
+fn load_cursor(workspace_id: &str, session_id: &str) -> CursorState {
+    let path = cursor_path(workspace_id, session_id);
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        return serde_json::from_str(&data).unwrap_or_default();
+    }
+    CursorState::default()
+}
+
+fn save_cursor(workspace_id: &str, session_id: &str, cursor: &CursorState) {
+    let path = cursor_path(workspace_id, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(data) = serde_json::to_string(cursor) {
+        let _ = std::fs::write(&path, data);
+    }
+}
+
+fn events_jsonl_path(session_id: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".copilot")
+            .join("session-state")
+            .join(session_id)
+            .join("events.jsonl"),
+    )
 }
 
 // ============================================================================
-// Parsed turn
+// events.jsonl parsing
 // ============================================================================
 
+/// Parsed turn from events.jsonl
 struct ParsedTurn {
     user_text: String,
     assistant_text: String,
@@ -110,9 +143,40 @@ struct ParsedTurn {
     timestamp_ms: i64,
 }
 
-// ============================================================================
-// Path utilities (reused from claude shim logic)
-// ============================================================================
+fn parse_iso8601_ms(s: &str) -> Option<i64> {
+    // Hand-rolled parser for "2026-02-26T20:41:48.448Z" format. No extra deps.
+    let s = s.trim().trim_end_matches('Z');
+    let (date_part, time_part) = s.split_once('T')?;
+    let dp: Vec<&str> = date_part.split('-').collect();
+    if dp.len() != 3 {
+        return None;
+    }
+    let year: i64 = dp[0].parse().ok()?;
+    let month: i64 = dp[1].parse().ok()?;
+    let day: i64 = dp[2].parse().ok()?;
+    let (hms, frac) = time_part.split_once('.').unwrap_or((time_part, "0"));
+    let tp: Vec<&str> = hms.split(':').collect();
+    if tp.len() != 3 {
+        return None;
+    }
+    let hour: i64 = tp[0].parse().ok()?;
+    let minute: i64 = tp[1].parse().ok()?;
+    let second: i64 = tp[2].parse().ok()?;
+    let frac_str = &frac[..frac.len().min(3)];
+    let millis: i64 = format!("{:0<3}", frac_str).parse().unwrap_or(0);
+    let days = days_since_epoch(year, month, day)?;
+    Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
+}
+
+fn days_since_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
+    let y = if month <= 2 { year - 1 } else { year };
+    let m = if month <= 2 { month + 12 } else { month };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (m - 3) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe - 719468)
+}
 
 fn looks_like_path(s: &str) -> bool {
     let s = s.trim();
@@ -150,7 +214,7 @@ fn normalize_touched_path(p: &str, cwd: &Path) -> Option<String> {
     Some(s.trim_start_matches('/').to_string())
 }
 
-fn collect_touched_paths_from_value(v: &serde_json::Value, cwd: &Path, out: &mut HashSet<String>) {
+fn collect_paths(v: &serde_json::Value, cwd: &Path, out: &mut HashSet<String>) {
     match v {
         serde_json::Value::String(s) => {
             if looks_like_path(s) {
@@ -161,17 +225,17 @@ fn collect_touched_paths_from_value(v: &serde_json::Value, cwd: &Path, out: &mut
         }
         serde_json::Value::Array(a) => {
             for x in a {
-                collect_touched_paths_from_value(x, cwd, out);
+                collect_paths(x, cwd, out);
             }
         }
         serde_json::Value::Object(m) => {
             for k in ["path", "file", "file_path", "filepath", "filename", "target", "target_file"] {
                 if let Some(val) = m.get(k) {
-                    collect_touched_paths_from_value(val, cwd, out);
+                    collect_paths(val, cwd, out);
                 }
             }
-            for (_k, val) in m.iter() {
-                collect_touched_paths_from_value(val, cwd, out);
+            for val in m.values() {
+                collect_paths(val, cwd, out);
             }
         }
         _ => {}
@@ -187,249 +251,14 @@ fn truncate_text(mut s: String, max_bytes: usize) -> String {
     s
 }
 
-// ============================================================================
-// Copilot session-state directory helpers
-// ============================================================================
-
-fn copilot_session_state_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()?;
-    Some(PathBuf::from(home).join(".copilot").join("session-state"))
-}
-
-fn parse_iso8601_ms(s: &str) -> Option<i64> {
-    // Parse RFC3339/ISO8601 timestamp to milliseconds since epoch.
-    // Hand-rolled parser — no extra deps needed.
-    // Quick hand-rolled parser for "2026-02-26T20:41:48.448Z" format
-    let s = s.trim().trim_end_matches('Z');
-    // Split on T
-    let (date_part, time_part) = s.split_once('T')?;
-    let date_parts: Vec<&str> = date_part.split('-').collect();
-    if date_parts.len() != 3 {
-        return None;
-    }
-    let year: i64 = date_parts[0].parse().ok()?;
-    let month: i64 = date_parts[1].parse().ok()?;
-    let day: i64 = date_parts[2].parse().ok()?;
-
-    let (hms, frac) = time_part.split_once('.').unwrap_or((time_part, "0"));
-    let time_parts: Vec<&str> = hms.split(':').collect();
-    if time_parts.len() != 3 {
-        return None;
-    }
-    let hour: i64 = time_parts[0].parse().ok()?;
-    let minute: i64 = time_parts[1].parse().ok()?;
-    let second: i64 = time_parts[2].parse().ok()?;
-    let millis: i64 = {
-        let frac = &frac[..frac.len().min(3)];
-        let padded = format!("{:0<3}", frac);
-        padded.parse().unwrap_or(0)
-    };
-
-    // Compute days since epoch (simplified: not leap-second aware)
-    // Days from 1970-01-01 to year-month-day
-    let days = days_since_epoch(year, month, day)?;
-    let total_ms =
-        days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis;
-    Some(total_ms)
-}
-
-fn days_since_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
-    // Days since 1970-01-01 using the proleptic Gregorian calendar.
-    // Based on the algorithm from https://www.researchgate.net/publication/316558298
-    let y = if month <= 2 { year - 1 } else { year };
-    let m = if month <= 2 { month + 12 } else { month };
-    let d = day;
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let doy = (153 * (m - 3) + 2) / 5 + d - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    let days_since_epoch_of_era = era * 146097 + doe - 719468;
-    Some(days_since_epoch_of_era)
-}
-
-fn load_workspace_yaml(uuid: &str) -> Option<WorkspaceYaml> {
-    let dir = copilot_session_state_dir()?;
-    let path = dir.join(uuid).join("workspace.yaml");
-    let content = std::fs::read_to_string(&path).ok()?;
-    parse_workspace_yaml(&content)
-}
-
-/// Minimal hand-rolled YAML parser for workspace.yaml.
-/// The file only uses simple `key: value` pairs — no nesting, no arrays.
-fn parse_workspace_yaml(content: &str) -> Option<WorkspaceYaml> {
-    fn extract(content: &str, key: &str) -> Option<String> {
-        for line in content.lines() {
-            if let Some(rest) = line.strip_prefix(key) {
-                if let Some(rest) = rest.strip_prefix(':') {
-                    return Some(rest.trim().to_string());
-                }
-            }
-        }
-        None
-    }
-
-    let id = extract(content, "id")?;
-    let cwd = extract(content, "cwd")?;
-    let created_at = extract(content, "created_at")?;
-    let updated_at = extract(content, "updated_at")?;
-    let summary = extract(content, "summary");
-
-    Some(WorkspaceYaml {
-        id,
-        cwd,
-        summary,
-        created_at,
-        updated_at,
-    })
-}
-
-/// Scan all session-state dirs and return all parseable WorkspaceYaml entries.
-fn scan_all_sessions() -> Vec<(String, WorkspaceYaml)> {
-    let Some(dir) = copilot_session_state_dir() else {
-        return vec![];
-    };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return vec![];
-    };
-    let mut results = Vec::new();
-    for entry in entries.flatten() {
-        let uuid = entry.file_name().to_string_lossy().to_string();
-        if let Some(ws) = load_workspace_yaml(&uuid) {
-            results.push((uuid, ws));
-        }
-    }
-    results
-}
-
-/// Find the Copilot session UUID for a new sessionStart hook.
-/// Matches on cwd + created_at within 5s of hook timestamp, cross-checked
-/// against initial_prompt == workspace.yaml summary.
-fn discover_session_uuid_at_start(
-    cwd: &str,
-    hook_timestamp_ms: i64,
-    initial_prompt: Option<&str>,
-) -> Option<String> {
-    let sessions = scan_all_sessions();
-    let mut candidates: Vec<(String, i64)> = sessions
-        .into_iter()
-        .filter(|(_, ws)| ws.cwd == cwd)
-        .filter_map(|(uuid, ws)| {
-            let created_ms = parse_iso8601_ms(&ws.created_at)?;
-            let diff = (created_ms - hook_timestamp_ms).abs();
-            if diff > 5_000 {
-                return None;
-            }
-            // Cross-check summary vs initial_prompt if both present
-            if let (Some(prompt), Some(summary)) = (initial_prompt, &ws.summary) {
-                let prompt_trimmed = prompt.trim();
-                let summary_trimmed = summary.trim();
-                // Allow partial match: summary starts with prompt (Copilot may truncate)
-                if !summary_trimmed.starts_with(prompt_trimmed)
-                    && !prompt_trimmed.starts_with(summary_trimmed)
-                    && prompt_trimmed != summary_trimmed
-                {
-                    tracing::debug!(
-                        uuid,
-                        summary = summary_trimmed,
-                        prompt = prompt_trimmed,
-                        "sessionStart cross-check mismatch, skipping candidate"
-                    );
-                    return None;
-                }
-            }
-            Some((uuid, diff))
-        })
-        .collect();
-
-    // Pick closest created_at to hook timestamp
-    candidates.sort_by_key(|(_, diff)| *diff);
-    candidates.into_iter().next().map(|(uuid, _)| uuid)
-}
-
-/// Find the most likely Copilot session UUID at sessionEnd.
-/// Among cursor files for this cwd, picks the one whose workspace.yaml
-/// updated_at is closest to (and before or equal to) the hook timestamp.
-fn discover_session_uuid_at_end(
-    workspace_id: &str,
-    cwd: &str,
-    hook_timestamp_ms: i64,
-) -> Option<String> {
-    let cursor_dir = crate::workspace::unlost_workspace_dir(workspace_id).join("copilot");
-    let entries = std::fs::read_dir(&cursor_dir).ok()?;
-
-    let mut candidates: Vec<(String, i64)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let uuid = name.strip_suffix(".cursor")?.to_string();
-            // Verify this cursor's session has matching cwd
-            let ws = load_workspace_yaml(&uuid)?;
-            if ws.cwd != cwd {
-                return None;
-            }
-            let updated_ms = parse_iso8601_ms(&ws.updated_at)?;
-            // updated_at should be <= hook_timestamp_ms (session updated before end hook fired)
-            // Allow up to 10s slack for clock skew / hook latency
-            if updated_ms > hook_timestamp_ms + 10_000 {
-                return None;
-            }
-            let diff = (hook_timestamp_ms - updated_ms).abs();
-            Some((uuid, diff))
-        })
-        .collect();
-
-    candidates.sort_by_key(|(_, diff)| *diff);
-    candidates.into_iter().next().map(|(uuid, _)| uuid)
-}
-
-// ============================================================================
-// Cursor helpers
-// ============================================================================
-
-fn cursor_path(workspace_id: &str, session_uuid: &str) -> PathBuf {
-    crate::workspace::unlost_workspace_dir(workspace_id)
-        .join("copilot")
-        .join(format!("{}.cursor", session_uuid))
-}
-
-fn load_cursor(workspace_id: &str, session_uuid: &str) -> CursorState {
-    let path = cursor_path(workspace_id, session_uuid);
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        return serde_json::from_str(&data).unwrap_or_default();
-    }
-    CursorState::default()
-}
-
-fn save_cursor(workspace_id: &str, session_uuid: &str, cursor: &CursorState) {
-    let path = cursor_path(workspace_id, session_uuid);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(data) = serde_json::to_string(cursor) {
-        let _ = std::fs::write(&path, data);
-    }
-}
-
-fn events_jsonl_path(session_uuid: &str) -> Option<PathBuf> {
-    let dir = copilot_session_state_dir()?;
-    Some(dir.join(session_uuid).join("events.jsonl"))
-}
-
-// ============================================================================
-// events.jsonl parsing
-// ============================================================================
-
-/// Parse events.jsonl from cursor, returning new turns and updated cursor.
+/// Parse events.jsonl from cursor position, return new turns and updated cursor.
 fn parse_events_from_cursor(
     events_path: &Path,
     cursor: &CursorState,
     cwd: &Path,
 ) -> anyhow::Result<(Vec<ParsedTurn>, CursorState)> {
     let file = std::fs::File::open(events_path)?;
-    let metadata = file.metadata()?;
-    let file_size = metadata.len();
+    let file_size = file.metadata()?.len();
 
     let start_offset = if cursor.byte_offset > file_size {
         0
@@ -442,12 +271,18 @@ fn parse_events_from_cursor(
 
     let mut turns: Vec<ParsedTurn> = Vec::new();
 
-    // State machine: accumulate within a turn bounded by assistant.turn_start / assistant.turn_end
+    // State machine over the event stream.
+    // Turn structure in events.jsonl:
+    //   user.message
+    //   assistant.turn_start
+    //   (assistant.message | tool.execution_start | tool.execution_complete)*
+    //   assistant.turn_end
+    //   [more turn_start/end pairs for the same user message, e.g. tool calls]
+    //   [next user.message starts the next turn]
     let mut current_user_text: Option<String> = None;
-    let mut current_assistant_text = String::new();
+    let mut current_assistant_chunks: Vec<String> = Vec::new();
     let mut current_touched: HashSet<String> = HashSet::new();
     let mut current_timestamp_ms: i64 = 0;
-    let mut in_turn = false;
 
     let mut last_event_id: Option<String> = cursor.last_event_id.clone();
     let mut new_offset = start_offset;
@@ -455,60 +290,65 @@ fn parse_events_from_cursor(
 
     for line in reader.lines() {
         let line = line?;
-        new_offset += line.len() as u64 + 1;
+        new_offset += line.len() as u64 + 1; // +1 for newline
 
         if line.trim().is_empty() {
             continue;
         }
 
-        let event: CopilotEvent = match serde_json::from_str(&line) {
-            Ok(e) => e,
+        let event: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
             Err(_) => continue,
         };
 
-        // Skip until we pass the last processed event ID (resync after rotation)
+        let event_type = match event.get("type").and_then(|t| t.as_str()) {
+            Some(t) => t.to_string(),
+            None => continue,
+        };
+
+        let event_id = event.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        // Skip until we've passed the last processed event (resync after rotation)
         if let Some(ref last_id) = cursor.last_event_id {
             if !seen_last_id {
-                if event.id.as_deref() == Some(last_id.as_str()) {
+                if event_id.as_deref() == Some(last_id.as_str()) {
                     seen_last_id = true;
                 }
                 continue;
             }
         }
 
-        if let Some(ref id) = event.id {
+        if let Some(ref id) = event_id {
             last_event_id = Some(id.clone());
         }
 
-        // Parse timestamp from event if present
-        if let Some(ref ts_str) = event.timestamp {
+        // Parse timestamp from event
+        if let Some(ts_str) = event.get("timestamp").and_then(|t| t.as_str()) {
             if let Some(ms) = parse_iso8601_ms(ts_str) {
                 current_timestamp_ms = ms;
             }
         }
 
-        let data = event.data.as_ref();
+        let data = event.get("data");
 
-        match event.event_type.as_str() {
+        match event_type.as_str() {
             "user.message" => {
-                // Flush any pending turn before starting a new one
+                // Flush any pending turn before starting the next
                 if let Some(user_text) = current_user_text.take() {
-                    if !user_text.trim().is_empty() {
-                        turns.push(ParsedTurn {
-                            user_text,
-                            assistant_text: truncate_text(
-                                std::mem::take(&mut current_assistant_text),
-                                64 * 1024,
-                            ),
-                            touched_paths: current_touched.drain().collect(),
-                            timestamp_ms: current_timestamp_ms,
-                        });
-                    }
+                    let assistant_text = truncate_text(
+                        current_assistant_chunks.join("\n"),
+                        64 * 1024,
+                    );
+                    turns.push(ParsedTurn {
+                        user_text,
+                        assistant_text,
+                        touched_paths: current_touched.drain().collect(),
+                        timestamp_ms: current_timestamp_ms,
+                    });
                 }
-                current_assistant_text.clear();
-                in_turn = false;
+                current_assistant_chunks.clear();
 
-                // Extract user message content (use `content`, not `transformedContent`)
+                // Use `content` (raw user text), not `transformedContent` (system-augmented)
                 if let Some(content) = data.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
                     let text = content.trim().to_string();
                     if !text.is_empty() {
@@ -517,53 +357,36 @@ fn parse_events_from_cursor(
                 }
             }
 
-            "assistant.turn_start" => {
-                in_turn = true;
-            }
-
             "assistant.message" => {
-                if !in_turn {
-                    continue;
-                }
+                // content is a string in this format
                 if let Some(content) = data.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
-                    let text = content.trim();
+                    let text = content.trim().to_string();
                     if !text.is_empty() {
-                        if !current_assistant_text.is_empty() {
-                            current_assistant_text.push('\n');
-                        }
-                        current_assistant_text.push_str(text);
+                        current_assistant_chunks.push(text);
                     }
                 }
             }
 
             "tool.execution_complete" => {
-                // Extract touched paths from tool args and result content
                 if let Some(data) = data {
-                    collect_touched_paths_from_value(data, cwd, &mut current_touched);
+                    collect_paths(data, cwd, &mut current_touched);
                 }
             }
 
-            "assistant.turn_end" => {
-                in_turn = false;
-                // Don't flush here — wait for next user.message or end of file,
-                // because a single user message may span multiple turn_start/end pairs
-                // (e.g. tool calls interleaved with assistant messages).
-            }
-
+            // assistant.turn_start / assistant.turn_end / tool.execution_start / others — no-op
             _ => {}
         }
     }
 
-    // Flush last pending turn
+    // Flush the final pending turn
     if let Some(user_text) = current_user_text {
-        if !user_text.trim().is_empty() {
-            turns.push(ParsedTurn {
-                user_text,
-                assistant_text: truncate_text(current_assistant_text, 64 * 1024),
-                touched_paths: current_touched.drain().collect(),
-                timestamp_ms: current_timestamp_ms,
-            });
-        }
+        let assistant_text = truncate_text(current_assistant_chunks.join("\n"), 64 * 1024);
+        turns.push(ParsedTurn {
+            user_text,
+            assistant_text,
+            touched_paths: current_touched.drain().collect(),
+            timestamp_ms: current_timestamp_ms,
+        });
     }
 
     let new_cursor = CursorState {
@@ -578,12 +401,7 @@ fn parse_events_from_cursor(
 // Hook handlers
 // ============================================================================
 
-async fn handle_session_start(
-    flow: &mut Flow,
-    input: &HookInput,
-    _embed_model: &str,
-    _embed_cache_dir: Option<&str>,
-) -> anyhow::Result<()> {
+async fn handle_session_start(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
     let cwd_path = Path::new(&input.cwd);
     let ws = match get_or_create_workspace_paths(cwd_path) {
         Ok(w) => w,
@@ -593,30 +411,17 @@ async fn handle_session_start(
         }
     };
 
-    // Discover session UUID
-    let uuid = discover_session_uuid_at_start(
-        &input.cwd,
-        input.timestamp,
-        input.initial_prompt.as_deref(),
+    tracing::info!(
+        session_id = %input.session_id,
+        cwd = %input.cwd,
+        "copilot sessionStart"
     );
 
-    let Some(uuid) = uuid else {
-        tracing::warn!(
-            cwd = %input.cwd,
-            timestamp_ms = input.timestamp,
-            "copilot sessionStart: could not discover session UUID"
-        );
-        return Ok(());
-    };
+    // Write an empty cursor to mark the session as known
+    let cursor = load_cursor(&ws.id, &input.session_id);
+    save_cursor(&ws.id, &input.session_id, &cursor);
 
-    tracing::info!(uuid, cwd = %input.cwd, "copilot sessionStart: discovered session");
-
-    // Create cursor file to mark session discovery
-    let cursor = CursorState::default();
-    save_cursor(&ws.id, &uuid, &cursor);
-
-    // Spawn a background checkpoint for any previous sessions in this workspace
-    // (same pattern as Claude shim on first Stop).
+    // Spawn a background checkpoint for previous sessions in this workspace
     {
         let ws_clone = ws.clone();
         tokio::spawn(async move {
@@ -635,15 +440,14 @@ async fn handle_session_start(
         });
     }
 
-    // Run friction check on initial prompt if provided (output ignored by Copilot,
-    // but useful for metrics and logging).
+    // Friction check on initial prompt (output ignored by Copilot, useful for metrics)
     if let Some(ref prompt) = input.initial_prompt {
         if !prompt.trim().is_empty() {
             let event = CheckEvent {
                 directory: input.cwd.clone(),
                 text: prompt.clone(),
                 agent_kind: AgentKind::Copilot,
-                agent_session_id: Some(uuid),
+                agent_session_id: Some(input.session_id.clone()),
             };
             flow.check_friction(event).await;
         }
@@ -652,29 +456,24 @@ async fn handle_session_start(
     Ok(())
 }
 
-async fn handle_user_prompt_submitted(flow: &mut Flow, input: &HookInput) -> anyhow::Result<()> {
-    let prompt = match &input.prompt {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => {
-            tracing::warn!("copilot userPromptSubmitted: missing prompt field");
-            return Ok(());
-        }
-    };
+async fn handle_user_prompt_submitted(flow: &mut Flow, input: &HookInput, prompt: &str) -> anyhow::Result<()> {
+    if prompt.trim().is_empty() {
+        return Ok(());
+    }
 
-    // Find the session UUID for this cwd so we can tag the friction event.
-    let cwd_path = Path::new(&input.cwd);
-    let session_uuid = get_or_create_workspace_paths(cwd_path)
-        .ok()
-        .and_then(|ws| discover_session_uuid_at_end(&ws.id, &input.cwd, input.timestamp));
+    tracing::info!(
+        session_id = %input.session_id,
+        "copilot userPromptSubmitted"
+    );
 
     let event = CheckEvent {
         directory: input.cwd.clone(),
-        text: prompt.clone(),
+        text: prompt.to_string(),
         agent_kind: AgentKind::Copilot,
-        agent_session_id: session_uuid,
+        agent_session_id: Some(input.session_id.clone()),
     };
 
-    // Note: userPromptSubmitted output is currently ignored by Copilot CLI.
+    // Note: userPromptSubmitted hook output is currently ignored by Copilot CLI.
     // We run the check for metrics/logging only.
     flow.check_friction(event).await;
 
@@ -696,33 +495,30 @@ async fn handle_session_end(
         }
     };
 
-    let uuid = discover_session_uuid_at_end(&ws.id, &input.cwd, input.timestamp);
-    let Some(uuid) = uuid else {
-        tracing::warn!(
-            cwd = %input.cwd,
-            "copilot sessionEnd: could not find cursor file for this cwd — sessionStart may not have run"
-        );
-        return Ok(());
-    };
+    tracing::info!(
+        session_id = %input.session_id,
+        reason = ?input.reason,
+        "copilot sessionEnd: reading events.jsonl"
+    );
 
-    tracing::info!(uuid, cwd = %input.cwd, reason = ?input.reason, "copilot sessionEnd: recording");
-
-    let events_path = match events_jsonl_path(&uuid) {
+    let events_path = match events_jsonl_path(&input.session_id) {
         Some(p) => p,
         None => {
-            tracing::warn!(uuid, "copilot sessionEnd: could not locate events.jsonl");
+            tracing::warn!("copilot sessionEnd: could not locate events.jsonl");
             return Ok(());
         }
     };
 
     if !events_path.exists() {
-        tracing::warn!(path = %events_path.display(), "copilot sessionEnd: events.jsonl not found");
+        tracing::warn!(
+            path = %events_path.display(),
+            "copilot sessionEnd: events.jsonl not found"
+        );
         return Ok(());
     }
 
-    let cursor = load_cursor(&ws.id, &uuid);
-    let (turns, new_cursor) =
-        parse_events_from_cursor(&events_path, &cursor, cwd_path)?;
+    let cursor = load_cursor(&ws.id, &input.session_id);
+    let (turns, new_cursor) = parse_events_from_cursor(&events_path, &cursor, cwd_path)?;
 
     tracing::info!(
         turns_count = turns.len(),
@@ -745,7 +541,7 @@ async fn handle_session_end(
             touched_paths: turn.touched_paths,
             tool_calls: vec![],
             agent_kind: AgentKind::Copilot,
-            agent_session_id: Some(uuid.clone()),
+            agent_session_id: Some(input.session_id.clone()),
             usage: None,
             grounding_note: None,
             source_ts_ms: if turn.timestamp_ms > 0 {
@@ -761,7 +557,7 @@ async fn handle_session_end(
         }
     }
 
-    save_cursor(&ws.id, &uuid, &new_cursor);
+    save_cursor(&ws.id, &input.session_id, &new_cursor);
 
     // Stealth PR comment detection
     {
@@ -769,7 +565,7 @@ async fn handle_session_end(
         if let Some(pr_url) =
             crate::companion::shims::opencode_stdio::extract_github_pr_url_pub(&combined)
         {
-            let session_id = uuid.clone();
+            let session_id = input.session_id.clone();
             let directory = input.cwd.clone();
             let em = embed_model.to_string();
             let ec = embed_cache_dir.map(|s| s.to_string());
@@ -791,7 +587,7 @@ async fn handle_session_end(
         }
     }
 
-    // Incremental changelog + git tag ingest (same as Claude shim)
+    // Incremental changelog + git tag ingest
     if let Some(repo_root) = crate::workspace::git_toplevel(cwd_path) {
         let changelog_path = repo_root.join("CHANGELOG.md");
         let changelog_touched = all_touched
@@ -808,9 +604,13 @@ async fn handle_session_end(
                 && std::env::var_os("NO_COLOR").is_none();
             let _ = crate::git::ingest_git_tags(&ws, &repo_root, embedder, use_color).await;
             if changelog_touched || changelog_path.exists() {
-                let _ =
-                    crate::changelog::ingest_changelog(&ws, &changelog_path, embedder, use_color)
-                        .await;
+                let _ = crate::changelog::ingest_changelog(
+                    &ws,
+                    &changelog_path,
+                    embedder,
+                    use_color,
+                )
+                .await;
             }
         }
     }
@@ -834,20 +634,6 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
         }
     };
 
-    // Copilot CLI puts the event name in "hook_event_name"
-    let event_name = hook_input
-        .hook_event_name
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
-
-    tracing::info!(
-        hook_event = %event_name,
-        cwd = %hook_input.cwd,
-        timestamp_ms = hook_input.timestamp,
-        "copilot hook invoked"
-    );
-
     let config = FlowConfig {
         embed_model: embed_model.clone(),
         embed_cache_dir: embed_cache_dir.clone(),
@@ -855,22 +641,41 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>) -> anyhow
     };
     let mut flow = Flow::new(config);
 
-    let needs_drain = event_name == "sessionEnd";
+    let event = hook_input.event();
+    let event_label = match &event {
+        HookEvent::SessionStart => "sessionStart",
+        HookEvent::UserPromptSubmitted { .. } => "userPromptSubmitted",
+        HookEvent::SessionEnd => "sessionEnd",
+        HookEvent::Unknown => "unknown",
+    };
 
-    match event_name.as_str() {
-        "sessionStart" => {
-            handle_session_start(&mut flow, &hook_input, &embed_model, embed_cache_dir.as_deref())
-                .await?;
+    tracing::info!(
+        hook_event = event_label,
+        session_id = %hook_input.session_id,
+        cwd = %hook_input.cwd,
+        "copilot hook invoked"
+    );
+
+    let needs_drain = matches!(event, HookEvent::SessionEnd);
+
+    match event {
+        HookEvent::SessionStart => {
+            handle_session_start(&mut flow, &hook_input).await?;
         }
-        "userPromptSubmitted" => {
-            handle_user_prompt_submitted(&mut flow, &hook_input).await?;
+        HookEvent::UserPromptSubmitted { prompt } => {
+            handle_user_prompt_submitted(&mut flow, &hook_input, prompt).await?;
         }
-        "sessionEnd" => {
-            handle_session_end(&mut flow, &hook_input, &embed_model, embed_cache_dir.as_deref())
-                .await?;
+        HookEvent::SessionEnd => {
+            handle_session_end(
+                &mut flow,
+                &hook_input,
+                &embed_model,
+                embed_cache_dir.as_deref(),
+            )
+            .await?;
         }
-        _ => {
-            tracing::debug!(event = %event_name, "copilot: ignoring unhandled hook event");
+        HookEvent::Unknown => {
+            tracing::debug!(raw = %input_str, "copilot: could not determine hook event type");
         }
     }
 
