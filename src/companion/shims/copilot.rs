@@ -45,7 +45,8 @@ use std::path::{Path, PathBuf};
 struct HookInput {
     /// Present in all events — the Copilot session UUID.
     session_id: String,
-    /// Unix timestamp in milliseconds.
+    /// Unix timestamp in milliseconds (reserved for future use).
+    #[allow(dead_code)]
     timestamp: i64,
     cwd: String,
     /// sessionStart only — "new" | "resume" | "startup"
