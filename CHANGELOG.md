@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-02-27
+
 ### Added
 - **GitHub Copilot CLI integration**: `unlost shim copilot` and `unlost config agent copilot` provide hooks-based integration with GitHub Copilot CLI. Session transcripts are read directly from `~/.copilot/session-state/<uuid>/events.jsonl`, giving access to full user and assistant text without synthesis. Session discovery uses `workspace.yaml` `created_at` proximity and `summary` cross-check at `sessionStart`, and `updated_at` proximity at `sessionEnd`. Installs `sessionStart`, `userPromptSubmitted`, and `sessionEnd` hooks via `.github/hooks/unlost.json`, and writes a Copilot-compatible skill to `.github/copilot/skills/unlost/`.
 
