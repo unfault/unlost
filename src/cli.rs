@@ -19,6 +19,18 @@ pub enum ProviderType {
     Opencode,
 }
 
+/// Which persona to optimise the reflection for.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub enum ReflectMode {
+    /// Developer coaching: how can I collaborate better with the agent?
+    #[default]
+    Coach,
+    /// Agent tuning diagnostics: where did the agent drift, loop, or hallucinate?
+    Diagnose,
+    /// Both personas combined in a single report.
+    Both,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "unlost",
@@ -34,6 +46,7 @@ Memory:
   query       Semantic search across recorded capsules
   trace       Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
   recall      Recall the story so far (proactive overview)
+  reflect     Reflect on how you and the agent worked together — coaching and diagnostics
   explore     Explore future paths grounded in your workspace memory
   challenge   Pressure-test a past decision or technology choice using your workspace memory
   brief       Get a staff engineer's debrief on this codebase — what matters, what bites, where to start
@@ -363,6 +376,37 @@ pub enum Command {
         /// Embedding cache directory (defaults to XDG data dir)
         #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
         embed_cache_dir: Option<String>,
+    },
+
+    /// Reflect on how you and the agent worked together — coaching and diagnostics
+    Reflect {
+        /// Reflection persona: coach (default), diagnose, or both
+        #[arg(long, value_enum, default_value_t = ReflectMode::Coach)]
+        mode: ReflectMode,
+
+        /// Scope to a specific agent session ID
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Only include capsules after this time (RFC3339 or relative: 1h, 1d, 1w)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// LLM model to use for the reflection narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
     },
 
     /// Explore future paths grounded in your workspace memory

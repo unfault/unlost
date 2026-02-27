@@ -501,6 +501,150 @@ pub(crate) async fn generate_checkpoint_narrative(
     Ok(result.narrative)
 }
 
+// ── Outcome backfill ──────────────────────────────────────────────────────────
+
+/// Determine the `outcome_hint` for capsule at index `i` by comparing it
+/// with the capsule immediately after it (lookahead) and any failure signals.
+///
+/// Rules (deterministic, zero LLM):
+/// - `regressed`:  the capsule has a non-None failure_mode, OR it has the
+///   `retry_loop` or `instruction_drift` flag, OR the next capsule is in a
+///   lower-progress category (implementation → debugging).
+/// - `progressed`: decision text changed meaningfully AND at least one new
+///   symbol appeared, OR a code-touching turn was followed by a successful
+///   verification signal in the NEXT capsule.
+/// - `stalled`:    decision and symbols are unchanged from prior capsule, OR
+///   the `session_heavy` / `session_too_long` flag is set with no new symbols.
+/// - `unclear`:    not enough signal to decide.
+fn classify_outcome(
+    cur: &crate::CapsuleHit,
+    next: Option<&crate::CapsuleHit>,
+) -> &'static str {
+    // Regressed: failure mode or high-friction flags
+    if cur.capsule.failure_mode != crate::types::FailureMode::None {
+        return "regressed";
+    }
+    if let Some(te) = &cur.turn_eval {
+        let has_regress_flag = te.flags.iter().any(|f| {
+            f == "retry_loop" || f == "instruction_drift" || f == "high_churn"
+        });
+        if has_regress_flag && te.trajectory_intensity > 0.6 {
+            return "regressed";
+        }
+    }
+
+    // Use next capsule for lookahead if available
+    if let Some(nx) = next {
+        // Compare decision text overlap
+        let cur_words: std::collections::HashSet<&str> =
+            cur.capsule.decision.split_whitespace().collect();
+        let nx_words: std::collections::HashSet<&str> =
+            nx.capsule.decision.split_whitespace().collect();
+        let overlap = if cur_words.is_empty() {
+            1.0_f32
+        } else {
+            nx_words.intersection(&cur_words).count() as f32 / cur_words.len() as f32
+        };
+
+        // New symbols in the next turn
+        let cur_syms: std::collections::HashSet<&str> =
+            cur.capsule.symbols.iter().map(|s| s.as_str()).collect();
+        let nx_syms: std::collections::HashSet<&str> =
+            nx.capsule.symbols.iter().map(|s| s.as_str()).collect();
+        let new_symbols = nx_syms.difference(&cur_syms).count();
+
+        if overlap < 0.5 && new_symbols > 0 {
+            return "progressed";
+        }
+        if overlap > 0.85 && new_symbols == 0 {
+            // Check stall flags
+            if let Some(te) = &cur.turn_eval {
+                if te.flags.iter().any(|f| f == "session_heavy" || f == "session_too_long") {
+                    return "stalled";
+                }
+            }
+            return "stalled";
+        }
+    } else {
+        // Last capsule in the session — look at its own signals
+        if let Some(te) = &cur.turn_eval {
+            if te.decision_progress > 0.6 && te.verification_rigor > 0.5 {
+                return "progressed";
+            }
+            if te.decision_progress < 0.2 {
+                return "stalled";
+            }
+        }
+    }
+
+    "unclear"
+}
+
+/// Backfill `te_outcome_hint` for every capsule in `capsules` using the
+/// lookahead comparison described in `classify_outcome`. Updates are written
+/// directly to the capsules LanceDB table (one UPDATE per unique outcome value
+/// — batched by outcome to minimise round trips).
+pub(crate) async fn backfill_outcome_hints(
+    db: &Connection,
+    capsules: &[crate::CapsuleHit],
+) -> anyhow::Result<()> {
+    if capsules.is_empty() {
+        return Ok(());
+    }
+
+    let table = crate::storage::open_capsules_table(db).await?;
+
+    // Group capsule IDs by their determined outcome so we can do one UPDATE
+    // per outcome value instead of N individual updates.
+    let mut by_outcome: std::collections::HashMap<&'static str, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for (i, cap) in capsules.iter().enumerate() {
+        // Only backfill capsules that still carry "unclear" (or empty) outcome.
+        let current_hint = cap
+            .turn_eval
+            .as_ref()
+            .map(|te| te.outcome_hint.as_str())
+            .unwrap_or("");
+        if !current_hint.is_empty() && current_hint != "unclear" {
+            continue; // Already set from a prior backfill — don't overwrite.
+        }
+
+        let next = capsules.get(i + 1);
+        let outcome = classify_outcome(cap, next);
+        by_outcome.entry(outcome).or_default().push(cap.id.clone());
+    }
+
+    for (outcome, ids) in &by_outcome {
+        if ids.is_empty() {
+            continue;
+        }
+        // Build an SQL IN filter: id IN ('a','b',...)
+        let id_list = ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "\\'")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let filter = format!("id IN ({id_list})");
+
+        table
+            .update()
+            .only_if(&filter)
+            .column("te_outcome_hint", format!("'{outcome}'"))
+            .execute()
+            .await
+            .with_context(|| format!("outcome backfill update failed for outcome={outcome}"))?;
+    }
+
+    tracing::debug!(
+        "outcome backfill: {} capsules updated ({} distinct outcomes)",
+        capsules.len(),
+        by_outcome.len()
+    );
+
+    Ok(())
+}
+
 /// Full pipeline: fetch unchecked capsules for a session, check dedup, generate
 /// narrative, and store. Returns the new CheckpointRow on success.
 ///
@@ -572,6 +716,13 @@ pub(crate) async fn maybe_create_checkpoint(
     if conv_capsules.is_empty() {
         tracing::debug!("checkpoint: skipping — no conversational capsules");
         return Ok(Err(CheckpointSkipReason::NoConversationalCapsules));
+    }
+
+    // Backfill outcome hints before generating the narrative so the LLM context
+    // can include outcome information in future reflect prompts.
+    // Best-effort: failure is non-fatal — checkpoint generation continues regardless.
+    if let Err(e) = backfill_outcome_hints(&db, &conv_capsules).await {
+        tracing::debug!("outcome backfill failed (non-fatal): {e}");
     }
 
     // Generate narrative

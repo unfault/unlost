@@ -1629,6 +1629,227 @@ fn wrap_ansi_line(line: &str, max_visible_width: usize, _hang: usize) -> Vec<Str
     lines
 }
 
+// ── Reflect ───────────────────────────────────────────────────────────────────
+
+const REFLECT_COACH_PREAMBLE: &str = "\
+You are a developer effectiveness coach reviewing a coding session.\n\
+Given a structured turn-by-turn evaluation timeline, produce a concise, \
+actionable reflection on how the human developer collaborated with the AI agent.\n\
+\n\
+Focus on DEVELOPER behaviour and habits — not the agent's. \
+Never blame; identify patterns and offer concrete improvements.\n\
+\n\
+Format your response as:\n\
+SESSION QUALITY: (1-2 sentences overall)\n\
+WHAT WORKED: (2-3 bullet points — patterns to repeat)\n\
+FRICTION POINTS: (2-4 bullet points — where collaboration broke down and why)\n\
+RECOMMENDATIONS: (2-3 specific, actionable suggestions for the next session)\n\
+\n\
+Rules:\n\
+- Every claim must reference a specific turn index or flag name as evidence.\n\
+- Keep score values for evidence only — do not expose raw numbers as headlines.\n\
+- Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
+- Max 300 words total.";
+
+const REFLECT_DIAGNOSE_PREAMBLE: &str = "\
+You are an AI agent reliability analyst reviewing a coding session.\n\
+Given a structured turn-by-turn evaluation timeline, identify where the agent \
+drifted, looped, hallucinated, or failed to follow instructions.\n\
+\n\
+Focus on AGENT behaviour — not the developer's. \
+Be precise and evidence-grounded.\n\
+\n\
+Format your response as:\n\
+AGENT HEALTH: (1-2 sentences overall — stable / degraded / poor)\n\
+FAILURE PATTERNS: (2-4 bullet points — specific failure modes observed with turn index)\n\
+STABILITY SIGNALS: (2-3 bullet points — where the agent performed well)\n\
+TUNING RECOMMENDATIONS: (2-3 suggestions for system prompt, tool policy, or model choice)\n\
+\n\
+Rules:\n\
+- Anchor every finding to specific channel values (e.g. alignment_debt=0.72 at turn 4).\n\
+- Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
+- Max 300 words total.";
+
+const REFLECT_BOTH_PREAMBLE: &str = "\
+You are reviewing a coding session as both a developer effectiveness coach \
+and an AI agent reliability analyst.\n\
+Given a structured turn-by-turn evaluation timeline, produce a combined reflection.\n\
+\n\
+Format your response as:\n\
+SESSION QUALITY: (1-2 sentences — overall impression)\n\
+DEVELOPER PATTERNS: (2-3 bullet points — human collaboration habits, good or bad)\n\
+AGENT PATTERNS: (2-3 bullet points — agent drift, loops, or reliability issues)\n\
+SHARED FRICTION: (1-2 bullet points — where both sides contributed to a problem)\n\
+NEXT SESSION: (2-3 concrete recommendations addressing both sides)\n\
+\n\
+Rules:\n\
+- Every claim must reference a specific turn index or flag name as evidence.\n\
+- Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
+- Max 400 words total.";
+
+/// Build the structured TurnEval timeline context fed to the LLM.
+/// Format: turn index, timestamp, category, outcome hint, scores, flags — no raw text.
+fn build_reflect_context(
+    capsules: &[crate::CapsuleHit],
+    session_id: Option<&str>,
+    mode: crate::cli::ReflectMode,
+) -> String {
+    use chrono::{SecondsFormat, TimeZone};
+    let fmt_ts = |ts_ms: i64| -> String {
+        chrono::Utc
+            .timestamp_millis_opt(ts_ms)
+            .single()
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+            .unwrap_or_else(|| ts_ms.to_string())
+    };
+
+    let mut ctx = String::new();
+
+    if let Some(sid) = session_id {
+        ctx.push_str(&format!("Session: {sid}\n"));
+    }
+    ctx.push_str(&format!("Turns with evaluation data: {}\n\n", capsules.len()));
+    ctx.push_str("Turn-by-turn evaluation timeline:\n\n");
+
+    for (i, hit) in capsules.iter().enumerate() {
+        let te = match hit.turn_eval.as_ref() {
+            Some(te) => te,
+            None => continue,
+        };
+
+        ctx.push_str(&format!("Turn {} [{}]\n", i + 1, fmt_ts(hit.ts_ms)));
+        ctx.push_str(&format!("  category: {}\n", hit.capsule.category));
+        ctx.push_str(&format!("  outcome: {}\n", te.outcome_hint));
+
+        match mode {
+            crate::cli::ReflectMode::Coach | crate::cli::ReflectMode::Both => {
+                ctx.push_str(&format!(
+                    "  coach: clarity={:.2} freshness={:.2} verify={:.2} progress={:.2} scope={:.2}\n",
+                    te.clarity,
+                    te.context_freshness,
+                    te.verification_rigor,
+                    te.decision_progress,
+                    te.scope_discipline,
+                ));
+            }
+            crate::cli::ReflectMode::Diagnose => {}
+        }
+
+        match mode {
+            crate::cli::ReflectMode::Diagnose | crate::cli::ReflectMode::Both => {
+                ctx.push_str(&format!(
+                    "  diagnose: intensity={:.2} state={:?} rep={:.2} align={:.2} \
+                     hall={:.2} churn={:.2} fluency={:.2}\n",
+                    te.trajectory_intensity,
+                    te.trajectory_state,
+                    te.repetition,
+                    te.alignment_debt,
+                    te.path_hallucination,
+                    te.logic_churn,
+                    te.fluency,
+                ));
+            }
+            crate::cli::ReflectMode::Coach => {}
+        }
+
+        if !te.flags.is_empty() {
+            ctx.push_str(&format!("  flags: {}\n", te.flags.join(", ")));
+        }
+
+        if !te.evidence.is_empty() {
+            for ev in te.evidence.iter().take(2) {
+                ctx.push_str(&format!("  evidence: {ev}\n"));
+            }
+        }
+
+        ctx.push('\n');
+    }
+
+    // Aggregate summary for the LLM
+    if !capsules.is_empty() {
+        let total = capsules.len() as f32;
+        let eval_turns: Vec<_> = capsules.iter().filter_map(|h| h.turn_eval.as_ref()).collect();
+        if !eval_turns.is_empty() {
+            let n = eval_turns.len() as f32;
+            let avg_clarity = eval_turns.iter().map(|te| te.clarity).sum::<f32>() / n;
+            let avg_freshness = eval_turns.iter().map(|te| te.context_freshness).sum::<f32>() / n;
+            let avg_intensity = eval_turns.iter().map(|te| te.trajectory_intensity).sum::<f32>() / n;
+            let avg_progress = eval_turns.iter().map(|te| te.decision_progress).sum::<f32>() / n;
+            let flag_counts = eval_turns
+                .iter()
+                .flat_map(|te| te.flags.iter())
+                .fold(std::collections::HashMap::<&str, usize>::new(), |mut m, f| {
+                    *m.entry(f.as_str()).or_default() += 1;
+                    m
+                });
+            let outcome_dist = capsules
+                .iter()
+                .filter_map(|h| h.turn_eval.as_ref())
+                .fold(std::collections::HashMap::<&str, usize>::new(), |mut m, te| {
+                    *m.entry(te.outcome_hint.as_str()).or_default() += 1;
+                    m
+                });
+
+            ctx.push_str("Session aggregates:\n");
+            ctx.push_str(&format!("  total_turns: {}\n", total as usize));
+            ctx.push_str(&format!("  turns_with_eval: {}\n", eval_turns.len()));
+            ctx.push_str(&format!("  avg_clarity: {avg_clarity:.2}\n"));
+            ctx.push_str(&format!("  avg_context_freshness: {avg_freshness:.2}\n"));
+            ctx.push_str(&format!("  avg_trajectory_intensity: {avg_intensity:.2}\n"));
+            ctx.push_str(&format!("  avg_decision_progress: {avg_progress:.2}\n"));
+
+            let mut sorted_flags: Vec<_> = flag_counts.iter().collect();
+            sorted_flags.sort_by(|a, b| b.1.cmp(a.1));
+            if !sorted_flags.is_empty() {
+                let flag_str = sorted_flags
+                    .iter()
+                    .take(6)
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ctx.push_str(&format!("  top_flags: {flag_str}\n"));
+            }
+
+            if !outcome_dist.is_empty() {
+                let out_str = outcome_dist
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ctx.push_str(&format!("  outcomes: {out_str}\n"));
+            }
+        }
+    }
+
+    ctx
+}
+
+pub(crate) async fn llm_reflect_narrative(
+    llm_model_override: Option<&str>,
+    mode: crate::cli::ReflectMode,
+    capsules: &[crate::CapsuleHit],
+    session_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let preamble = match mode {
+        crate::cli::ReflectMode::Coach => REFLECT_COACH_PREAMBLE,
+        crate::cli::ReflectMode::Diagnose => REFLECT_DIAGNOSE_PREAMBLE,
+        crate::cli::ReflectMode::Both => REFLECT_BOTH_PREAMBLE,
+    };
+
+    let context = build_reflect_context(capsules, session_id, mode);
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct ReflectOutput {
+        /// The full formatted reflection narrative.
+        narrative: String,
+    }
+
+    let result =
+        crate::llm_extract::<ReflectOutput>(llm_model_override, preamble, &context).await?;
+
+    Ok(result.narrative)
+}
+
 pub(crate) fn spinner_draw_target(output: OutputFormat) -> Option<ProgressDrawTarget> {
     if output != OutputFormat::Ansi {
         return None;

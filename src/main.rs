@@ -185,6 +185,19 @@ async fn main() -> anyhow::Result<()> {
             unlost::commands::brief::run(target, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
         }
+        Command::Reflect {
+            mode,
+            session,
+            since,
+            llm_model,
+            output,
+            plain,
+            path,
+        } => {
+            let output = if plain { OutputFormat::Plain } else { output };
+            unlost::commands::reflect::run(mode, session, since, llm_model, output, path)
+                .await?;
+        }
         Command::Explore {
             query,
             llm_model,
