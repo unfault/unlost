@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="unlost - your coding session memory. Recall the past: recall, brief, trace, pr-comment. Question the present: challenge. Imagine the future: explore. Review the journey: reflect (coming soon). AI gets code authorship. Context ownership stays with you.">
+  <defs>
+    <style>
+      :root {
+        --bg: #FFFFFF;
+        --ink: #180B25;
+        --ink-soft: rgba(24,11,37,0.78);
+        --accent: #E74F26;
+        --tan: #D1B487;
+      }
+      .display { font-family: Lexend, Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      
+      .brand { font-size: 42px; font-weight: 700; fill: #180B25; letter-spacing: -0.04em; }
+      .headline { font-size: 42px; font-weight: 350; fill: rgba(24,11,37,0.78); letter-spacing: -0.02em; }
+      
+      .node-text { font-size: 14px; font-weight: 700; fill: #FFFFFF; text-transform: uppercase; letter-spacing: 0.1em; }
+      .label-title { font-size: 26px; font-weight: 650; fill: #180B25; letter-spacing: -0.03em; }
+      
+      .cmd { font-size: 22px; font-weight: 600; fill: #E74F26; }
+      .cmd-dim { font-size: 20px; font-weight: 500; fill: rgba(24,11,37,0.78); opacity: 0.6; }
+      .cmd-list { font-size: 20px; font-weight: 400; fill: rgba(24,11,37,0.78); opacity: 0.8; }
+
+      .tagline { font-size: 16px; font-weight: 500; fill: #180B25; letter-spacing: -0.01em; }
+      .tagline-accent { font-weight: 700; fill: #E74F26; }
+    </style>
+    
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D1B487"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="630" fill="#FFFFFF"/>
+  
+  <!-- Header -->
+  <g transform="translate(60 80)">
+    <text class="brand display">unlost</text>
+    <text class="headline display" x="130"> - your coding session memory</text>
+  </g>
+
+  <!-- Center Node: You & Your Agents -->
+  <g transform="translate(600 340)">
+    <circle r="70" fill="#180B25"/>
+    <circle r="76" fill="none" stroke="#E74F26" stroke-width="2" opacity="0.4"/>
+    <text class="node-text display" x="0" y="-8" text-anchor="middle">You &amp;</text>
+    <text class="node-text display" x="0" y="14" text-anchor="middle">Your Agents</text>
+  </g>
+
+  <!-- Left Edge: Past (Horizontal) -->
+  <g transform="translate(180 340)">
+    <!-- Line from center rim (600-76=524) to left text block (approx 360) -->
+    <!-- relative to 180: x1=344, x2=180 -->
+    <line x1="344" y1="0" x2="180" y2="0" stroke="#D1B487" stroke-width="3" marker-end="url(#arrow)"/>
+    
+    <text class="label-title display" x="160" y="-30" text-anchor="end">Recall the past</text>
+    <text class="cmd mono" x="160" y="0" text-anchor="end">recall</text>
+    <text class="cmd-list mono" x="160" y="30" text-anchor="end">brief, trace,</text>
+    <text class="cmd-list mono" x="160" y="58" text-anchor="end">pr-comment</text>
+  </g>
+
+  <!-- Right Edge: Future (Horizontal aligned with Past) -->
+  <g transform="translate(840 340)">
+    <!-- Line from center rim (600+76=676) to right text block (approx 840) -->
+    <!-- relative to 840: x1=-164, x2=-20 -->
+    <line x1="-164" y1="0" x2="-20" y2="0" stroke="#D1B487" stroke-width="3" marker-end="url(#arrow)"/>
+    
+    <text class="label-title display" x="0" y="-30">Imagine the future</text>
+    <text class="cmd mono" x="0" y="0">explore</text>
+  </g>
+
+  <!-- Bottom: Present -->
+  <g transform="translate(600 480)">
+    <line x1="0" y1="-64" x2="0" y2="-40" stroke="#D1B487" stroke-width="3" marker-end="url(#arrow)"/>
+    <text class="label-title display" x="0" y="0" text-anchor="middle">Question the present</text>
+    <text class="cmd mono" x="0" y="35" text-anchor="middle">challenge</text>
+  </g>
+
+  <!-- Top Center: Review Loop -->
+  <g transform="translate(600 340)">
+    <circle cx="-54" cy="-54" r="3" fill="#D1B487"/>
+    <path d="M -54 -54 C -100 -200, 100 -200, 54 -54" fill="none" stroke="#D1B487" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+    
+    <g transform="translate(0 -150)">
+      <text class="label-title display" x="0" y="0" text-anchor="middle" opacity="0.6">Review the journey</text>
+      <text class="cmd-dim mono" x="0" y="35" text-anchor="middle">reflect <tspan fill="#E74F26" font-weight="700" font-size="12" dy="-2">SOON</tspan></text>
+    </g>
+  </g>
+
+  <!-- Footer Tagline -->
+  <g transform="translate(1140 590)">
+    <text class="tagline display" x="0" y="0" text-anchor="end">AI gets code authorship. <tspan class="tagline-accent">Context ownership</tspan> stays with you.</text>
+    <text class="mono" x="0" y="24" text-anchor="end" font-size="12" fill="rgba(24,11,37,0.4)">unlost.unfault.dev</text>
+  </g>
+
+</svg>
