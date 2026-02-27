@@ -18,6 +18,8 @@ struct JsonCapsule {
     usage: Option<Usage>,
     capsule: Caps,
     #[serde(default)]
+    turn_eval: Option<crate::types::TurnEval>,
+    #[serde(default)]
     head_sha: Option<String>,
     #[serde(default)]
     commit_sha: Option<String>,
@@ -129,6 +131,11 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
     let mut batch_texts: Vec<String> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_rows: Vec<BatchRow> = Vec::with_capacity(BATCH_SIZE);
 
+    // Rolling history buffer for coach score computation (newest first, max 8).
+    // Built from capsules processed so far so compute_coach_scores has lookahead.
+    let mut reindex_history: std::collections::VecDeque<crate::CapsuleHit> =
+        std::collections::VecDeque::with_capacity(9);
+
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
@@ -183,6 +190,87 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             questions: vec![],
         };
 
+        // Determine TurnEval for this capsule:
+        // (a) If the JSONL already has turn_eval (post-v0.13), use it directly.
+        // (b) Otherwise compute the coach dimensions from accumulated history.
+        //     Diagnose channels (governor EMA) cannot be recovered and stay at 0.
+        let turn_eval = match capsule.turn_eval {
+            Some(te) => Some(te),
+            None => {
+                // Only compute for conversational capsules (not git/replay sources)
+                // since coach scores only make sense for human+agent turns.
+                if meta.source != "git" && meta.source != "changelog" {
+                    let history_slice: Vec<crate::CapsuleHit> =
+                        reindex_history.iter().cloned().collect();
+                    let usage_ref: Option<crate::types::UsageMeta> = meta.usage.clone();
+                    let coach_input = crate::governor::CoachInput {
+                        capsule: &intent_capsule,
+                        history: &history_slice,
+                        exchange_text: "", // exchange text not stored in JSONL
+                        usage: usage_ref.as_ref(),
+                        session_turn_count: reindex_history.len() + 1,
+                    };
+                    let coach = crate::governor::compute_coach_scores(&coach_input);
+                    // Build a partial TurnEval: coach dimensions only, diagnose = 0
+                    let flags = crate::governor::compute_flags(
+                        &crate::types::SymptomChannels::default(),
+                        0.0,
+                        &coach,
+                        reindex_history.len() + 1,
+                    );
+                    let mut evidence = coach.evidence.clone();
+                    evidence.push("reindexed: diagnose channels unavailable".to_string());
+                    Some(crate::types::TurnEval {
+                        version: "v1-reindex".to_string(),
+                        // Agent tuning channels: not recoverable during reindex
+                        repetition: 0.0,
+                        novelty_collapse: 0.0,
+                        semantic_stall: 0.0,
+                        effort_spike: 0.0,
+                        alignment_debt: 0.0,
+                        path_hallucination: 0.0,
+                        grounding_stall: 0.0,
+                        instruction_staticness: 0.0,
+                        logic_churn: 0.0,
+                        fluency: 0.0,
+                        trajectory_intensity: 0.0,
+                        trajectory_state: crate::types::TrajectoryState::Stable,
+                        // Coach dimensions: computed from capsule content + history
+                        clarity: coach.clarity,
+                        context_freshness: coach.context_freshness,
+                        verification_rigor: coach.verification_rigor,
+                        decision_progress: coach.decision_progress,
+                        scope_discipline: coach.scope_discipline,
+                        flags,
+                        outcome_hint: "unclear".to_string(),
+                        evidence,
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+
+        // Update rolling history (newest first, max 8 entries)
+        let history_hit = crate::CapsuleHit {
+            id: format!("reindex-{}-{}", capsule.ts_ms, capsule.conn_id),
+            ts_ms: capsule.ts_ms,
+            conn_id: capsule.conn_id as i64,
+            exchange_seq: capsule.exchange_seq as i64,
+            distance: 0.0,
+            capsule: intent_capsule.clone(),
+            meta: meta.clone(),
+            user_emotion: None,
+            assistant_emotion: None,
+            head_sha: capsule.head_sha.clone(),
+            commit_sha: capsule.commit_sha.clone(),
+            turn_eval: turn_eval.clone(),
+        };
+        reindex_history.push_front(history_hit);
+        if reindex_history.len() > 8 {
+            reindex_history.pop_back();
+        }
+
         let embed_text = crate::storage::capsule_embed_text_with_prior(&intent_capsule, None);
         batch_texts.push(embed_text);
         batch_rows.push(BatchRow {
@@ -193,6 +281,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             capsule: intent_capsule,
             head_sha: capsule.head_sha,
             commit_sha: capsule.commit_sha,
+            turn_eval,
         });
 
         if batch_rows.len() >= BATCH_SIZE {
@@ -229,6 +318,7 @@ struct BatchRow {
     capsule: crate::IntentCapsule,
     head_sha: Option<String>,
     commit_sha: Option<String>,
+    turn_eval: Option<crate::types::TurnEval>,
 }
 
 /// Embed `batch_texts` in one ONNX call, pair with `batch_rows`,
@@ -262,6 +352,7 @@ async fn flush_batch(
             embedding: emb,
             head_sha: r.head_sha,
             commit_sha: r.commit_sha,
+            turn_eval: r.turn_eval,
         })
         .collect();
 

@@ -2512,6 +2512,11 @@ pub(crate) struct CapsuleRow {
     pub head_sha: Option<String>,
     /// git SHA of the commit that landed during this turn, if detected.
     pub commit_sha: Option<String>,
+    /// Turn-level evaluation metadata. Populated from JSONL for post-v0.13 capsules,
+    /// or computed from coach heuristics during reindex for older capsules.
+    /// Diagnose channels (governor EMA) remain at 0 for pre-v0.13 capsules since
+    /// that state is not recoverable from JSONL alone.
+    pub turn_eval: Option<crate::types::TurnEval>,
 }
 
 /// Insert a batch of capsule rows in a single LanceDB write.
@@ -2555,6 +2560,26 @@ pub(crate) async fn insert_capsule_batch(
     let mut questions_text_vec: Vec<Option<String>> = Vec::with_capacity(n);
     let mut head_sha_vec: Vec<Option<String>> = Vec::with_capacity(n);
     let mut commit_sha_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    // TurnEval accumulators — populated from row.turn_eval when present
+    let mut te_repetition_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_novelty_collapse_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_semantic_stall_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_effort_spike_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_alignment_debt_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_path_hallucination_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_grounding_stall_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_instruction_staticness_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_logic_churn_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_fluency_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_trajectory_intensity_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_trajectory_state_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut te_clarity_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_context_freshness_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_verification_rigor_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_decision_progress_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_scope_discipline_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_flags_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut te_outcome_hint_vec: Vec<Option<String>> = Vec::with_capacity(n);
     // Flat embedding storage: n * 384 f32 values
     let mut embeddings_flat: Vec<Option<Vec<Option<f32>>>> = Vec::with_capacity(n);
 
@@ -2598,6 +2623,64 @@ pub(crate) async fn insert_capsule_batch(
         });
         head_sha_vec.push(row.head_sha.clone());
         commit_sha_vec.push(row.commit_sha.clone());
+
+        // TurnEval — push Some(value) when present, None for old/reindexed rows
+        match &row.turn_eval {
+            Some(te) => {
+                te_repetition_vec.push(Some(te.repetition));
+                te_novelty_collapse_vec.push(Some(te.novelty_collapse));
+                te_semantic_stall_vec.push(Some(te.semantic_stall));
+                te_effort_spike_vec.push(Some(te.effort_spike));
+                te_alignment_debt_vec.push(Some(te.alignment_debt));
+                te_path_hallucination_vec.push(Some(te.path_hallucination));
+                te_grounding_stall_vec.push(Some(te.grounding_stall));
+                te_instruction_staticness_vec.push(Some(te.instruction_staticness));
+                te_logic_churn_vec.push(Some(te.logic_churn));
+                te_fluency_vec.push(Some(te.fluency));
+                te_trajectory_intensity_vec.push(Some(te.trajectory_intensity));
+                te_trajectory_state_vec.push(Some(match te.trajectory_state {
+                    crate::types::TrajectoryState::Stable => "stable".to_string(),
+                    crate::types::TrajectoryState::Watch => "watch".to_string(),
+                    crate::types::TrajectoryState::Intervene => "intervene".to_string(),
+                }));
+                te_clarity_vec.push(Some(te.clarity));
+                te_context_freshness_vec.push(Some(te.context_freshness));
+                te_verification_rigor_vec.push(Some(te.verification_rigor));
+                te_decision_progress_vec.push(Some(te.decision_progress));
+                te_scope_discipline_vec.push(Some(te.scope_discipline));
+                te_flags_vec.push(if te.flags.is_empty() {
+                    None
+                } else {
+                    Some(te.flags.join(","))
+                });
+                te_outcome_hint_vec.push(if te.outcome_hint.is_empty() {
+                    None
+                } else {
+                    Some(te.outcome_hint.clone())
+                });
+            }
+            None => {
+                te_repetition_vec.push(None);
+                te_novelty_collapse_vec.push(None);
+                te_semantic_stall_vec.push(None);
+                te_effort_spike_vec.push(None);
+                te_alignment_debt_vec.push(None);
+                te_path_hallucination_vec.push(None);
+                te_grounding_stall_vec.push(None);
+                te_instruction_staticness_vec.push(None);
+                te_logic_churn_vec.push(None);
+                te_fluency_vec.push(None);
+                te_trajectory_intensity_vec.push(None);
+                te_trajectory_state_vec.push(None);
+                te_clarity_vec.push(None);
+                te_context_freshness_vec.push(None);
+                te_verification_rigor_vec.push(None);
+                te_decision_progress_vec.push(None);
+                te_scope_discipline_vec.push(None);
+                te_flags_vec.push(None);
+                te_outcome_hint_vec.push(None);
+            }
+        }
 
         if row.embedding.len() != 384 {
             anyhow::bail!(
@@ -2704,26 +2787,33 @@ pub(crate) async fn insert_capsule_batch(
                     .map(|o| o.as_deref())
                     .collect::<Vec<_>>(),
             )),
-            // TurnEval columns: all null for replayed/reindexed rows (no live governor data).
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(StringArray::from(null_str.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(Float32Array::from(null_f32.clone())),
-            Arc::new(StringArray::from(null_str.clone())),
-            Arc::new(StringArray::from(null_str.clone())),
+            // TurnEval columns — populated from row.turn_eval; null for old/reindexed rows
+            // that predate v0.13 and have no JSONL turn_eval field.
+            Arc::new(Float32Array::from(te_repetition_vec)),
+            Arc::new(Float32Array::from(te_novelty_collapse_vec)),
+            Arc::new(Float32Array::from(te_semantic_stall_vec)),
+            Arc::new(Float32Array::from(te_effort_spike_vec)),
+            Arc::new(Float32Array::from(te_alignment_debt_vec)),
+            Arc::new(Float32Array::from(te_path_hallucination_vec)),
+            Arc::new(Float32Array::from(te_grounding_stall_vec)),
+            Arc::new(Float32Array::from(te_instruction_staticness_vec)),
+            Arc::new(Float32Array::from(te_logic_churn_vec)),
+            Arc::new(Float32Array::from(te_fluency_vec)),
+            Arc::new(Float32Array::from(te_trajectory_intensity_vec)),
+            Arc::new(StringArray::from(
+                te_trajectory_state_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
+            )),
+            Arc::new(Float32Array::from(te_clarity_vec)),
+            Arc::new(Float32Array::from(te_context_freshness_vec)),
+            Arc::new(Float32Array::from(te_verification_rigor_vec)),
+            Arc::new(Float32Array::from(te_decision_progress_vec)),
+            Arc::new(Float32Array::from(te_scope_discipline_vec)),
+            Arc::new(StringArray::from(
+                te_flags_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                te_outcome_hint_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
+            )),
         ],
     )
     .context("failed to build batch insert RecordBatch")?;
