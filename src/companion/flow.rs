@@ -31,6 +31,7 @@ static CONN_SEQ: AtomicU64 = AtomicU64::new(1);
 pub(crate) enum AgentKind {
     OpenCode,
     Claude,
+    Copilot,
 }
 
 impl AgentKind {
@@ -39,6 +40,7 @@ impl AgentKind {
         match self {
             AgentKind::OpenCode => "opencode",
             AgentKind::Claude => "claude",
+            AgentKind::Copilot => "copilot",
         }
     }
 }

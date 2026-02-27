@@ -321,6 +321,12 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 unlost::companion::shims::claude::run(embed_model, embed_cache_dir).await?;
             }
+            ShimCommand::Copilot {
+                embed_model,
+                embed_cache_dir,
+            } => {
+                unlost::companion::shims::copilot::run(embed_model, embed_cache_dir).await?;
+            }
             ShimCommand::Replay { command } => {
                 handle_replay(command).await?;
             }
