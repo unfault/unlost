@@ -380,6 +380,91 @@ pub(crate) async fn open_capsules_table(
         .map_err(|e| anyhow::anyhow!("capsules table not found: {e}"))
 }
 
+/// Read TurnEval fields from a single Arrow row. Returns `None` for old capsules
+/// that pre-date the te_* columns (all values would be zero/empty).
+#[allow(clippy::too_many_arguments)]
+fn read_turn_eval(
+    row: usize,
+    te_repetition_col: Option<&Float32Array>,
+    te_novelty_collapse_col: Option<&Float32Array>,
+    te_semantic_stall_col: Option<&Float32Array>,
+    te_effort_spike_col: Option<&Float32Array>,
+    te_alignment_debt_col: Option<&Float32Array>,
+    te_path_hallucination_col: Option<&Float32Array>,
+    te_grounding_stall_col: Option<&Float32Array>,
+    te_instruction_staticness_col: Option<&Float32Array>,
+    te_logic_churn_col: Option<&Float32Array>,
+    te_fluency_col: Option<&Float32Array>,
+    te_trajectory_intensity_col: Option<&Float32Array>,
+    te_trajectory_state_col: Option<&StringArray>,
+    te_clarity_col: Option<&Float32Array>,
+    te_context_freshness_col: Option<&Float32Array>,
+    te_verification_rigor_col: Option<&Float32Array>,
+    te_decision_progress_col: Option<&Float32Array>,
+    te_scope_discipline_col: Option<&Float32Array>,
+    te_flags_col: Option<&StringArray>,
+    te_outcome_hint_col: Option<&StringArray>,
+) -> Option<crate::types::TurnEval> {
+    let read_f32 = |col: Option<&Float32Array>| -> f32 {
+        col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+            .unwrap_or(0.0)
+    };
+
+    let intensity = read_f32(te_trajectory_intensity_col);
+    let clarity = read_f32(te_clarity_col);
+    let flags_raw = te_flags_col
+        .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
+        .unwrap_or_default();
+
+    // Skip building TurnEval for old capsules that have no data.
+    if intensity == 0.0 && clarity == 0.0 && flags_raw.is_empty() {
+        return None;
+    }
+
+    let traj_state = te_trajectory_state_col
+        .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+        .map(|s| match s {
+            "watch" => crate::types::TrajectoryState::Watch,
+            "intervene" => crate::types::TrajectoryState::Intervene,
+            _ => crate::types::TrajectoryState::Stable,
+        })
+        .unwrap_or_default();
+
+    let flags: Vec<String> = flags_raw
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    let outcome_hint = te_outcome_hint_col
+        .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
+        .unwrap_or_default();
+
+    Some(crate::types::TurnEval {
+        version: "v1".to_string(),
+        repetition: read_f32(te_repetition_col),
+        novelty_collapse: read_f32(te_novelty_collapse_col),
+        semantic_stall: read_f32(te_semantic_stall_col),
+        effort_spike: read_f32(te_effort_spike_col),
+        alignment_debt: read_f32(te_alignment_debt_col),
+        path_hallucination: read_f32(te_path_hallucination_col),
+        grounding_stall: read_f32(te_grounding_stall_col),
+        instruction_staticness: read_f32(te_instruction_staticness_col),
+        logic_churn: read_f32(te_logic_churn_col),
+        fluency: read_f32(te_fluency_col),
+        trajectory_intensity: intensity,
+        trajectory_state: traj_state,
+        clarity,
+        context_freshness: read_f32(te_context_freshness_col),
+        verification_rigor: read_f32(te_verification_rigor_col),
+        decision_progress: read_f32(te_decision_progress_col),
+        scope_discipline: read_f32(te_scope_discipline_col),
+        flags,
+        outcome_hint,
+        evidence: vec![],
+    })
+}
+
 /// Convert a slice of Arrow RecordBatches from the capsules table into
 /// `CapsuleHit` values. Shared by the checkpoint module to avoid duplicating
 /// the full inline conversion loop.
@@ -623,62 +708,28 @@ pub(crate) fn record_batches_to_hits(
             let commit_sha = commit_sha_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
 
-            // Read TurnEval fields (best-effort — all nullable for backward compat).
-            let read_te_f32 = |col: Option<&Float32Array>| -> f32 {
-                col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
-                    .unwrap_or(0.0)
-            };
-            let te_traj_state = te_trajectory_state_col
-                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
-                .map(|s| match s {
-                    "watch" => crate::types::TrajectoryState::Watch,
-                    "intervene" => crate::types::TrajectoryState::Intervene,
-                    _ => crate::types::TrajectoryState::Stable,
-                })
-                .unwrap_or_default();
-            let te_flags_raw = te_flags_col
-                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
-                .unwrap_or_default();
-            let te_flags: Vec<String> = te_flags_raw
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
-            let te_outcome_hint = te_outcome_hint_col
-                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
-                .unwrap_or_default();
-
-            // Only materialise TurnEval if we have at least one non-default value.
-            let turn_eval = if read_te_f32(te_trajectory_intensity_col) > 0.0
-                || read_te_f32(te_clarity_col) > 0.0
-                || !te_flags.is_empty()
-            {
-                Some(crate::types::TurnEval {
-                    version: "v1".to_string(),
-                    repetition: read_te_f32(te_repetition_col),
-                    novelty_collapse: read_te_f32(te_novelty_collapse_col),
-                    semantic_stall: read_te_f32(te_semantic_stall_col),
-                    effort_spike: read_te_f32(te_effort_spike_col),
-                    alignment_debt: read_te_f32(te_alignment_debt_col),
-                    path_hallucination: read_te_f32(te_path_hallucination_col),
-                    grounding_stall: read_te_f32(te_grounding_stall_col),
-                    instruction_staticness: read_te_f32(te_instruction_staticness_col),
-                    logic_churn: read_te_f32(te_logic_churn_col),
-                    fluency: read_te_f32(te_fluency_col),
-                    trajectory_intensity: read_te_f32(te_trajectory_intensity_col),
-                    trajectory_state: te_traj_state,
-                    clarity: read_te_f32(te_clarity_col),
-                    context_freshness: read_te_f32(te_context_freshness_col),
-                    verification_rigor: read_te_f32(te_verification_rigor_col),
-                    decision_progress: read_te_f32(te_decision_progress_col),
-                    scope_discipline: read_te_f32(te_scope_discipline_col),
-                    flags: te_flags,
-                    outcome_hint: te_outcome_hint,
-                    evidence: vec![],
-                })
-            } else {
-                None
-            };
+            let turn_eval = read_turn_eval(
+                row,
+                te_repetition_col,
+                te_novelty_collapse_col,
+                te_semantic_stall_col,
+                te_effort_spike_col,
+                te_alignment_debt_col,
+                te_path_hallucination_col,
+                te_grounding_stall_col,
+                te_instruction_staticness_col,
+                te_logic_churn_col,
+                te_fluency_col,
+                te_trajectory_intensity_col,
+                te_trajectory_state_col,
+                te_clarity_col,
+                te_context_freshness_col,
+                te_verification_rigor_col,
+                te_decision_progress_col,
+                te_scope_discipline_col,
+                te_flags_col,
+                te_outcome_hint_col,
+            );
 
             let cap = crate::types::IntentCapsule {
                 category: cat.to_string(),
@@ -941,6 +992,25 @@ pub(crate) async fn query_capsules_lancedb(
             idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let head_sha_col = col_str("head_sha");
         let commit_sha_col = col_str("commit_sha");
+        let te_repetition_col = col_f32("te_repetition");
+        let te_novelty_collapse_col = col_f32("te_novelty_collapse");
+        let te_semantic_stall_col = col_f32("te_semantic_stall");
+        let te_effort_spike_col = col_f32("te_effort_spike");
+        let te_alignment_debt_col = col_f32("te_alignment_debt");
+        let te_path_hallucination_col = col_f32("te_path_hallucination");
+        let te_grounding_stall_col = col_f32("te_grounding_stall");
+        let te_instruction_staticness_col = col_f32("te_instruction_staticness");
+        let te_logic_churn_col = col_f32("te_logic_churn");
+        let te_fluency_col = col_f32("te_fluency");
+        let te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
+        let te_trajectory_state_col = col_str("te_trajectory_state");
+        let te_clarity_col = col_f32("te_clarity");
+        let te_context_freshness_col = col_f32("te_context_freshness");
+        let te_verification_rigor_col = col_f32("te_verification_rigor");
+        let te_decision_progress_col = col_f32("te_decision_progress");
+        let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_flags_col = col_str("te_flags");
+        let te_outcome_hint_col = col_str("te_outcome_hint");
 
         for row in 0..batch.num_rows() {
             // In fallback mode, we may over-fetch; we'll filter+truncate below.
@@ -1102,7 +1172,28 @@ pub(crate) async fn query_capsules_lancedb(
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                 commit_sha: commit_sha_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
-                turn_eval: None,
+                turn_eval: read_turn_eval(
+                    row,
+                    te_repetition_col,
+                    te_novelty_collapse_col,
+                    te_semantic_stall_col,
+                    te_effort_spike_col,
+                    te_alignment_debt_col,
+                    te_path_hallucination_col,
+                    te_grounding_stall_col,
+                    te_instruction_staticness_col,
+                    te_logic_churn_col,
+                    te_fluency_col,
+                    te_trajectory_intensity_col,
+                    te_trajectory_state_col,
+                    te_clarity_col,
+                    te_context_freshness_col,
+                    te_verification_rigor_col,
+                    te_decision_progress_col,
+                    te_scope_discipline_col,
+                    te_flags_col,
+                    te_outcome_hint_col,
+                ),
             });
         }
     }
@@ -1379,6 +1470,25 @@ async fn scan_capsules_lancedb_impl(
         let questions_text_col = col_str("questions_text");
         let head_sha_col = col_str("head_sha");
         let commit_sha_col = col_str("commit_sha");
+        let te_repetition_col = col_f32("te_repetition");
+        let te_novelty_collapse_col = col_f32("te_novelty_collapse");
+        let te_semantic_stall_col = col_f32("te_semantic_stall");
+        let te_effort_spike_col = col_f32("te_effort_spike");
+        let te_alignment_debt_col = col_f32("te_alignment_debt");
+        let te_path_hallucination_col = col_f32("te_path_hallucination");
+        let te_grounding_stall_col = col_f32("te_grounding_stall");
+        let te_instruction_staticness_col = col_f32("te_instruction_staticness");
+        let te_logic_churn_col = col_f32("te_logic_churn");
+        let te_fluency_col = col_f32("te_fluency");
+        let te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
+        let te_trajectory_state_col = col_str("te_trajectory_state");
+        let te_clarity_col = col_f32("te_clarity");
+        let te_context_freshness_col = col_f32("te_context_freshness");
+        let te_verification_rigor_col = col_f32("te_verification_rigor");
+        let te_decision_progress_col = col_f32("te_decision_progress");
+        let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_flags_col = col_str("te_flags");
+        let te_outcome_hint_col = col_str("te_outcome_hint");
 
         for row in 0..batch.num_rows() {
             // Skip early-exit when recent_first since we need all rows to sort
@@ -1543,7 +1653,28 @@ async fn scan_capsules_lancedb_impl(
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                 commit_sha: commit_sha_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
-                turn_eval: None,
+                turn_eval: read_turn_eval(
+                    row,
+                    te_repetition_col,
+                    te_novelty_collapse_col,
+                    te_semantic_stall_col,
+                    te_effort_spike_col,
+                    te_alignment_debt_col,
+                    te_path_hallucination_col,
+                    te_grounding_stall_col,
+                    te_instruction_staticness_col,
+                    te_logic_churn_col,
+                    te_fluency_col,
+                    te_trajectory_intensity_col,
+                    te_trajectory_state_col,
+                    te_clarity_col,
+                    te_context_freshness_col,
+                    te_verification_rigor_col,
+                    te_decision_progress_col,
+                    te_scope_discipline_col,
+                    te_flags_col,
+                    te_outcome_hint_col,
+                ),
             });
         }
     }
@@ -1892,26 +2023,26 @@ pub(crate) async fn trace_capsules_lancedb(
                 idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let head_sha_col = col_str("head_sha");
         let commit_sha_col = col_str("commit_sha");
-        // TurnEval columns — declared for future use when this scan path surfaces turn_eval.
-        let _te_repetition_col = col_f32("te_repetition");
-        let _te_novelty_collapse_col = col_f32("te_novelty_collapse");
-        let _te_semantic_stall_col = col_f32("te_semantic_stall");
-        let _te_effort_spike_col = col_f32("te_effort_spike");
-        let _te_alignment_debt_col = col_f32("te_alignment_debt");
-        let _te_path_hallucination_col = col_f32("te_path_hallucination");
-        let _te_grounding_stall_col = col_f32("te_grounding_stall");
-        let _te_instruction_staticness_col = col_f32("te_instruction_staticness");
-        let _te_logic_churn_col = col_f32("te_logic_churn");
-        let _te_fluency_col = col_f32("te_fluency");
-        let _te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
-        let _te_trajectory_state_col = col_str("te_trajectory_state");
-        let _te_clarity_col = col_f32("te_clarity");
-        let _te_context_freshness_col = col_f32("te_context_freshness");
-        let _te_verification_rigor_col = col_f32("te_verification_rigor");
-        let _te_decision_progress_col = col_f32("te_decision_progress");
-        let _te_scope_discipline_col = col_f32("te_scope_discipline");
-        let _te_flags_col = col_str("te_flags");
-        let _te_outcome_hint_col = col_str("te_outcome_hint");
+        // TurnEval columns
+        let te_repetition_col = col_f32("te_repetition");
+        let te_novelty_collapse_col = col_f32("te_novelty_collapse");
+        let te_semantic_stall_col = col_f32("te_semantic_stall");
+        let te_effort_spike_col = col_f32("te_effort_spike");
+        let te_alignment_debt_col = col_f32("te_alignment_debt");
+        let te_path_hallucination_col = col_f32("te_path_hallucination");
+        let te_grounding_stall_col = col_f32("te_grounding_stall");
+        let te_instruction_staticness_col = col_f32("te_instruction_staticness");
+        let te_logic_churn_col = col_f32("te_logic_churn");
+        let te_fluency_col = col_f32("te_fluency");
+        let te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
+        let te_trajectory_state_col = col_str("te_trajectory_state");
+        let te_clarity_col = col_f32("te_clarity");
+        let te_context_freshness_col = col_f32("te_context_freshness");
+        let te_verification_rigor_col = col_f32("te_verification_rigor");
+        let te_decision_progress_col = col_f32("te_decision_progress");
+        let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_flags_col = col_str("te_flags");
+        let te_outcome_hint_col = col_str("te_outcome_hint");
 
         for row in 0..batch.num_rows() {
                 let id = match id_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row))) {
@@ -2081,7 +2212,28 @@ pub(crate) async fn trace_capsules_lancedb(
                             .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                         commit_sha: commit_sha_col
                             .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
-                        turn_eval: None,
+                        turn_eval: read_turn_eval(
+                            row,
+                            te_repetition_col,
+                            te_novelty_collapse_col,
+                            te_semantic_stall_col,
+                            te_effort_spike_col,
+                            te_alignment_debt_col,
+                            te_path_hallucination_col,
+                            te_grounding_stall_col,
+                            te_instruction_staticness_col,
+                            te_logic_churn_col,
+                            te_fluency_col,
+                            te_trajectory_intensity_col,
+                            te_trajectory_state_col,
+                            te_clarity_col,
+                            te_context_freshness_col,
+                            te_verification_rigor_col,
+                            te_decision_progress_col,
+                            te_scope_discipline_col,
+                            te_flags_col,
+                            te_outcome_hint_col,
+                        ),
                     },
                 );
 

@@ -14,6 +14,7 @@ pub mod pr_comment;
 pub mod query;
 pub mod recall;
 pub mod record;
+pub mod reflect;
 pub mod reindex;
 pub mod serve;
 pub mod trace;
