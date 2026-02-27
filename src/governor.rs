@@ -1426,7 +1426,7 @@ pub fn compute_coach_scores(input: &CoachInput<'_>) -> CoachScores {
     }
 }
 
-/// Derive behavioral flags from combined diagnose + coach scores.
+/// Derive behavioral flags from combined tune + coach scores.
 pub fn compute_flags(
     channels: &SymptomChannels,
     intensity: f32,

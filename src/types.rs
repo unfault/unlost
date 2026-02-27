@@ -158,7 +158,7 @@ pub struct IntentCapsule {
 /// Turn-level evaluation metadata, computed on-the-fly during flush with zero LLM calls.
 ///
 /// Combines:
-/// - **Agent tuning (diagnose)**: persisted governor SymptomChannels (already computed,
+/// - **Agent tuning (tune)**: persisted governor SymptomChannels (already computed,
 ///   previously discarded after friction decisions).
 /// - **Developer coaching (coach)**: heuristic scores about request quality, session health,
 ///   verification discipline, and scope management.
@@ -171,7 +171,7 @@ pub struct TurnEval {
     #[serde(default)]
     pub version: String,
 
-    // ── Agent tuning (diagnose) ──────────────────────────────────────────────
+    // ── Agent tuning (tune) ──────────────────────────────────────────────────
     /// EMA-smoothed governor channel: symbol/topic repetition without progress.
     #[serde(default)]
     pub repetition: f32,
@@ -292,7 +292,7 @@ pub struct CapsuleHit {
     pub head_sha: Option<String>,
     /// git SHA of the commit that landed during this turn, if detected (sparse).
     pub commit_sha: Option<String>,
-    /// Turn-level evaluation metadata (coach + diagnose dimensions).
+    /// Turn-level evaluation metadata (coach + tune dimensions).
     pub turn_eval: Option<TurnEval>,
 }
 

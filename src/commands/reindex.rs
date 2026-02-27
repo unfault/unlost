@@ -193,7 +193,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
         // Determine TurnEval for this capsule:
         // (a) If the JSONL already has turn_eval (post-v0.13), use it directly.
         // (b) Otherwise compute the coach dimensions from accumulated history.
-        //     Diagnose channels (governor EMA) cannot be recovered and stay at 0.
+        //     Tune channels (governor EMA) cannot be recovered and stay at 0.
         let turn_eval = match capsule.turn_eval {
             Some(te) => Some(te),
             None => {
@@ -211,7 +211,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
                         session_turn_count: reindex_history.len() + 1,
                     };
                     let coach = crate::governor::compute_coach_scores(&coach_input);
-                    // Build a partial TurnEval: coach dimensions only, diagnose = 0
+                    // Build a partial TurnEval: coach dimensions only, tune channels = 0
                     let flags = crate::governor::compute_flags(
                         &crate::types::SymptomChannels::default(),
                         0.0,
@@ -219,10 +219,10 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
                         reindex_history.len() + 1,
                     );
                     let mut evidence = coach.evidence.clone();
-                    evidence.push("reindexed: diagnose channels unavailable".to_string());
+                    evidence.push("reindexed: tune channels unavailable".to_string());
                     Some(crate::types::TurnEval {
                         version: "v1-reindex".to_string(),
-                        // Agent tuning channels: not recoverable during reindex
+                        // Tune channels: not recoverable during reindex
                         repetition: 0.0,
                         novelty_collapse: 0.0,
                         semantic_stall: 0.0,

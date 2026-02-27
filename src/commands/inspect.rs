@@ -149,7 +149,7 @@ pub async fn run(
                         te.version, te.trajectory_intensity, te.trajectory_state
                     );
                     println!(
-                        "  diagnose: rep={:.2} nov={:.2} sem={:.2} eff={:.2} align={:.2} \
+                        "  tune:     rep={:.2} nov={:.2} sem={:.2} eff={:.2} align={:.2} \
                          hall={:.2} stall={:.2} inst={:.2} churn={:.2} fluency={:.2}",
                         te.repetition,
                         te.novelty_collapse,

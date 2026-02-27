@@ -96,9 +96,8 @@ pub async fn run(
         pb.finish_and_clear();
     }
 
-    let out = crate::narrative::render_narrative(output, &narrative);
-    println!("{}", out);
-    println!();
+    let out = crate::narrative::render_reflect(output, mode, &narrative);
+    print!("{}", out);
 
     Ok(())
 }

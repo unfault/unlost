@@ -1651,7 +1651,7 @@ Rules:\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
 - Max 300 words total.";
 
-const REFLECT_DIAGNOSE_PREAMBLE: &str = "\
+const REFLECT_TUNE_PREAMBLE: &str = "\
 You are an AI agent reliability analyst reviewing a coding session.\n\
 Given a structured turn-by-turn evaluation timeline, identify where the agent \
 drifted, looped, hallucinated, or failed to follow instructions.\n\
@@ -1732,13 +1732,13 @@ fn build_reflect_context(
                     te.scope_discipline,
                 ));
             }
-            crate::cli::ReflectMode::Diagnose => {}
+            crate::cli::ReflectMode::Tune => {}
         }
 
         match mode {
-            crate::cli::ReflectMode::Diagnose | crate::cli::ReflectMode::Both => {
+            crate::cli::ReflectMode::Tune | crate::cli::ReflectMode::Both => {
                 ctx.push_str(&format!(
-                    "  diagnose: intensity={:.2} state={:?} rep={:.2} align={:.2} \
+                    "  tune: intensity={:.2} state={:?} rep={:.2} align={:.2} \
                      hall={:.2} churn={:.2} fluency={:.2}\n",
                     te.trajectory_intensity,
                     te.trajectory_state,
@@ -1749,7 +1749,7 @@ fn build_reflect_context(
                     te.fluency,
                 ));
             }
-            crate::cli::ReflectMode::Coach => {}
+            crate::cli::ReflectMode::Coach => {} // tune-only block above
         }
 
         if !te.flags.is_empty() {
@@ -1824,6 +1824,216 @@ fn build_reflect_context(
     ctx
 }
 
+/// Render the reflect narrative with ANSI colour coding.
+///
+/// Section headers are bold white; bullets use a cyan dash; score evidence is
+/// green/yellow/red depending on value; `(low confidence)` markers are yellow.
+pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode, s: &str) -> String {
+    let output = if std::env::var_os("NO_COLOR").is_some() {
+        OutputFormat::Plain
+    } else {
+        output
+    };
+
+    let s = crate::util::strip_llm_boilerplate(s.trim().to_string());
+
+    if output == OutputFormat::Plain {
+        return s;
+    }
+
+    // Section headers for each mode
+    const COACH_HEADERS: &[&str] = &[
+        "SESSION QUALITY",
+        "WHAT WORKED",
+        "FRICTION POINTS",
+        "RECOMMENDATIONS",
+    ];
+    const TUNE_HEADERS: &[&str] = &[
+        "AGENT HEALTH",
+        "FAILURE PATTERNS",
+        "STABILITY SIGNALS",
+        "TUNING RECOMMENDATIONS",
+    ];
+    const BOTH_HEADERS: &[&str] = &[
+        "SESSION QUALITY",
+        "DEVELOPER PATTERNS",
+        "AGENT PATTERNS",
+        "SHARED FRICTION",
+        "NEXT SESSION",
+    ];
+
+    let headers: &[&str] = match mode {
+        crate::cli::ReflectMode::Coach => COACH_HEADERS,
+        crate::cli::ReflectMode::Tune => TUNE_HEADERS,
+        crate::cli::ReflectMode::Both => BOTH_HEADERS,
+    };
+
+    // Mode badge colour
+    let (mode_label, mode_colour) = match mode {
+        crate::cli::ReflectMode::Coach => ("COACH", "\x1b[1;34m"),    // bold blue
+        crate::cli::ReflectMode::Tune  => ("TUNE",  "\x1b[1;35m"),    // bold magenta
+        crate::cli::ReflectMode::Both  => ("BOTH",  "\x1b[1;96m"),    // bold cyan
+    };
+
+    let mut out = String::with_capacity(s.len() + 512);
+
+    // Top badge
+    out.push_str(mode_colour);
+    out.push_str("unlost reflect");
+    out.push_str("\x1b[0m");
+    out.push_str("  \x1b[2m──\x1b[0m  ");
+    out.push_str(mode_colour);
+    out.push_str(mode_label);
+    out.push_str("\x1b[0m\n\n");
+
+    const WRAP: usize = 80;
+
+    for line in s.lines() {
+        let l = line.trim_end();
+        let trimmed = l.trim();
+
+        // Detect section header: line that is one of the known headers (with optional colon)
+        let header_match = headers.iter().find(|&&h| {
+            let norm = trimmed.trim_end_matches(':').trim();
+            norm.eq_ignore_ascii_case(h)
+        });
+
+        if let Some(&header) = header_match {
+            // Blank line before each section (except very first)
+            if !out.ends_with("\n\n") && !out.ends_with("m\n\n") {
+                out.push('\n');
+            }
+            // Bold header in mode colour
+            out.push_str(mode_colour);
+            out.push_str(header);
+            out.push_str("\x1b[0m");
+            // Colon if original had one
+            if trimmed.ends_with(':') {
+                out.push(':');
+            }
+            out.push('\n');
+            continue;
+        }
+
+        // Bullet point lines
+        if trimmed.starts_with("- ") || trimmed.starts_with("• ") {
+            let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
+            let bullet_content = trimmed[2..].trim();
+            let hang = indent.len() + 2; // hanging indent for wrapped continuation
+
+            // Render the bullet dash in cyan
+            out.push_str(&indent);
+            out.push_str("\x1b[36m-\x1b[0m ");
+
+            // Render the content with inline colouring
+            let coloured = colour_reflect_inline(bullet_content);
+            // Word-wrap
+            for (wi, wl) in wrap_ansi_line(&coloured, WRAP.saturating_sub(hang + 2), 0).iter().enumerate() {
+                if wi > 0 {
+                    out.push('\n');
+                    for _ in 0..hang {
+                        out.push(' ');
+                    }
+                }
+                out.push_str(wl);
+            }
+            out.push('\n');
+            continue;
+        }
+
+        // Plain line — inline colouring only
+        if trimmed.is_empty() {
+            out.push('\n');
+        } else {
+            let coloured = colour_reflect_inline(trimmed);
+            out.push_str(&coloured);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+/// Apply inline ANSI colour to reflect narrative text:
+/// - `(low confidence)` → yellow
+/// - `key=0.NN` score patterns → green/yellow/red by value
+/// - `turn N` references → dim cyan
+/// - backtick code spans → green (reuse existing helper)
+fn colour_reflect_inline(s: &str) -> String {
+    // First pass: colorize backtick spans using existing helper
+    let s = colorize_backticks(s);
+
+    // Second pass: (low confidence) → yellow
+    let s = s.replace(
+        "(low confidence)",
+        "\x1b[33m(low confidence)\x1b[0m",
+    );
+
+    // Third pass: score patterns like `clarity=0.72`, `align=0.31` → coloured
+    // We do a simple scan for `word=0.NN` patterns
+    let mut result = String::with_capacity(s.len() + 64);
+    let mut remaining = s.as_str();
+    while let Some(eq_pos) = remaining.find('=') {
+        // Check that what follows is a float
+        let after_eq = &remaining[eq_pos + 1..];
+        if after_eq.starts_with("0.") || after_eq.starts_with("1.") {
+            // Find the end of the number
+            let num_end = after_eq
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .count();
+            if num_end >= 3 {
+                let num_str = &after_eq[..num_end];
+                if let Ok(val) = num_str.parse::<f32>() {
+                    // Push everything before the `=`
+                    result.push_str(&remaining[..eq_pos + 1]);
+                    // Colour by value
+                    let colour = if val >= 0.65 {
+                        "\x1b[32m" // green: healthy / high
+                    } else if val >= 0.35 {
+                        "\x1b[33m" // yellow: moderate
+                    } else {
+                        "\x1b[31m" // red: low / concern
+                    };
+                    result.push_str(colour);
+                    result.push_str(num_str);
+                    result.push_str("\x1b[0m");
+                    remaining = &after_eq[num_end..];
+                    continue;
+                }
+            }
+        }
+        // No match — push up to and including `=`
+        result.push_str(&remaining[..eq_pos + 1]);
+        remaining = &remaining[eq_pos + 1..];
+    }
+    result.push_str(remaining);
+
+    // Fourth pass: "turn N" or "Turn N" → dim cyan (char-safe)
+    let mut final_out = String::with_capacity(result.len() + 32);
+    let mut rest = result.as_str();
+    while !rest.is_empty() {
+        if rest.starts_with("turn ") || rest.starts_with("Turn ") {
+            let prefix = &rest[..5];
+            let digits: String = rest[5..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() {
+                final_out.push_str("\x1b[2;36m");
+                final_out.push_str(prefix);
+                final_out.push_str(&digits);
+                final_out.push_str("\x1b[0m");
+                rest = &rest[5 + digits.len()..];
+                continue;
+            }
+        }
+        // Advance one Unicode scalar
+        let ch = rest.chars().next().unwrap();
+        final_out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+
+    final_out
+}
+
 pub(crate) async fn llm_reflect_narrative(
     llm_model_override: Option<&str>,
     mode: crate::cli::ReflectMode,
@@ -1832,7 +2042,7 @@ pub(crate) async fn llm_reflect_narrative(
 ) -> anyhow::Result<String> {
     let preamble = match mode {
         crate::cli::ReflectMode::Coach => REFLECT_COACH_PREAMBLE,
-        crate::cli::ReflectMode::Diagnose => REFLECT_DIAGNOSE_PREAMBLE,
+        crate::cli::ReflectMode::Tune => REFLECT_TUNE_PREAMBLE,
         crate::cli::ReflectMode::Both => REFLECT_BOTH_PREAMBLE,
     };
 

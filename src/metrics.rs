@@ -22,7 +22,7 @@ pub(crate) enum MetricsEvent {
         assistant_emotion: Option<String>,
         /// Failure mode detected by LLM semantic analysis
         failure_mode: Option<String>,
-        /// TurnEval: composite trajectory intensity (diagnose)
+        /// TurnEval: composite trajectory intensity (tune)
         #[serde(default)]
         te_intensity: Option<f32>,
         /// TurnEval: developer coaching clarity score
