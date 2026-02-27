@@ -155,6 +155,8 @@ struct BackgroundState {
     /// uses this as `prior_decision` in the embed text, even if the chunker's buffer
     /// was flushed before the worker finished.
     last_decisions: HashMap<String, String>,
+    /// Cumulative turn count per agent session ID, used to compute context_freshness.
+    session_turn_counts: HashMap<String, usize>,
 }
 
 impl BackgroundState {
@@ -172,6 +174,7 @@ impl BackgroundState {
             extraction_mode,
             llm_calls: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_decisions: HashMap::new(),
+            session_turn_counts: HashMap::new(),
         }
     }
 
@@ -523,10 +526,12 @@ impl Flow {
         let commit_mentioned = looks_like_commit_or_pr(&exchange_text);
         let conn_id = CONN_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        // Sticky session ID for the controller + session transition detection
-        let final_session_id = {
+        // Sticky session ID for the controller + session transition detection.
+        // Also grab the last governor channels snapshot for TurnEval construction.
+        let (final_session_id, turn_eval_channels) = {
             let controller = self.state.controllers.entry(ws.id.clone()).or_default();
             let prev_session = controller.last_agent_session_id.clone();
+            let channels = controller.last_channels.take();
             if let Some(ref sid) = event.agent_session_id {
                 controller.last_agent_session_id = Some(sid.clone());
             }
@@ -555,10 +560,11 @@ impl Flow {
                 }
             }
 
-            event
+            let sid = event
                 .agent_session_id
                 .clone()
-                .or_else(|| controller.last_agent_session_id.clone())
+                .or_else(|| controller.last_agent_session_id.clone());
+            (sid, channels)
         };
 
         let item = ChunkInput {
@@ -573,6 +579,7 @@ impl Flow {
             grounding_note: event.grounding_note,
             source_ts_ms: event.source_ts_ms,
             workspace_root: ws.root.clone(),
+            turn_eval_channels,
         };
 
         // Ingest into chunker (may or may not produce a flush job depending on boundaries).
@@ -794,6 +801,97 @@ async fn process_flush_job(
         metrics_jsonl: ws_dir.join("metrics.jsonl"),
     };
 
+    // ── Build TurnEval ────────────────────────────────────────────────────────
+    // All heuristic — zero LLM calls. Uses:
+    // (a) Governor channels snapshot carried in from check_friction via ChunkInput.
+    // (b) Coach scores derived from the capsule + prior history + exchange text.
+    let turn_eval = {
+        // Query recent capsule history for coach scoring. Best-effort; empty on error.
+        // We take the last 8 capsules regardless of session — recent history is what matters
+        // for scoring clarity, scope, and progress.
+        let history = match crate::storage::scan_capsules_lancedb(
+            &ws, 8, None, None, None, None, None,
+        )
+        .await
+        {
+            Ok(h) => h,
+            Err(_) => vec![],
+        };
+
+        // Resolve session turn count from background state.
+        let session_turn_count = {
+            let mut st = state.lock().await;
+            let sid = job.meta.agent_session_id.as_deref().unwrap_or("__none__");
+            let count = st.session_turn_counts.entry(sid.to_string()).or_insert(0);
+            *count += 1;
+            *count
+        };
+
+        let coach_input = crate::governor::CoachInput {
+            capsule: &capsule,
+            history: &history,
+            exchange_text: &job.input,
+            usage: job.meta.usage.as_ref(),
+            session_turn_count,
+        };
+        let coach = crate::governor::compute_coach_scores(&coach_input);
+
+        // Unpack governor channels (may be None for replayed/non-live turns).
+        let (channels, traj_intensity, traj_state) = job
+            .turn_eval_channels
+            .clone()
+            .unwrap_or_default();
+
+        let flags = crate::governor::compute_flags(
+            &channels,
+            traj_intensity,
+            &coach,
+            session_turn_count,
+        );
+
+        // Combine evidence from coach + any flag evidence.
+        let mut evidence = coach.evidence.clone();
+        if channels.path_hallucination > 0.5 {
+            evidence.push(format!(
+                "path_hallucination={:.2} (agent referenced non-existent files)",
+                channels.path_hallucination
+            ));
+        }
+        if channels.alignment_debt > 0.4 {
+            evidence.push(format!(
+                "alignment_debt={:.2} (repeated user corrections detected)",
+                channels.alignment_debt
+            ));
+        }
+
+        crate::types::TurnEval {
+            version: "v1".to_string(),
+            // Agent tuning (diagnose)
+            repetition: channels.repetition,
+            novelty_collapse: channels.novelty_collapse,
+            semantic_stall: channels.semantic_stall,
+            effort_spike: channels.effort_spike,
+            alignment_debt: channels.alignment_debt,
+            path_hallucination: channels.path_hallucination,
+            grounding_stall: channels.grounding_stall,
+            instruction_staticness: channels.instruction_staticness,
+            logic_churn: channels.logic_churn,
+            fluency: channels.fluency,
+            trajectory_intensity: traj_intensity,
+            trajectory_state: traj_state,
+            // Developer coaching
+            clarity: coach.clarity,
+            context_freshness: coach.context_freshness,
+            verification_rigor: coach.verification_rigor,
+            decision_progress: coach.decision_progress,
+            scope_discipline: coach.scope_discipline,
+            // Flags + outcome
+            flags,
+            outcome_hint: "unclear".to_string(),
+            evidence,
+        }
+    };
+
     // Append to JSONL (cheap, local)
     append_capsule_jsonl(
         &ws.capsules_jsonl,
@@ -802,6 +900,7 @@ async fn process_flush_job(
         job.exchange_seq,
         &job.meta,
         &capsule,
+        &turn_eval,
         job.head_sha.as_deref(),
         job.commit_sha.as_deref(),
     )?;
@@ -815,6 +914,7 @@ async fn process_flush_job(
         user_emotion.as_ref(),
         assistant_emotion.as_ref(),
         &capsule,
+        &turn_eval,
     );
 
     // Insert into LanceDB
@@ -833,6 +933,7 @@ async fn process_flush_job(
         user_emotion.as_ref(),
         assistant_emotion.as_ref(),
         &capsule,
+        &turn_eval,
         prior_decision.as_deref(),
         job.head_sha.as_deref(),
         job.commit_sha.as_deref(),
@@ -864,6 +965,7 @@ fn append_capsule_jsonl(
     exchange_seq: u64,
     meta: &crate::ResponseMeta,
     capsule: &IntentCapsule,
+    turn_eval: &crate::types::TurnEval,
     head_sha: Option<&str>,
     commit_sha: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -901,6 +1003,7 @@ fn append_capsule_jsonl(
         "agent_session_id": meta.agent_session_id,
         "usage": usage,
         "capsule": capsule,
+        "turn_eval": turn_eval,
         "head_sha": head_sha,
         "commit_sha": commit_sha,
     });

@@ -143,6 +143,46 @@ pub async fn run(
                         println!("question[{}]: {}", i, q);
                     }
                 }
+                if let Some(ref te) = hit.turn_eval {
+                    println!(
+                        "turn_eval: {} intensity={:.2} state={:?}",
+                        te.version, te.trajectory_intensity, te.trajectory_state
+                    );
+                    println!(
+                        "  diagnose: rep={:.2} nov={:.2} sem={:.2} eff={:.2} align={:.2} \
+                         hall={:.2} stall={:.2} inst={:.2} churn={:.2} fluency={:.2}",
+                        te.repetition,
+                        te.novelty_collapse,
+                        te.semantic_stall,
+                        te.effort_spike,
+                        te.alignment_debt,
+                        te.path_hallucination,
+                        te.grounding_stall,
+                        te.instruction_staticness,
+                        te.logic_churn,
+                        te.fluency
+                    );
+                    println!(
+                        "  coach:    clarity={:.2} freshness={:.2} verify={:.2} \
+                         progress={:.2} scope={:.2}",
+                        te.clarity,
+                        te.context_freshness,
+                        te.verification_rigor,
+                        te.decision_progress,
+                        te.scope_discipline
+                    );
+                    if !te.flags.is_empty() {
+                        println!("  flags:    {:?}", te.flags);
+                    }
+                    if !te.outcome_hint.is_empty() && te.outcome_hint != "unclear" {
+                        println!("  outcome:  {}", te.outcome_hint);
+                    }
+                    if !te.evidence.is_empty() {
+                        for ev in &te.evidence {
+                            println!("  evidence: {}", ev);
+                        }
+                    }
+                }
                 println!();
             }
             Ok(())

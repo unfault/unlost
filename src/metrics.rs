@@ -22,6 +22,18 @@ pub(crate) enum MetricsEvent {
         assistant_emotion: Option<String>,
         /// Failure mode detected by LLM semantic analysis
         failure_mode: Option<String>,
+        /// TurnEval: composite trajectory intensity (diagnose)
+        #[serde(default)]
+        te_intensity: Option<f32>,
+        /// TurnEval: developer coaching clarity score
+        #[serde(default)]
+        te_clarity: Option<f32>,
+        /// TurnEval: context freshness score
+        #[serde(default)]
+        te_context_freshness: Option<f32>,
+        /// TurnEval: behavioral flags (comma-joined)
+        #[serde(default)]
+        te_flags: Option<String>,
     },
     FrictionWarningInjected {
         ts_ms: i64,
@@ -85,6 +97,7 @@ pub(crate) fn record_capsule_saved(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
+    turn_eval: &crate::types::TurnEval,
 ) -> anyhow::Result<()> {
     let (paths_checked, paths_missing) = crate::workspace::validate_paths(&ws.id, &capsule.symbols);
     let (tokens_total, tokens_input, cost) = meta
@@ -101,6 +114,12 @@ pub(crate) fn record_capsule_saved(
         crate::types::FailureMode::RetrySpiral => Some("retry_spiral".to_string()),
         crate::types::FailureMode::FalseProgress => Some("false_progress".to_string()),
         crate::types::FailureMode::UnboundedHorizon => Some("unbounded_horizon".to_string()),
+    };
+
+    let te_flags_str = if turn_eval.flags.is_empty() {
+        None
+    } else {
+        Some(turn_eval.flags.join(","))
     };
 
     let ev = MetricsEvent::CapsuleSaved {
@@ -121,6 +140,22 @@ pub(crate) fn record_capsule_saved(
         user_emotion: user_emotion.map(|e| e.label.clone()),
         assistant_emotion: assistant_emotion.map(|e| e.label.clone()),
         failure_mode: failure_mode_str,
+        te_intensity: if turn_eval.trajectory_intensity > 0.0 {
+            Some(turn_eval.trajectory_intensity)
+        } else {
+            None
+        },
+        te_clarity: if turn_eval.clarity > 0.0 {
+            Some(turn_eval.clarity)
+        } else {
+            None
+        },
+        te_context_freshness: if turn_eval.context_freshness > 0.0 {
+            Some(turn_eval.context_freshness)
+        } else {
+            None
+        },
+        te_flags: te_flags_str,
     };
     append_event(&ws.metrics_jsonl, &ev)
 }

@@ -83,6 +83,28 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("head_sha", DataType::Utf8, true),
         // Git provenance: SHA of the commit that landed during this turn (sparse).
         Field::new("commit_sha", DataType::Utf8, true),
+        // TurnEval: agent tuning (diagnose) dimensions — persisted governor SymptomChannels.
+        Field::new("te_repetition", DataType::Float32, true),
+        Field::new("te_novelty_collapse", DataType::Float32, true),
+        Field::new("te_semantic_stall", DataType::Float32, true),
+        Field::new("te_effort_spike", DataType::Float32, true),
+        Field::new("te_alignment_debt", DataType::Float32, true),
+        Field::new("te_path_hallucination", DataType::Float32, true),
+        Field::new("te_grounding_stall", DataType::Float32, true),
+        Field::new("te_instruction_staticness", DataType::Float32, true),
+        Field::new("te_logic_churn", DataType::Float32, true),
+        Field::new("te_fluency", DataType::Float32, true),
+        Field::new("te_trajectory_intensity", DataType::Float32, true),
+        Field::new("te_trajectory_state", DataType::Utf8, true),
+        // TurnEval: developer coaching (coach) dimensions.
+        Field::new("te_clarity", DataType::Float32, true),
+        Field::new("te_context_freshness", DataType::Float32, true),
+        Field::new("te_verification_rigor", DataType::Float32, true),
+        Field::new("te_decision_progress", DataType::Float32, true),
+        Field::new("te_scope_discipline", DataType::Float32, true),
+        // TurnEval: flags (comma-joined) and outcome hint.
+        Field::new("te_flags", DataType::Utf8, true),
+        Field::new("te_outcome_hint", DataType::Utf8, true),
     ]))
 }
 
@@ -122,6 +144,31 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_str("questions_text", &mut exprs);
                 add_str("head_sha", &mut exprs);
                 add_str("commit_sha", &mut exprs);
+                // TurnEval columns (added in v0.13)
+                let add_f32 = |name: &str, exprs: &mut Vec<(String, String)>| {
+                    if !existing.contains(name) {
+                        exprs.push((name.to_string(), "CAST(NULL AS FLOAT)".to_string()));
+                    }
+                };
+                add_f32("te_repetition", &mut exprs);
+                add_f32("te_novelty_collapse", &mut exprs);
+                add_f32("te_semantic_stall", &mut exprs);
+                add_f32("te_effort_spike", &mut exprs);
+                add_f32("te_alignment_debt", &mut exprs);
+                add_f32("te_path_hallucination", &mut exprs);
+                add_f32("te_grounding_stall", &mut exprs);
+                add_f32("te_instruction_staticness", &mut exprs);
+                add_f32("te_logic_churn", &mut exprs);
+                add_f32("te_fluency", &mut exprs);
+                add_f32("te_trajectory_intensity", &mut exprs);
+                add_str("te_trajectory_state", &mut exprs);
+                add_f32("te_clarity", &mut exprs);
+                add_f32("te_context_freshness", &mut exprs);
+                add_f32("te_verification_rigor", &mut exprs);
+                add_f32("te_decision_progress", &mut exprs);
+                add_f32("te_scope_discipline", &mut exprs);
+                add_str("te_flags", &mut exprs);
+                add_str("te_outcome_hint", &mut exprs);
 
                 if !exprs.is_empty() {
                     let _ = t
@@ -203,6 +250,32 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
             let commit_sha =
                 Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()));
+            // TurnEval columns
+            let te_f32_empty = || -> Arc<dyn arrow_array::Array> {
+                Arc::new(Float32Array::from_iter(std::iter::empty::<Option<f32>>()))
+            };
+            let te_str_empty = || -> Arc<dyn arrow_array::Array> {
+                Arc::new(StringArray::from_iter(std::iter::empty::<Option<&str>>()))
+            };
+            let te_repetition = te_f32_empty();
+            let te_novelty_collapse = te_f32_empty();
+            let te_semantic_stall = te_f32_empty();
+            let te_effort_spike = te_f32_empty();
+            let te_alignment_debt = te_f32_empty();
+            let te_path_hallucination = te_f32_empty();
+            let te_grounding_stall = te_f32_empty();
+            let te_instruction_staticness = te_f32_empty();
+            let te_logic_churn = te_f32_empty();
+            let te_fluency = te_f32_empty();
+            let te_trajectory_intensity = te_f32_empty();
+            let te_trajectory_state = te_str_empty();
+            let te_clarity = te_f32_empty();
+            let te_context_freshness = te_f32_empty();
+            let te_verification_rigor = te_f32_empty();
+            let te_decision_progress = te_f32_empty();
+            let te_scope_discipline = te_f32_empty();
+            let te_flags = te_str_empty();
+            let te_outcome_hint = te_str_empty();
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
@@ -242,6 +315,25 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     questions_text,
                     head_sha,
                     commit_sha,
+                    te_repetition,
+                    te_novelty_collapse,
+                    te_semantic_stall,
+                    te_effort_spike,
+                    te_alignment_debt,
+                    te_path_hallucination,
+                    te_grounding_stall,
+                    te_instruction_staticness,
+                    te_logic_churn,
+                    te_fluency,
+                    te_trajectory_intensity,
+                    te_trajectory_state,
+                    te_clarity,
+                    te_context_freshness,
+                    te_verification_rigor,
+                    te_decision_progress,
+                    te_scope_discipline,
+                    te_flags,
+                    te_outcome_hint,
                 ],
             )
             .context("failed to build empty schema batch")?;
@@ -382,6 +474,26 @@ pub(crate) fn record_batches_to_hits(
             idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
         let head_sha_col = col_str("head_sha");
         let commit_sha_col = col_str("commit_sha");
+        // TurnEval column accessors (nullable — backward compat with old capsules)
+        let te_repetition_col = col_f32("te_repetition");
+        let te_novelty_collapse_col = col_f32("te_novelty_collapse");
+        let te_semantic_stall_col = col_f32("te_semantic_stall");
+        let te_effort_spike_col = col_f32("te_effort_spike");
+        let te_alignment_debt_col = col_f32("te_alignment_debt");
+        let te_path_hallucination_col = col_f32("te_path_hallucination");
+        let te_grounding_stall_col = col_f32("te_grounding_stall");
+        let te_instruction_staticness_col = col_f32("te_instruction_staticness");
+        let te_logic_churn_col = col_f32("te_logic_churn");
+        let te_fluency_col = col_f32("te_fluency");
+        let te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
+        let te_trajectory_state_col = col_str("te_trajectory_state");
+        let te_clarity_col = col_f32("te_clarity");
+        let te_context_freshness_col = col_f32("te_context_freshness");
+        let te_verification_rigor_col = col_f32("te_verification_rigor");
+        let te_decision_progress_col = col_f32("te_decision_progress");
+        let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_flags_col = col_str("te_flags");
+        let te_outcome_hint_col = col_str("te_outcome_hint");
 
         for row in 0..batch.num_rows() {
             if out.len() >= limit {
@@ -511,6 +623,63 @@ pub(crate) fn record_batches_to_hits(
             let commit_sha = commit_sha_col
                 .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
 
+            // Read TurnEval fields (best-effort — all nullable for backward compat).
+            let read_te_f32 = |col: Option<&Float32Array>| -> f32 {
+                col.and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                    .unwrap_or(0.0)
+            };
+            let te_traj_state = te_trajectory_state_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row)))
+                .map(|s| match s {
+                    "watch" => crate::types::TrajectoryState::Watch,
+                    "intervene" => crate::types::TrajectoryState::Intervene,
+                    _ => crate::types::TrajectoryState::Stable,
+                })
+                .unwrap_or_default();
+            let te_flags_raw = te_flags_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
+                .unwrap_or_default();
+            let te_flags: Vec<String> = te_flags_raw
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            let te_outcome_hint = te_outcome_hint_col
+                .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
+                .unwrap_or_default();
+
+            // Only materialise TurnEval if we have at least one non-default value.
+            let turn_eval = if read_te_f32(te_trajectory_intensity_col) > 0.0
+                || read_te_f32(te_clarity_col) > 0.0
+                || !te_flags.is_empty()
+            {
+                Some(crate::types::TurnEval {
+                    version: "v1".to_string(),
+                    repetition: read_te_f32(te_repetition_col),
+                    novelty_collapse: read_te_f32(te_novelty_collapse_col),
+                    semantic_stall: read_te_f32(te_semantic_stall_col),
+                    effort_spike: read_te_f32(te_effort_spike_col),
+                    alignment_debt: read_te_f32(te_alignment_debt_col),
+                    path_hallucination: read_te_f32(te_path_hallucination_col),
+                    grounding_stall: read_te_f32(te_grounding_stall_col),
+                    instruction_staticness: read_te_f32(te_instruction_staticness_col),
+                    logic_churn: read_te_f32(te_logic_churn_col),
+                    fluency: read_te_f32(te_fluency_col),
+                    trajectory_intensity: read_te_f32(te_trajectory_intensity_col),
+                    trajectory_state: te_traj_state,
+                    clarity: read_te_f32(te_clarity_col),
+                    context_freshness: read_te_f32(te_context_freshness_col),
+                    verification_rigor: read_te_f32(te_verification_rigor_col),
+                    decision_progress: read_te_f32(te_decision_progress_col),
+                    scope_discipline: read_te_f32(te_scope_discipline_col),
+                    flags: te_flags,
+                    outcome_hint: te_outcome_hint,
+                    evidence: vec![],
+                })
+            } else {
+                None
+            };
+
             let cap = crate::types::IntentCapsule {
                 category: cat.to_string(),
                 intent: int_text,
@@ -544,6 +713,7 @@ pub(crate) fn record_batches_to_hits(
                 assistant_emotion,
                 head_sha,
                 commit_sha,
+                turn_eval,
             });
         }
     }
@@ -932,6 +1102,7 @@ pub(crate) async fn query_capsules_lancedb(
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                 commit_sha: commit_sha_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                turn_eval: None,
             });
         }
     }
@@ -1372,6 +1543,7 @@ async fn scan_capsules_lancedb_impl(
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                 commit_sha: commit_sha_col
                     .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                turn_eval: None,
             });
         }
     }
@@ -1718,10 +1890,30 @@ pub(crate) async fn trace_capsules_lancedb(
                 .and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
             let symbols_col =
                 idx("symbols").and_then(|i| batch.column(i).as_any().downcast_ref::<ListArray>());
-            let head_sha_col = col_str("head_sha");
-            let commit_sha_col = col_str("commit_sha");
+        let head_sha_col = col_str("head_sha");
+        let commit_sha_col = col_str("commit_sha");
+        // TurnEval columns — declared for future use when this scan path surfaces turn_eval.
+        let _te_repetition_col = col_f32("te_repetition");
+        let _te_novelty_collapse_col = col_f32("te_novelty_collapse");
+        let _te_semantic_stall_col = col_f32("te_semantic_stall");
+        let _te_effort_spike_col = col_f32("te_effort_spike");
+        let _te_alignment_debt_col = col_f32("te_alignment_debt");
+        let _te_path_hallucination_col = col_f32("te_path_hallucination");
+        let _te_grounding_stall_col = col_f32("te_grounding_stall");
+        let _te_instruction_staticness_col = col_f32("te_instruction_staticness");
+        let _te_logic_churn_col = col_f32("te_logic_churn");
+        let _te_fluency_col = col_f32("te_fluency");
+        let _te_trajectory_intensity_col = col_f32("te_trajectory_intensity");
+        let _te_trajectory_state_col = col_str("te_trajectory_state");
+        let _te_clarity_col = col_f32("te_clarity");
+        let _te_context_freshness_col = col_f32("te_context_freshness");
+        let _te_verification_rigor_col = col_f32("te_verification_rigor");
+        let _te_decision_progress_col = col_f32("te_decision_progress");
+        let _te_scope_discipline_col = col_f32("te_scope_discipline");
+        let _te_flags_col = col_str("te_flags");
+        let _te_outcome_hint_col = col_str("te_outcome_hint");
 
-            for row in 0..batch.num_rows() {
+        for row in 0..batch.num_rows() {
                 let id = match id_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row))) {
                     Some(v) if !v.is_empty() => v.to_string(),
                     _ => continue,
@@ -1889,6 +2081,7 @@ pub(crate) async fn trace_capsules_lancedb(
                             .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                         commit_sha: commit_sha_col
                             .and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
+                        turn_eval: None,
                     },
                 );
 
@@ -1916,6 +2109,8 @@ pub(crate) async fn insert_capsule_row(
     user_emotion: Option<&crate::emotion::EmotionMeta>,
     assistant_emotion: Option<&crate::emotion::EmotionMeta>,
     capsule: &crate::IntentCapsule,
+    // Turn-level evaluation metadata (diagnose + coach dimensions).
+    turn_eval: &crate::types::TurnEval,
     // Prior decision text from the preceding capsule in the same session/sequence.
     // Encodes causal continuity into the embedding so work threads cluster in vector space.
     prior_decision: Option<&str>,
@@ -2042,6 +2237,46 @@ pub(crate) async fn insert_capsule_row(
     let head_sha_arr = Arc::new(StringArray::from(vec![head_sha]));
     let commit_sha_arr = Arc::new(StringArray::from(vec![commit_sha]));
 
+    // TurnEval arrays
+    let te_traj_state_str = match turn_eval.trajectory_state {
+        crate::types::TrajectoryState::Stable => "stable",
+        crate::types::TrajectoryState::Watch => "watch",
+        crate::types::TrajectoryState::Intervene => "intervene",
+    };
+    let te_flags_str = if turn_eval.flags.is_empty() {
+        None
+    } else {
+        Some(turn_eval.flags.join(","))
+    };
+    let te_outcome_str = if turn_eval.outcome_hint.is_empty() {
+        None
+    } else {
+        Some(turn_eval.outcome_hint.as_str())
+    };
+
+    let te_f32 = |v: f32| -> Arc<dyn arrow_array::Array> {
+        Arc::new(Float32Array::from(vec![Some(v)]))
+    };
+    let te_repetition_arr = te_f32(turn_eval.repetition);
+    let te_novelty_collapse_arr = te_f32(turn_eval.novelty_collapse);
+    let te_semantic_stall_arr = te_f32(turn_eval.semantic_stall);
+    let te_effort_spike_arr = te_f32(turn_eval.effort_spike);
+    let te_alignment_debt_arr = te_f32(turn_eval.alignment_debt);
+    let te_path_hallucination_arr = te_f32(turn_eval.path_hallucination);
+    let te_grounding_stall_arr = te_f32(turn_eval.grounding_stall);
+    let te_instruction_staticness_arr = te_f32(turn_eval.instruction_staticness);
+    let te_logic_churn_arr = te_f32(turn_eval.logic_churn);
+    let te_fluency_arr = te_f32(turn_eval.fluency);
+    let te_trajectory_intensity_arr = te_f32(turn_eval.trajectory_intensity);
+    let te_trajectory_state_arr = Arc::new(StringArray::from(vec![Some(te_traj_state_str)]));
+    let te_clarity_arr = te_f32(turn_eval.clarity);
+    let te_context_freshness_arr = te_f32(turn_eval.context_freshness);
+    let te_verification_rigor_arr = te_f32(turn_eval.verification_rigor);
+    let te_decision_progress_arr = te_f32(turn_eval.decision_progress);
+    let te_scope_discipline_arr = te_f32(turn_eval.scope_discipline);
+    let te_flags_arr = Arc::new(StringArray::from(vec![te_flags_str.as_deref()]));
+    let te_outcome_hint_arr = Arc::new(StringArray::from(vec![te_outcome_str]));
+
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -2080,6 +2315,25 @@ pub(crate) async fn insert_capsule_row(
             questions_text_arr,
             head_sha_arr,
             commit_sha_arr,
+            te_repetition_arr,
+            te_novelty_collapse_arr,
+            te_semantic_stall_arr,
+            te_effort_spike_arr,
+            te_alignment_debt_arr,
+            te_path_hallucination_arr,
+            te_grounding_stall_arr,
+            te_instruction_staticness_arr,
+            te_logic_churn_arr,
+            te_fluency_arr,
+            te_trajectory_intensity_arr,
+            te_trajectory_state_arr,
+            te_clarity_arr,
+            te_context_freshness_arr,
+            te_verification_rigor_arr,
+            te_decision_progress_arr,
+            te_scope_discipline_arr,
+            te_flags_arr,
+            te_outcome_hint_arr,
         ],
     )
     .context("failed to build insert batch")?;
@@ -2298,6 +2552,26 @@ pub(crate) async fn insert_capsule_batch(
                     .map(|o| o.as_deref())
                     .collect::<Vec<_>>(),
             )),
+            // TurnEval columns: all null for replayed/reindexed rows (no live governor data).
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(StringArray::from(null_str.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(Float32Array::from(null_f32.clone())),
+            Arc::new(StringArray::from(null_str.clone())),
+            Arc::new(StringArray::from(null_str.clone())),
         ],
     )
     .context("failed to build batch insert RecordBatch")?;

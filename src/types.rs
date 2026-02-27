@@ -155,6 +155,101 @@ pub struct IntentCapsule {
     pub questions: Vec<String>,
 }
 
+/// Turn-level evaluation metadata, computed on-the-fly during flush with zero LLM calls.
+///
+/// Combines:
+/// - **Agent tuning (diagnose)**: persisted governor SymptomChannels (already computed,
+///   previously discarded after friction decisions).
+/// - **Developer coaching (coach)**: heuristic scores about request quality, session health,
+///   verification discipline, and scope management.
+///
+/// Designed to power `unlost reflect` later — the LLM at reflect-time reconstructs
+/// the story from this structured telemetry only.
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct TurnEval {
+    /// Schema version — always "v1" for this generation.
+    #[serde(default)]
+    pub version: String,
+
+    // ── Agent tuning (diagnose) ──────────────────────────────────────────────
+    /// EMA-smoothed governor channel: symbol/topic repetition without progress.
+    #[serde(default)]
+    pub repetition: f32,
+    /// EMA-smoothed governor channel: novelty collapse (agent running out of new approaches).
+    #[serde(default)]
+    pub novelty_collapse: f32,
+    /// EMA-smoothed governor channel: semantic stall (conversation going in circles).
+    #[serde(default)]
+    pub semantic_stall: f32,
+    /// EMA-smoothed governor channel: effort spike (agent doing far more than asked).
+    #[serde(default)]
+    pub effort_spike: f32,
+    /// EMA-smoothed governor channel: alignment debt (repeated user corrections).
+    #[serde(default)]
+    pub alignment_debt: f32,
+    /// EMA-smoothed governor channel: path hallucination (referencing non-existent files).
+    #[serde(default)]
+    pub path_hallucination: f32,
+    /// EMA-smoothed governor channel: grounding stall (agent ignoring user-mentioned paths).
+    #[serde(default)]
+    pub grounding_stall: f32,
+    /// EMA-smoothed governor channel: instruction staticness (user repeating long instructions).
+    #[serde(default)]
+    pub instruction_staticness: f32,
+    /// EMA-smoothed governor channel: logic churn (rapid plan changes without progress).
+    #[serde(default)]
+    pub logic_churn: f32,
+    /// EMA-smoothed governor channel: fluency (high verbosity vs user input — blind acceptance).
+    #[serde(default)]
+    pub fluency: f32,
+    /// Composite trajectory instability intensity (0–1) at the time of this turn.
+    #[serde(default)]
+    pub trajectory_intensity: f32,
+    /// Trajectory controller state at the time of this turn.
+    #[serde(default)]
+    pub trajectory_state: TrajectoryState,
+
+    // ── Developer coaching (coach) ───────────────────────────────────────────
+    /// Was the user request specific enough? (0=vague, 1=precise)
+    /// Derived from: message length, symbol count, and subsequent correction rate.
+    #[serde(default)]
+    pub clarity: f32,
+    /// Is the session context still coherent / fresh? (0=stale/overloaded, 1=fresh)
+    /// Derived from: token cache-read ratio (compaction signal) and frustration slope.
+    /// Drops when context is being squeezed or the agent starts showing confusion.
+    #[serde(default)]
+    pub context_freshness: f32,
+    /// Were results verified after code changes? (0=unverified, 1=rigorously verified)
+    /// Derived from: presence of tool outcome strings (build/test pass/fail) in the exchange.
+    #[serde(default)]
+    pub verification_rigor: f32,
+    /// Did this turn move the task forward? (0=stalled/regressed, 1=clear progress)
+    /// Derived from: decision text change and symbol set evolution vs prior capsule.
+    #[serde(default)]
+    pub decision_progress: f32,
+    /// Did scope stay stable? (0=scope creep/drift, 1=focused)
+    /// Derived from: symbol set growth rate across recent history, category stability.
+    #[serde(default)]
+    pub scope_discipline: f32,
+
+    // ── Flags (both personas) ────────────────────────────────────────────────
+    /// Derived behavioral flags, e.g. "retry_loop", "session_heavy", "scope_shift",
+    /// "unverified_claim", "needs_clarification", "blind_acceptance".
+    #[serde(default)]
+    pub flags: Vec<String>,
+
+    // ── Outcome (placeholder — backfilled by delayed checkpoint pass in future) ──
+    /// Near-term outcome: "progressed" | "stalled" | "regressed" | "unclear"
+    #[serde(default)]
+    pub outcome_hint: String,
+
+    // ── Auditable evidence ────────────────────────────────────────────────────
+    /// Compact, auditable facts explaining why scores are what they are.
+    /// e.g. "no test/build outcome found after 3 code-touching turns"
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
 fn failure_mode_schema(_gen: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": "string",
@@ -197,6 +292,8 @@ pub struct CapsuleHit {
     pub head_sha: Option<String>,
     /// git SHA of the commit that landed during this turn, if detected (sparse).
     pub commit_sha: Option<String>,
+    /// Turn-level evaluation metadata (coach + diagnose dimensions).
+    pub turn_eval: Option<TurnEval>,
 }
 
 #[cfg(test)]
@@ -415,6 +512,7 @@ mod tests {
             meta,
             head_sha: None,
             commit_sha: None,
+            turn_eval: None,
         };
 
         assert_eq!(hit.id, "test_id");

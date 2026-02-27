@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`TurnEval`**: Per-turn evaluation metadata computed on-the-fly at flush time with zero LLM calls. Each capsule now carries 12 agent-tuning (diagnose) dimensions — persisted governor `SymptomChannels` previously discarded after friction decisions — plus 5 developer coaching dimensions: `clarity` (request specificity), `context_freshness` (cache ratio + frustration slope, captures compaction signal), `verification_rigor` (tool outcome presence), `decision_progress` (decision/symbol diff from prior turn), and `scope_discipline` (symbol spread + category diversity). Behavioral flags (`session_heavy`, `session_too_long`, `retry_loop`, `blind_acceptance`, etc.) are derived from thresholds on both dimensions. Stored in LanceDB (`te_*` columns with schema evolution), JSONL capsule log, and metrics events. Displayed in `unlost inspect`. Designed to power `unlost reflect` in a subsequent release — a reflect-time LLM can reconstruct session quality from structured telemetry only, with no raw transcript required.
+
 ## [0.12.0] - 2026-02-27
 
 ### Added

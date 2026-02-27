@@ -58,6 +58,10 @@ pub struct TrajectoryController {
     pub last_decision: Option<String>,
     /// The last agent session ID seen in this workspace.
     pub last_agent_session_id: Option<String>,
+    /// Snapshot of (smoothed_channels, intensity, state) captured at the end of the most
+    /// recent `update()` call. Read by `record_turn` so the background worker can persist
+    /// them into the capsule without re-deriving EMA state.
+    pub last_channels: Option<(SymptomChannels, f32, TrajectoryState)>,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -454,6 +458,10 @@ impl TrajectoryController {
         if reset_note.is_some() {
             note = reset_note;
         }
+
+        // Stash channels so record_turn can copy them into ChunkInput without
+        // re-deriving EMA state in the background worker.
+        self.last_channels = Some((self.smoothed_channels.clone(), self.intensity, self.state));
 
         TrajectoryUpdate {
             state: self.state,
@@ -1105,6 +1113,371 @@ pub fn detect_failure_keywords(text: &str) -> Option<crate::types::FailureMode> 
         return Some(crate::types::FailureMode::Drift);
     }
     None
+}
+
+// ============================================================================
+// TurnEval: Developer coaching score computation (all heuristic, zero LLM)
+// ============================================================================
+
+/// Inputs fed to the coach scorer from the background flush worker.
+pub struct CoachInput<'a> {
+    /// The freshly-extracted capsule for this turn.
+    pub capsule: &'a IntentCapsule,
+    /// Recent prior capsules in this session (newest first).
+    pub history: &'a [CapsuleHit],
+    /// Raw exchange text (user + assistant combined) for the turn.
+    pub exchange_text: &'a str,
+    /// Token usage for this turn (used for context_freshness cache ratio).
+    pub usage: Option<&'a crate::types::UsageMeta>,
+    /// Number of turns in this session so far (including this one).
+    pub session_turn_count: usize,
+}
+
+/// Returned coach dimension scores (0.0–1.0 each, higher = healthier).
+#[derive(Debug, Clone, Default)]
+pub struct CoachScores {
+    pub clarity: f32,
+    pub context_freshness: f32,
+    pub verification_rigor: f32,
+    pub decision_progress: f32,
+    pub scope_discipline: f32,
+    /// Short auditable evidence strings.
+    pub evidence: Vec<String>,
+}
+
+/// Patterns indicating a tool outcome was verified (build/test results).
+const VERIFICATION_PASS_PATTERNS: &[&str] = &[
+    "succeeded",
+    "tests passed",
+    "test passed",
+    "all tests",
+    "cargo test",
+    "npm test",
+    "pytest",
+    "build ok",
+    "✓",
+    "✔",
+    "passing",
+    "0 failed",
+];
+
+const VERIFICATION_FAIL_PATTERNS: &[&str] = &[
+    "failed",
+    "error",
+    "exit code",
+    "FAILED",
+    "panicked",
+    "assertion failed",
+    "stderr",
+    "status 1",
+];
+
+const CODE_TOUCHING_CATEGORIES: &[&str] = &[
+    "implementation",
+    "refactoring",
+    "debugging",
+    "fix",
+    "cli_feature_update",
+];
+
+/// Compute developer coaching scores for a single turn.
+/// All heuristic — no LLM calls, no I/O.
+pub fn compute_coach_scores(input: &CoachInput<'_>) -> CoachScores {
+    let mut evidence: Vec<String> = Vec::new();
+
+    // ── clarity ─────────────────────────────────────────────────────────────
+    // High when: intent is long enough, symbols present, low alignment_debt in
+    // the prior turn (meaning the previous response didn't need correction).
+    let clarity = {
+        let intent_len = input.capsule.intent.len();
+        let sym_count = input.capsule.user_symbols.len() + input.capsule.symbols.len();
+
+        // Normalise intent length: <20 chars = 0.0, >=150 chars = 1.0
+        let len_score = (intent_len as f32 / 150.0).min(1.0);
+
+        // Symbol specificity: 0 symbols = 0.0, 3+ = 1.0
+        let sym_score = (sym_count as f32 / 3.0).min(1.0);
+
+        // Correction penalty: if history[0] had high alignment_debt, the user
+        // probably had to correct — reduce clarity of this new request.
+        let correction_penalty = input
+            .history
+            .first()
+            .and_then(|h| h.turn_eval.as_ref())
+            .map(|te| te.alignment_debt * 0.4)
+            .unwrap_or(0.0);
+
+        let raw = (len_score * 0.45 + sym_score * 0.55) - correction_penalty;
+
+        if intent_len < 20 {
+            evidence.push("intent too short to be precise".to_string());
+        }
+        if sym_count == 0 {
+            evidence.push("no symbols specified in request".to_string());
+        }
+
+        raw.clamp(0.0, 1.0)
+    };
+
+    // ── context_freshness ────────────────────────────────────────────────────
+    // Decays when:
+    // (a) cache_read/tokens_input ratio drops (context being squeezed / compaction)
+    // (b) trajectory intensity has been rising for 2+ consecutive turns
+    // (c) session turn count is very high (heavy session)
+    let context_freshness = {
+        // Cache ratio: high ratio = context being served from cache (healthy).
+        // Low ratio = fresh tokens dominating (context rotating / compaction triggered).
+        let cache_ratio = input.usage.and_then(|u| {
+            let cache_read = u.tokens_cache_read.unwrap_or(0);
+            let input_tokens = u.tokens_input.unwrap_or(0);
+            if input_tokens > 0 {
+                Some(cache_read as f32 / input_tokens as f32)
+            } else {
+                None
+            }
+        });
+
+        let cache_score: f32 = match cache_ratio {
+            Some(r)
+                if r < 0.2 && input.usage.and_then(|u| u.tokens_input).unwrap_or(0) > 10_000 =>
+            {
+                // Low cache ratio with high input tokens = likely compaction
+                evidence.push(format!(
+                    "low cache hit ratio ({:.0}%) with high input tokens — possible context compaction",
+                    r * 100.0
+                ));
+                0.2
+            }
+            Some(r) if r < 0.4 => 0.5,
+            Some(_) => 1.0,
+            None => 0.8, // No usage data — neutral
+        };
+
+        // Frustration slope: check if last 2+ turns had rising intensity
+        let frustration_slope = if input.history.len() >= 2 {
+            let intensities: Vec<f32> = input
+                .history
+                .iter()
+                .take(3)
+                .filter_map(|h| h.turn_eval.as_ref())
+                .map(|te| te.trajectory_intensity)
+                .collect();
+            if intensities.len() >= 2 && intensities[0] > intensities[1] + 0.1 {
+                evidence
+                    .push("trajectory intensity rising — agent may be losing context".to_string());
+                0.3 // penalise freshness when frustration is escalating
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        // Heavy session penalty: high turn count
+        let session_penalty = if input.session_turn_count > 40 {
+            evidence.push(format!(
+                "session has {} turns — context may be stale",
+                input.session_turn_count
+            ));
+            0.3
+        } else if input.session_turn_count > 20 {
+            0.1
+        } else {
+            0.0
+        };
+
+        (cache_score - frustration_slope - session_penalty).clamp(0.0_f32, 1.0_f32)
+    };
+
+    // ── verification_rigor ───────────────────────────────────────────────────
+    // High when the exchange contains tool outcome strings (pass/fail).
+    // Lower when a code-touching category produced no verification evidence.
+    let verification_rigor = {
+        let lower = input.exchange_text.to_lowercase();
+        let has_pass = VERIFICATION_PASS_PATTERNS.iter().any(|p| lower.contains(p));
+        let has_fail = VERIFICATION_FAIL_PATTERNS
+            .iter()
+            .any(|p| lower.contains(&p.to_lowercase()));
+        let is_code_touching = CODE_TOUCHING_CATEGORIES
+            .iter()
+            .any(|c| input.capsule.category.to_lowercase().contains(c));
+
+        if has_pass {
+            1.0
+        } else if has_fail {
+            // Failure is still verification — the agent checked.
+            0.8
+        } else if is_code_touching {
+            // Code was likely changed but no tool outcome found.
+            evidence.push("code-touching turn with no build/test outcome found".to_string());
+            0.2
+        } else {
+            // Non-code turn: not applicable, neutral.
+            0.7
+        }
+    };
+
+    // ── decision_progress ────────────────────────────────────────────────────
+    // High when: new decision text (different from prior), new symbols appearing,
+    // or category advancing (e.g. planning → implementation).
+    let decision_progress = {
+        let prior = input.history.first();
+        match prior {
+            None => 0.8, // First turn: assume progress
+            Some(prev) => {
+                // Decision text similarity (simple: shared token overlap)
+                let new_dec = input.capsule.decision.to_lowercase();
+                let old_dec = prev.capsule.decision.to_lowercase();
+                let new_words: std::collections::HashSet<&str> =
+                    new_dec.split_whitespace().collect();
+                let old_words: std::collections::HashSet<&str> =
+                    old_dec.split_whitespace().collect();
+                let overlap = if old_words.is_empty() {
+                    0.0
+                } else {
+                    new_words.intersection(&old_words).count() as f32 / old_words.len() as f32
+                };
+                // High overlap = stalled decision
+                let decision_novelty = 1.0 - overlap.min(1.0);
+
+                // New symbols compared to last turn
+                let prior_syms: std::collections::HashSet<&str> =
+                    prev.capsule.symbols.iter().map(|s| s.as_str()).collect();
+                let new_syms: std::collections::HashSet<&str> =
+                    input.capsule.symbols.iter().map(|s| s.as_str()).collect();
+                let new_sym_count = new_syms.difference(&prior_syms).count();
+                let sym_novelty = (new_sym_count as f32 / 3.0_f32).min(1.0);
+
+                let progress = decision_novelty * 0.6 + sym_novelty * 0.4;
+
+                if progress < 0.2 {
+                    evidence.push(
+                        "decision text and symbols unchanged from prior turn — possible stall"
+                            .to_string(),
+                    );
+                }
+                progress.clamp(0.0, 1.0)
+            }
+        }
+    };
+
+    // ── scope_discipline ─────────────────────────────────────────────────────
+    // High when symbol set stays focused; drops when many new unresolved symbols
+    // accumulate across recent turns without corresponding resolution.
+    let scope_discipline = {
+        if input.history.len() < 3 {
+            1.0 // Not enough history to judge scope creep
+        } else {
+            // Count distinct symbols across last N turns
+            let mut all_syms: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let window = input.history.iter().take(5);
+            for h in window {
+                for s in &h.capsule.symbols {
+                    all_syms.insert(s.as_str());
+                }
+            }
+            let symbol_spread = all_syms.len();
+
+            // Category diversity: distinct categories in recent history
+            let distinct_cats: std::collections::HashSet<&str> = input
+                .history
+                .iter()
+                .take(5)
+                .map(|h| h.capsule.category.as_str())
+                .collect();
+            let cat_diversity = distinct_cats.len();
+
+            // Symbol spread > 12 across 5 turns = scope concern
+            let sym_score: f32 = if symbol_spread > 15 {
+                evidence.push(format!(
+                    "{} distinct symbols across last 5 turns — possible scope creep",
+                    symbol_spread
+                ));
+                0.2
+            } else if symbol_spread > 8 {
+                0.5
+            } else {
+                1.0
+            };
+
+            // High category diversity is OK if progressive (planning→impl→test);
+            // penalise only if it looks like thrashing (>3 distinct cats in 5 turns).
+            let cat_score = if cat_diversity > 3 {
+                evidence.push(format!(
+                    "{} distinct categories in last 5 turns — possible topic thrashing",
+                    cat_diversity
+                ));
+                0.4
+            } else {
+                1.0
+            };
+
+            (sym_score * 0.6 + cat_score * 0.4).clamp(0.0_f32, 1.0_f32)
+        }
+    };
+
+    CoachScores {
+        clarity,
+        context_freshness,
+        verification_rigor,
+        decision_progress,
+        scope_discipline,
+        evidence,
+    }
+}
+
+/// Derive behavioral flags from combined diagnose + coach scores.
+pub fn compute_flags(
+    channels: &SymptomChannels,
+    intensity: f32,
+    coach: &CoachScores,
+    session_turn_count: usize,
+) -> Vec<String> {
+    let mut flags: Vec<String> = Vec::new();
+
+    // ── Agent tuning flags ───────────────────────────────────────────────────
+    if channels.repetition > 0.55 {
+        flags.push("retry_loop".to_string());
+    }
+    if channels.logic_churn > 0.50 {
+        flags.push("high_churn".to_string());
+    }
+    if channels.path_hallucination > 0.50 {
+        flags.push("hallucination_risk".to_string());
+    }
+    if channels.alignment_debt > 0.45 {
+        flags.push("instruction_drift".to_string());
+    }
+    if channels.fluency > 0.60 {
+        flags.push("blind_acceptance".to_string());
+    }
+    if intensity >= THRESHOLD_INTERVENE {
+        flags.push("trajectory_critical".to_string());
+    } else if intensity >= THRESHOLD_WATCH {
+        flags.push("trajectory_watch".to_string());
+    }
+
+    // ── Developer coaching flags ─────────────────────────────────────────────
+    if coach.clarity < 0.30 {
+        flags.push("needs_clarification".to_string());
+    }
+    if coach.context_freshness < 0.40 {
+        // Context is heavy — not a problem per se, worth noting
+        flags.push("session_heavy".to_string());
+    }
+    if coach.verification_rigor < 0.25 {
+        flags.push("unverified_claim".to_string());
+    }
+    if coach.scope_discipline < 0.35 {
+        flags.push("scope_shift".to_string());
+    }
+
+    // ── Combined / meta flags ────────────────────────────────────────────────
+    if session_turn_count > 40 && coach.context_freshness < 0.50 {
+        flags.push("session_too_long".to_string());
+    }
+
+    flags
 }
 
 #[cfg(test)]
