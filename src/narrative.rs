@@ -1666,6 +1666,9 @@ Be precise and evidence-grounded.\n\
 Format your response as:\n\
 NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
 no evidence citations, pure tuning changes to make; this section comes FIRST)\n\
+SKILL ASSESSMENT: (for each installed skill: one line — name: helped / hurt / neutral — \
+one-sentence reason; then 2-3 hypothetical skills from the provided list that would \
+address the top observed patterns, with a one-sentence justification each)\n\
 AGENT HEALTH: (1-2 sentences overall — stable / degraded / poor)\n\
 FAILURE PATTERNS: (2-4 bullet points — specific failure modes observed with turn index)\n\
 STABILITY SIGNALS: (2-3 bullet points — where the agent performed well)\n\
@@ -1673,10 +1676,12 @@ TUNING RECOMMENDATIONS: (2-3 suggestions for system prompt, tool policy, or mode
 \n\
 Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the change.\n\
-- Anchor every finding in the other sections to specific channel values \
+- SKILL ASSESSMENT: base the helped/hurt/neutral verdict on actual turn data patterns, \
+not generic guesses. If no installed skills are present, only list recommendations.\n\
+- Anchor every finding in FAILURE PATTERNS / STABILITY SIGNALS to specific channel values \
 (e.g. alignment_debt=0.72 at turn 4).\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
-- Max 350 words total.";
+- Max 400 words total.";
 
 const REFLECT_BOTH_PREAMBLE: &str = "\
 You are reviewing a coding session as both a developer effectiveness coach \
@@ -1686,6 +1691,9 @@ Given a structured turn-by-turn evaluation timeline, produce a combined reflecti
 Format your response as:\n\
 NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
 no evidence citations, mix of developer and agent changes; this section comes FIRST)\n\
+SKILL ASSESSMENT: (for each installed skill: one line — name: helped / hurt / neutral — \
+one-sentence reason; then 2-3 hypothetical skills from the provided list that would \
+address the top observed patterns, with a one-sentence justification each)\n\
 SESSION QUALITY: (1-2 sentences — overall impression)\n\
 DEVELOPER PATTERNS: (2-3 bullet points — human collaboration habits, good or bad)\n\
 AGENT PATTERNS: (2-3 bullet points — agent drift, loops, or reliability issues)\n\
@@ -1694,9 +1702,11 @@ NEXT SESSION: (2-3 concrete recommendations addressing both sides)\n\
 \n\
 Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the action.\n\
+- SKILL ASSESSMENT: base the helped/hurt/neutral verdict on actual turn data patterns. \
+If no installed skills are present, only list recommendations.\n\
 - Every claim in the other sections must reference a specific turn index or flag name.\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
-- Max 450 words total.";
+- Max 500 words total.";
 
 /// Build the structured TurnEval timeline context fed to the LLM.
 /// Format: turn index, timestamp, category, outcome hint, scores, flags — no raw text.
@@ -1862,6 +1872,7 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
     ];
     const TUNE_HEADERS: &[&str] = &[
         "NEXT ACTIONS",
+        "SKILL ASSESSMENT",
         "AGENT HEALTH",
         "FAILURE PATTERNS",
         "STABILITY SIGNALS",
@@ -1869,6 +1880,7 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
     ];
     const BOTH_HEADERS: &[&str] = &[
         "NEXT ACTIONS",
+        "SKILL ASSESSMENT",
         "SESSION QUALITY",
         "DEVELOPER PATTERNS",
         "AGENT PATTERNS",
@@ -1929,6 +1941,11 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
                 out.push_str("\x1b[1;4;97m");
                 out.push_str(header);
                 out.push_str("\x1b[0m");
+            } else if header.eq_ignore_ascii_case("SKILL ASSESSMENT") {
+                // SKILL ASSESSMENT: bold yellow — skills/tooling context distinct from analysis
+                out.push_str("\x1b[1;33m");
+                out.push_str(header);
+                out.push_str("\x1b[0m");
             } else {
                 // Regular sections: bold in mode colour
                 out.push_str(mode_colour);
@@ -1951,20 +1968,30 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
             let bullet_content = trimmed[2..].trim();
             let hang = indent.len() + 2; // hanging indent for wrapped continuation
 
+            let in_skill_assessment = current_section.eq_ignore_ascii_case("SKILL ASSESSMENT");
+
             if in_next_actions {
-                // NEXT ACTIONS bullets: bold white arrow instead of dim cyan dash
+                // NEXT ACTIONS bullets: bold white arrow
                 out.push_str(&indent);
                 out.push_str("\x1b[1;97m→\x1b[0m ");
+            } else if in_skill_assessment {
+                // SKILL ASSESSMENT bullets: yellow diamond
+                out.push_str(&indent);
+                out.push_str("\x1b[33m◆\x1b[0m ");
             } else {
                 // Regular bullets: cyan dash
                 out.push_str(&indent);
                 out.push_str("\x1b[36m-\x1b[0m ");
             }
 
-            // Render the content — NEXT ACTIONS bullets are bold white (plain imperative),
-            // regular bullets get full inline colouring.
+            // Render the content:
+            // - NEXT ACTIONS: bold white imperative (no score colouring)
+            // - SKILL ASSESSMENT: colour "helped"→green, "hurt"→red, "neutral"→dim
+            // - everything else: full inline colouring
             let rendered_content: String = if in_next_actions {
                 format!("\x1b[1m{bullet_content}\x1b[0m")
+            } else if in_skill_assessment {
+                colour_skill_assessment_line(bullet_content)
             } else {
                 colour_reflect_inline(bullet_content)
             };
@@ -1993,6 +2020,40 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
     }
 
     out
+}
+
+/// Colour a skill assessment bullet line.
+/// Patterns coloured:
+/// - `name: helped` → name in green
+/// - `name: hurt` → name in red  
+/// - `name: neutral` → name in dim
+/// - `recommend:` / `add:` prefix hints → yellow
+fn colour_skill_assessment_line(s: &str) -> String {
+    // Check for verdict pattern: "skill-name: helped/hurt/neutral ..."
+    if let Some(colon_pos) = s.find(':') {
+        let skill_name = s[..colon_pos].trim();
+        let rest = s[colon_pos + 1..].trim();
+        let verdict_lower = rest.to_lowercase();
+
+        if verdict_lower.starts_with("helped") || verdict_lower.starts_with("positive") {
+            return format!(
+                "\x1b[32m{skill_name}\x1b[0m: \x1b[32mhelped\x1b[0m{}",
+                &rest[6..]
+            );
+        } else if verdict_lower.starts_with("hurt") || verdict_lower.starts_with("negative") {
+            return format!(
+                "\x1b[31m{skill_name}\x1b[0m: \x1b[31mhurt\x1b[0m{}",
+                &rest[4..]
+            );
+        } else if verdict_lower.starts_with("neutral") {
+            return format!(
+                "\x1b[2m{skill_name}\x1b[0m: \x1b[2mneutral\x1b[0m{}",
+                &rest[7..]
+            );
+        }
+    }
+    // Hypothetical skill suggestion lines (no verdict pattern) — yellow
+    format!("\x1b[33m{s}\x1b[0m")
 }
 
 /// Apply inline ANSI colour to reflect narrative text:
@@ -2075,11 +2136,128 @@ fn colour_reflect_inline(s: &str) -> String {
     final_out
 }
 
+// ── Skill catalogue ───────────────────────────────────────────────────────────
+
+/// A skill in the hardcoded catalogue, keyed to observed tune signals.
+struct CatalogueSkill {
+    /// Short identifier used as the skill name.
+    name: &'static str,
+    /// One-sentence description of what the skill does.
+    description: &'static str,
+    /// Tune flags or channel names that suggest this skill is relevant.
+    /// If any of these appear in the session's observed flags/patterns, the
+    /// skill is considered a candidate recommendation.
+    triggers: &'static [&'static str],
+}
+
+/// Hardcoded skill catalogue keyed to tune signals.
+/// These are hypothetical/recommended skills — they may not exist yet.
+const SKILL_CATALOGUE: &[CatalogueSkill] = &[
+    CatalogueSkill {
+        name: "confirm-before-execute",
+        description: "Require explicit user confirmation before any irreversible file change or command execution.",
+        triggers: &["alignment_debt", "instruction_drift", "blind_acceptance"],
+    },
+    CatalogueSkill {
+        name: "glob-before-edit",
+        description: "Always verify file existence via glob/search before referencing or editing a path.",
+        triggers: &["hallucination_risk", "path_hallucination"],
+    },
+    CatalogueSkill {
+        name: "test-after-change",
+        description: "Run build/test after every code-touching turn and surface the result before continuing.",
+        triggers: &["unverified_claim", "high_churn", "retry_loop"],
+    },
+    CatalogueSkill {
+        name: "scope-gate",
+        description: "Pause and restate the current scope when new symbols or topics are introduced mid-task.",
+        triggers: &["scope_shift", "high_churn", "logic_churn"],
+    },
+    CatalogueSkill {
+        name: "session-handoff",
+        description: "Summarise completed work and open questions at session end for clean handoff to a new context.",
+        triggers: &["session_heavy", "session_too_long", "context_freshness"],
+    },
+    CatalogueSkill {
+        name: "loop-breaker",
+        description: "Detect when the same approach has been tried twice without progress and propose an alternative strategy.",
+        triggers: &["retry_loop", "semantic_stall", "novelty_collapse"],
+    },
+    CatalogueSkill {
+        name: "decision-checkpoint",
+        description: "Before implementing, explicitly state the decision, rationale, and reversibility for user sign-off.",
+        triggers: &["alignment_debt", "instruction_drift", "blind_acceptance"],
+    },
+    CatalogueSkill {
+        name: "context-compaction-notice",
+        description: "Warn the user when token usage indicates context compaction is imminent and suggest a session boundary.",
+        triggers: &["session_heavy", "session_too_long"],
+    },
+    CatalogueSkill {
+        name: "explicit-acceptance-criteria",
+        description: "Request a definition of done before starting any implementation task.",
+        triggers: &["needs_clarification", "scope_shift", "high_churn"],
+    },
+    CatalogueSkill {
+        name: "skeptical-reviewer",
+        description: "Challenge the agent's own outputs — surface potential issues before presenting results as complete.",
+        triggers: &["blind_acceptance", "fluency", "unverified_claim"],
+    },
+];
+
+/// Build the skill context block injected into the tune/both LLM prompt.
+/// Includes: installed skills (for audit) + catalogue candidates (for recommendations).
+fn build_skill_context(
+    installed: &[crate::commands::reflect::InstalledSkill],
+    observed_flags: &std::collections::HashSet<&str>,
+) -> String {
+    let mut ctx = String::new();
+
+    // Installed skills
+    if !installed.is_empty() {
+        ctx.push_str("Installed skills (audit these — do they help or hurt based on the turn data?):\n");
+        for s in installed {
+            ctx.push_str(&format!("  - {} ({}): {}\n", s.name, s.path, s.description));
+        }
+        ctx.push('\n');
+    } else {
+        ctx.push_str("Installed skills: none found.\n\n");
+    }
+
+    // Catalogue candidates — only those triggered by observed flags
+    let candidates: Vec<&CatalogueSkill> = SKILL_CATALOGUE
+        .iter()
+        .filter(|s| s.triggers.iter().any(|t| observed_flags.contains(t)))
+        .collect();
+
+    if !candidates.is_empty() {
+        ctx.push_str("Hypothetical skill recommendations (based on observed patterns — these do not exist yet):\n");
+        for s in &candidates {
+            let why: Vec<&&str> = s
+                .triggers
+                .iter()
+                .filter(|t| observed_flags.contains(**t))
+                .collect();
+            ctx.push_str(&format!(
+                "  - {} : {} [triggered by: {}]\n",
+                s.name,
+                s.description,
+                why.iter().map(|t| **t).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    } else {
+        ctx.push_str("Hypothetical skill recommendations: no strong matches for observed patterns.\n");
+    }
+
+    ctx
+}
+
 pub(crate) async fn llm_reflect_narrative(
     llm_model_override: Option<&str>,
     mode: crate::cli::ReflectMode,
     capsules: &[crate::CapsuleHit],
     session_id: Option<&str>,
+    installed_skills: &[crate::commands::reflect::InstalledSkill],
 ) -> anyhow::Result<String> {
     let preamble = match mode {
         crate::cli::ReflectMode::Coach => REFLECT_COACH_PREAMBLE,
@@ -2087,7 +2265,34 @@ pub(crate) async fn llm_reflect_narrative(
         crate::cli::ReflectMode::Both => REFLECT_BOTH_PREAMBLE,
     };
 
-    let context = build_reflect_context(capsules, session_id, mode);
+    // Collect observed flags from all eval turns for skill matching
+    let observed_flags: std::collections::HashSet<&str> = capsules
+        .iter()
+        .filter_map(|h| h.turn_eval.as_ref())
+        .flat_map(|te| te.flags.iter().map(|f| f.as_str()))
+        .collect();
+
+    // Also include high-signal channel names as pseudo-flags
+    let mut observed_flags = observed_flags;
+    for h in capsules {
+        if let Some(te) = &h.turn_eval {
+            if te.alignment_debt > 0.45 { observed_flags.insert("alignment_debt"); }
+            if te.path_hallucination > 0.45 { observed_flags.insert("path_hallucination"); }
+            if te.novelty_collapse > 0.45 { observed_flags.insert("novelty_collapse"); }
+            if te.semantic_stall > 0.45 { observed_flags.insert("semantic_stall"); }
+            if te.logic_churn > 0.45 { observed_flags.insert("logic_churn"); }
+            if te.fluency > 0.55 { observed_flags.insert("fluency"); }
+            if te.context_freshness < 0.4 { observed_flags.insert("context_freshness"); }
+        }
+    }
+
+    let mut context = build_reflect_context(capsules, session_id, mode);
+
+    // Append skill context for tune/both modes
+    if matches!(mode, crate::cli::ReflectMode::Tune | crate::cli::ReflectMode::Both) {
+        context.push_str("\n\n");
+        context.push_str(&build_skill_context(installed_skills, &observed_flags));
+    }
 
     #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
     struct ReflectOutput {

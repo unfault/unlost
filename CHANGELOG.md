@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **`unlost reflect --mode tune` SKILL ASSESSMENT**: The tune (and both) mode now includes a `SKILL ASSESSMENT` section after NEXT ACTIONS. It audits every installed skill found in `.opencode/skills/`, `.claude/skills/`, `.cursor/skills/`, and `.aider/skills/` — rating each `helped / hurt / neutral` based on observed turn patterns — then recommends 2-3 hypothetical skills from a hardcoded catalogue (keyed to observed flags like `retry_loop`, `hallucination_risk`, `session_heavy`, `alignment_debt`, etc.) as gap-fillers. Rendered in bold yellow with `◆` bullet leaders; verdict words are coloured green (helped), red (hurt), or dim (neutral).
+
 ### Changed
 - **`unlost reflect` NEXT ACTIONS block**: All three reflect modes now open with a `NEXT ACTIONS` section — 3–5 ultra-short bold imperatives (max 10 words each, no evidence citations) designed to be scannable in 5 seconds. Rendered with bold-white underlined header and bold `→` bullets to visually separate it from the detailed analysis below. The rest of the output is unchanged.
 
