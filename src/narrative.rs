@@ -1676,8 +1676,10 @@ TUNING RECOMMENDATIONS: (2-3 suggestions for system prompt, tool policy, or mode
 \n\
 Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the change.\n\
-- SKILL ASSESSMENT: base the helped/hurt/neutral verdict on actual turn data patterns, \
-not generic guesses. If no installed skills are present, only list recommendations.\n\
+- SKILL ASSESSMENT: only audit skills from the provided installed list — do NOT \
+invent or assess skills not listed there. Base helped/hurt/neutral on concrete \
+turn-data evidence (specific flags or channel values). If evidence is weak or \
+absent, say neutral. If no installed skills are provided, only list recommendations.\n\
 - Anchor every finding in FAILURE PATTERNS / STABILITY SIGNALS to specific channel values \
 (e.g. alignment_debt=0.72 at turn 4).\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
@@ -1702,8 +1704,9 @@ NEXT SESSION: (2-3 concrete recommendations addressing both sides)\n\
 \n\
 Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the action.\n\
-- SKILL ASSESSMENT: base the helped/hurt/neutral verdict on actual turn data patterns. \
-If no installed skills are present, only list recommendations.\n\
+- SKILL ASSESSMENT: only audit skills from the provided installed list — do NOT \
+invent or assess skills not listed. Base verdicts on concrete turn-data evidence. \
+If evidence is weak, say neutral. If no installed skills are provided, only list recommendations.\n\
 - Every claim in the other sections must reference a specific turn index or flag name.\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
 - Max 500 words total.";
@@ -2213,15 +2216,28 @@ fn build_skill_context(
 ) -> String {
     let mut ctx = String::new();
 
-    // Installed skills
+    // Installed skills eligible for audit.
+    // Infrastructure/observer skills (unlost, git-workflow, graph tools, etc.)
+    // have already been excluded by the discovery step — everything here is
+    // a legitimate agent-behaviour skill that can be audited against turn data.
     if !installed.is_empty() {
-        ctx.push_str("Installed skills (audit these — do they help or hurt based on the turn data?):\n");
+        ctx.push_str(
+            "Installed skills to audit (these are agent-behaviour skills — \
+             assess whether each one helped or hurt based on what the turn data \
+             shows about agent behaviour during turns; only verdict if there is \
+             actual evidence, otherwise say neutral):\n",
+        );
         for s in installed {
-            ctx.push_str(&format!("  - {} ({}): {}\n", s.name, s.path, s.description));
+            ctx.push_str(&format!("  - {} : {}\n", s.name, s.description));
         }
-        ctx.push('\n');
+        ctx.push_str(
+            "\nIMPORTANT: do NOT assess skills that are missing from this list. \
+             Infrastructure tools (memory recorders, graph explorers, workflow \
+             enforcers) have been excluded — they cannot be evaluated against \
+             per-turn metrics without circular reasoning.\n\n",
+        );
     } else {
-        ctx.push_str("Installed skills: none found.\n\n");
+        ctx.push_str("Installed skills eligible for audit: none found (infrastructure skills are excluded).\n\n");
     }
 
     // Catalogue candidates — only those triggered by observed flags
@@ -2231,7 +2247,10 @@ fn build_skill_context(
         .collect();
 
     if !candidates.is_empty() {
-        ctx.push_str("Hypothetical skill recommendations (based on observed patterns — these do not exist yet):\n");
+        ctx.push_str(
+            "Hypothetical skill recommendations (these do not exist yet — \
+             suggest only the 2-3 most impactful ones based on observed patterns):\n",
+        );
         for s in &candidates {
             let why: Vec<&&str> = s
                 .triggers

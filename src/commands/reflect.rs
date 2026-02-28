@@ -12,6 +12,24 @@ pub struct InstalledSkill {
     pub path: String,
 }
 
+/// Skills that are excluded from the SKILL ASSESSMENT audit because they are
+/// infrastructure/observer tools rather than agent behaviour skills. Evaluating
+/// them against turn data would produce circular or misleading verdicts (e.g.
+/// unlost itself detects the patterns being assessed — rating it "hurt" because
+/// problems were detected is a category error).
+const EXCLUDED_SKILL_NAMES: &[&str] = &[
+    // unlost family — the memory/friction observer; it is the source of the data,
+    // not a participant in the behaviours being measured.
+    "unlost",
+    "unlost-walkthrough",
+    // unfault graph tools — static analysis helpers, not turn-level behaviour.
+    "unfault-graph-explore",
+    "unfault-graph-impact",
+    "unfault-config",
+    // git-workflow — session management / branch discipline, not agent turn behaviour.
+    "git-workflow",
+];
+
 /// Scan common skill locations under `workspace_root` and return all discovered skills.
 ///
 /// Locations checked (ordered by priority):
@@ -19,6 +37,10 @@ pub struct InstalledSkill {
 /// - `.claude/skills/<name>/SKILL.md`
 /// - `.cursor/skills/<name>/SKILL.md`
 /// - `.aider/skills/<name>/SKILL.md`
+///
+/// Skills listed in `EXCLUDED_SKILL_NAMES` are silently omitted — they are
+/// infrastructure/observer tools whose presence cannot be evaluated against
+/// per-turn behaviour metrics without circular reasoning.
 ///
 /// Each SKILL.md is expected to have YAML frontmatter with `name` and `description`.
 /// Falls back to the directory name if frontmatter is absent.
@@ -64,6 +86,12 @@ pub fn discover_installed_skills(workspace_root: &std::path::Path) -> Vec<Instal
             seen.insert(dir_name.clone());
 
             let (name, description) = parse_skill_frontmatter(&skill_md, &dir_name);
+
+            // Exclude infrastructure/observer skills — they can't be meaningfully
+            // evaluated against per-turn behaviour metrics.
+            if EXCLUDED_SKILL_NAMES.iter().any(|&e| e == name || e == dir_name) {
+                continue;
+            }
             let rel_path = format!(
                 "{}/{}",
                 base,
