@@ -1640,16 +1640,20 @@ Focus on DEVELOPER behaviour and habits — not the agent's. \
 Never blame; identify patterns and offer concrete improvements.\n\
 \n\
 Format your response as:\n\
+NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
+no evidence citations, pure \"do this next session\"; this section comes FIRST)\n\
 SESSION QUALITY: (1-2 sentences overall)\n\
 WHAT WORKED: (2-3 bullet points — patterns to repeat)\n\
 FRICTION POINTS: (2-4 bullet points — where collaboration broke down and why)\n\
 RECOMMENDATIONS: (2-3 specific, actionable suggestions for the next session)\n\
 \n\
 Rules:\n\
-- Every claim must reference a specific turn index or flag name as evidence.\n\
+- Every claim in SESSION QUALITY / WHAT WORKED / FRICTION POINTS / RECOMMENDATIONS \
+must reference a specific turn index or flag name as evidence.\n\
+- NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the action.\n\
 - Keep score values for evidence only — do not expose raw numbers as headlines.\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
-- Max 300 words total.";
+- Max 350 words total.";
 
 const REFLECT_TUNE_PREAMBLE: &str = "\
 You are an AI agent reliability analyst reviewing a coding session.\n\
@@ -1660,15 +1664,19 @@ Focus on AGENT behaviour — not the developer's. \
 Be precise and evidence-grounded.\n\
 \n\
 Format your response as:\n\
+NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
+no evidence citations, pure tuning changes to make; this section comes FIRST)\n\
 AGENT HEALTH: (1-2 sentences overall — stable / degraded / poor)\n\
 FAILURE PATTERNS: (2-4 bullet points — specific failure modes observed with turn index)\n\
 STABILITY SIGNALS: (2-3 bullet points — where the agent performed well)\n\
 TUNING RECOMMENDATIONS: (2-3 suggestions for system prompt, tool policy, or model choice)\n\
 \n\
 Rules:\n\
-- Anchor every finding to specific channel values (e.g. alignment_debt=0.72 at turn 4).\n\
+- NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the change.\n\
+- Anchor every finding in the other sections to specific channel values \
+(e.g. alignment_debt=0.72 at turn 4).\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
-- Max 300 words total.";
+- Max 350 words total.";
 
 const REFLECT_BOTH_PREAMBLE: &str = "\
 You are reviewing a coding session as both a developer effectiveness coach \
@@ -1676,6 +1684,8 @@ and an AI agent reliability analyst.\n\
 Given a structured turn-by-turn evaluation timeline, produce a combined reflection.\n\
 \n\
 Format your response as:\n\
+NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
+no evidence citations, mix of developer and agent changes; this section comes FIRST)\n\
 SESSION QUALITY: (1-2 sentences — overall impression)\n\
 DEVELOPER PATTERNS: (2-3 bullet points — human collaboration habits, good or bad)\n\
 AGENT PATTERNS: (2-3 bullet points — agent drift, loops, or reliability issues)\n\
@@ -1683,9 +1693,10 @@ SHARED FRICTION: (1-2 bullet points — where both sides contributed to a proble
 NEXT SESSION: (2-3 concrete recommendations addressing both sides)\n\
 \n\
 Rules:\n\
-- Every claim must reference a specific turn index or flag name as evidence.\n\
+- NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the action.\n\
+- Every claim in the other sections must reference a specific turn index or flag name.\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
-- Max 400 words total.";
+- Max 450 words total.";
 
 /// Build the structured TurnEval timeline context fed to the LLM.
 /// Format: turn index, timestamp, category, outcome hint, scores, flags — no raw text.
@@ -1843,18 +1854,21 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
 
     // Section headers for each mode
     const COACH_HEADERS: &[&str] = &[
+        "NEXT ACTIONS",
         "SESSION QUALITY",
         "WHAT WORKED",
         "FRICTION POINTS",
         "RECOMMENDATIONS",
     ];
     const TUNE_HEADERS: &[&str] = &[
+        "NEXT ACTIONS",
         "AGENT HEALTH",
         "FAILURE PATTERNS",
         "STABILITY SIGNALS",
         "TUNING RECOMMENDATIONS",
     ];
     const BOTH_HEADERS: &[&str] = &[
+        "NEXT ACTIONS",
         "SESSION QUALITY",
         "DEVELOPER PATTERNS",
         "AGENT PATTERNS",
@@ -1888,6 +1902,9 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
 
     const WRAP: usize = 80;
 
+    // Track which section we're currently inside so bullets can be styled differently
+    let mut current_section: &str = "";
+
     for line in s.lines() {
         let l = line.trim_end();
         let trimmed = l.trim();
@@ -1899,14 +1916,25 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
         });
 
         if let Some(&header) = header_match {
+            // Update section tracker
+            current_section = header;
+
             // Blank line before each section (except very first)
             if !out.ends_with("\n\n") && !out.ends_with("m\n\n") {
                 out.push('\n');
             }
-            // Bold header in mode colour
-            out.push_str(mode_colour);
-            out.push_str(header);
-            out.push_str("\x1b[0m");
+
+            if header.eq_ignore_ascii_case("NEXT ACTIONS") {
+                // NEXT ACTIONS: bold white + underline — visually distinct from mode sections
+                out.push_str("\x1b[1;4;97m");
+                out.push_str(header);
+                out.push_str("\x1b[0m");
+            } else {
+                // Regular sections: bold in mode colour
+                out.push_str(mode_colour);
+                out.push_str(header);
+                out.push_str("\x1b[0m");
+            }
             // Colon if original had one
             if trimmed.ends_with(':') {
                 out.push(':');
@@ -1915,20 +1943,33 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
             continue;
         }
 
+        let in_next_actions = current_section.eq_ignore_ascii_case("NEXT ACTIONS");
+
         // Bullet point lines
         if trimmed.starts_with("- ") || trimmed.starts_with("• ") {
             let indent: String = l.chars().take_while(|c| c.is_whitespace()).collect();
             let bullet_content = trimmed[2..].trim();
             let hang = indent.len() + 2; // hanging indent for wrapped continuation
 
-            // Render the bullet dash in cyan
-            out.push_str(&indent);
-            out.push_str("\x1b[36m-\x1b[0m ");
+            if in_next_actions {
+                // NEXT ACTIONS bullets: bold white arrow instead of dim cyan dash
+                out.push_str(&indent);
+                out.push_str("\x1b[1;97m→\x1b[0m ");
+            } else {
+                // Regular bullets: cyan dash
+                out.push_str(&indent);
+                out.push_str("\x1b[36m-\x1b[0m ");
+            }
 
-            // Render the content with inline colouring
-            let coloured = colour_reflect_inline(bullet_content);
+            // Render the content — NEXT ACTIONS bullets are bold white (plain imperative),
+            // regular bullets get full inline colouring.
+            let rendered_content: String = if in_next_actions {
+                format!("\x1b[1m{bullet_content}\x1b[0m")
+            } else {
+                colour_reflect_inline(bullet_content)
+            };
             // Word-wrap
-            for (wi, wl) in wrap_ansi_line(&coloured, WRAP.saturating_sub(hang + 2), 0).iter().enumerate() {
+            for (wi, wl) in wrap_ansi_line(&rendered_content, WRAP.saturating_sub(hang + 2), 0).iter().enumerate() {
                 if wi > 0 {
                     out.push('\n');
                     for _ in 0..hang {
