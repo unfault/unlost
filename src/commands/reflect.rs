@@ -3,6 +3,121 @@ use indicatif::{ProgressBar, ProgressStyle};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use std::time::Duration;
 
+/// A skill installed in the workspace.
+#[derive(Debug, Clone)]
+pub struct InstalledSkill {
+    pub name: String,
+    pub description: String,
+    /// Relative path from workspace root, for display
+    pub path: String,
+}
+
+/// Scan common skill locations under `workspace_root` and return all discovered skills.
+///
+/// Locations checked (ordered by priority):
+/// - `.opencode/skills/<name>/SKILL.md`
+/// - `.claude/skills/<name>/SKILL.md`
+/// - `.cursor/skills/<name>/SKILL.md`
+/// - `.aider/skills/<name>/SKILL.md`
+///
+/// Each SKILL.md is expected to have YAML frontmatter with `name` and `description`.
+/// Falls back to the directory name if frontmatter is absent.
+pub fn discover_installed_skills(workspace_root: &std::path::Path) -> Vec<InstalledSkill> {
+    let skill_dirs = [
+        ".opencode/skills",
+        ".claude/skills",
+        ".cursor/skills",
+        ".aider/skills",
+    ];
+
+    let mut skills: Vec<InstalledSkill> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for base in &skill_dirs {
+        let base_path = workspace_root.join(base);
+        if !base_path.is_dir() {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&base_path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                continue;
+            }
+            let skill_md = skill_dir.join("SKILL.md");
+            if !skill_md.exists() {
+                continue;
+            }
+
+            let dir_name = skill_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            // Deduplicate by name — first occurrence wins
+            if seen.contains(&dir_name) {
+                continue;
+            }
+            seen.insert(dir_name.clone());
+
+            let (name, description) = parse_skill_frontmatter(&skill_md, &dir_name);
+            let rel_path = format!(
+                "{}/{}",
+                base,
+                skill_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            );
+
+            skills.push(InstalledSkill {
+                name,
+                description,
+                path: rel_path,
+            });
+        }
+    }
+
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    skills
+}
+
+/// Parse `name` and `description` from YAML frontmatter in a SKILL.md file.
+/// Returns `(dir_name, "")` if frontmatter is missing or unparseable.
+fn parse_skill_frontmatter(path: &std::path::Path, fallback_name: &str) -> (String, String) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return (fallback_name.to_string(), String::new()),
+    };
+
+    // Expect frontmatter delimited by `---`
+    if !content.starts_with("---") {
+        return (fallback_name.to_string(), String::new());
+    }
+    let after_open = &content[3..];
+    let close = match after_open.find("\n---") {
+        Some(p) => p,
+        None => return (fallback_name.to_string(), String::new()),
+    };
+    let frontmatter = &after_open[..close];
+
+    let mut name = fallback_name.to_string();
+    let mut description = String::new();
+
+    for line in frontmatter.lines() {
+        if let Some(val) = line.strip_prefix("name:") {
+            name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+        } else if let Some(val) = line.strip_prefix("description:") {
+            description = val.trim().trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+
+    (name, description)
+}
+
 pub async fn run(
     mode: crate::cli::ReflectMode,
     session: Option<String>,
@@ -80,6 +195,16 @@ pub async fn run(
         "gpt-4o-mini".to_string()
     };
 
+    // Discover installed skills — only relevant for tune/both modes
+    let installed_skills = match mode {
+        crate::cli::ReflectMode::Tune | crate::cli::ReflectMode::Both => {
+            let workspace_root = crate::workspace::git_toplevel(dir_path)
+                .unwrap_or_else(|| dir_path.to_path_buf());
+            discover_installed_skills(&workspace_root)
+        }
+        crate::cli::ReflectMode::Coach => vec![],
+    };
+
     if let Some(pb) = spinner.as_ref() {
         pb.set_message(format!("Reflecting with {} ({} turns)...", model_name, eval_capsules.len()));
     }
@@ -89,6 +214,7 @@ pub async fn run(
         mode,
         &eval_capsules,
         session.as_deref(),
+        &installed_skills,
     )
     .await?;
 
