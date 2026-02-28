@@ -85,7 +85,9 @@ unlost config agent copilot --path .
 This writes `.github/hooks/unlost.json` and installs a Copilot skill at `.github/copilot/skills/unlost/`.
 
 ### 2. (Optional) Configure extraction LLM
-By default, unlost uses whatever LLM your agent is configured with. You can override this for better results (e.g., using a smaller/faster model for extraction):
+By default, unlost uses whatever LLM your agent is configured with. You can
+override this for better results (e.g., using a smaller/faster model for
+extraction):
 
 ```bash
 # Use Claude
