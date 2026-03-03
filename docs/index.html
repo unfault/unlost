@@ -88,6 +88,7 @@
         <div class="hidden md:flex items-center gap-6 text-sm">
           <a href="#install" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Install</a>
           <a href="#commands" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Commands</a>
+          <a href="#reflect" class="text-midnight-violet-950/70 hover:text-fiery-terracotta transition-colors">Reflect</a>
         </div>
         <a href="https://github.com/unfault/unlost" class="inline-flex items-center px-3 py-1.5 sm:px-4 sm:py-2 text-sm font-medium text-white bg-midnight-violet-950 rounded-lg hover:bg-midnight-violet-800 transition-colors">GitHub</a>
       </div>
@@ -319,42 +320,53 @@
              <p class="text-midnight-violet-950/60 leading-relaxed mb-10">
                 Once context is grounded, you can query it from any angle.
              </p>
-             <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <!-- Look Back -->
-                <div>
-                   <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Look Back</h4>
-                   <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
-                      Recover the context you lost. Whether it's a high-level staff engineer debrief or a specific decision trail, you get the <em>why</em> behind the code.
-                   </p>
-                   <div class="flex gap-2 text-xs font-mono text-midnight-violet-950/40">
-                      <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">trace</span>
-                      <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">brief</span>
-                   </div>
-                </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                 <!-- Look Back -->
+                 <div>
+                    <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Look Back</h4>
+                    <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
+                       Recover the context you lost. Whether it's a high-level staff engineer debrief or a specific decision trail, you get the <em>why</em> behind the code.
+                    </p>
+                    <div class="flex flex-wrap gap-2 text-xs font-mono text-midnight-violet-950/40">
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">trace</span>
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">brief</span>
+                    </div>
+                 </div>
 
-                <!-- Challenge Present -->
-                <div>
-                   <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Challenge Present</h4>
-                   <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
-                      Don't just approve; verify. Pressure-test decisions against the graph and monitor the agent's struggle in real-time.
-                   </p>
-                   <div class="flex gap-2 text-xs font-mono text-midnight-violet-950/40">
-                      <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">challenge</span>
-                      <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">metrics</span>
-                   </div>
-                </div>
+                 <!-- Challenge Present -->
+                 <div>
+                    <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Challenge Present</h4>
+                    <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
+                       Don't just approve; verify. Pressure-test decisions against the graph and monitor the agent's struggle in real-time.
+                    </p>
+                    <div class="flex flex-wrap gap-2 text-xs font-mono text-midnight-violet-950/40">
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">challenge</span>
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">metrics</span>
+                    </div>
+                 </div>
 
-                <!-- Explore Future -->
-                <div>
-                   <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Explore Future</h4>
-                   <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
-                      Draft with memory. Use your established constraints and history to weigh new trade-offs before writing a single line of code.
-                   </p>
-                   <div class="flex gap-2 text-xs font-mono text-midnight-violet-950/40">
-                      <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">explore</span>
-                   </div>
-                </div>
-             </div>
+                 <!-- Explore Future -->
+                 <div>
+                    <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Explore Future</h4>
+                    <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
+                       Draft with memory. Use your established constraints and history to weigh new trade-offs before writing a single line of code.
+                    </p>
+                    <div class="flex flex-wrap gap-2 text-xs font-mono text-midnight-violet-950/40">
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">explore</span>
+                    </div>
+                 </div>
+
+                 <!-- Review the Journey -->
+                 <div>
+                    <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Review the Journey</h4>
+                    <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
+                       Reflect on how you and the agent worked together. Get actionable coaching on collaboration habits, agent drift patterns, and which skills to add or tune.
+                    </p>
+                    <div class="flex flex-wrap gap-2 text-xs font-mono text-midnight-violet-950/40">
+                       <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">reflect</span>
+                    </div>
+                 </div>
+              </div>
           </div>
         </div>
       </div>
@@ -550,6 +562,25 @@ unlost trace "why is the timeout 30s?"</code></pre>
           <pre><code>unlost explore "should we keep lancedb or move to sqlite+fts?"</code></pre>
         </div>
 
+        <!-- Reflect -->
+        <div id="reflect">
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost reflect</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Reflect on how you and the agent worked together. Reads per-turn evaluation telemetry (collected silently during sessions) and generates a structured narrative via LLM — no raw transcript required. Three modes:</p>
+          <ul class="list-disc pl-4 sm:pl-5 space-y-2 text-midnight-violet-950/60 mb-4 text-sm">
+            <li><strong>coach</strong> — developer collaboration habits: clarity, scope discipline, verification rigor, session health.</li>
+            <li><strong>tune</strong> — agent drift and failure patterns: repetition, hallucination, alignment debt, instruction drift. Audits installed skills and suggests behavioural gaps to fill.</li>
+            <li><strong>both</strong> — combined developer and agent report.</li>
+          </ul>
+          <p class="text-midnight-violet-950/60 mb-4 text-sm">Every output opens with a <strong>NEXT ACTIONS</strong> block — 3–5 scannable imperatives — before the full analysis. The <strong>SKILL ASSESSMENT</strong> section (tune/both) audits your installed agent skills against observed turn data and suggests behavioural gaps to address.</p>
+          <pre><code>unlost reflect
+unlost reflect --mode tune
+unlost reflect --mode both --since 7d
+unlost reflect --mode coach --session ses_3a79</code></pre>
+        </div>
+
         <!-- Monitor -->
         <div id="metrics">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
@@ -629,6 +660,7 @@ unlost trace "why is the timeout 30s?"</code></pre>
       <p class="text-lg sm:text-xl text-midnight-violet-950/60 mb-12 leading-relaxed">
         The <code>unlost metrics</code> command generates a <strong>Cognitive Mirror</strong>: a diagnostic 
         report that reveals the structural health of your collaboration with AI agents.
+        For a deeper, session-level narrative, see <a href="#reflect" class="text-fiery-terracotta hover:underline"><code>unlost reflect</code></a>.
       </p>
 
       <div class="space-y-16">

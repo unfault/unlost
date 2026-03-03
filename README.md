@@ -133,6 +133,17 @@ unlost explore "should we keep lancedb or move to sqlite+fts?"
 - **`unlost challenge`**: Surfaces recorded rationale, failure modes, and alternatives. Gives you a verdict grounded in history before you make a call.
 - **`unlost explore`**: Forward-looking planning. Labels what comes from memory `[memory]` vs. external knowledge `[outside]` so you know what you're actually standing on.
 
+### Reflecting on how you worked
+
+```bash
+# How did you and the agent collaborate? What should change?
+unlost reflect
+unlost reflect --mode tune
+unlost reflect --mode both --since 7d
+```
+
+- **`unlost reflect`**: Reads per-turn evaluation telemetry collected silently during sessions and generates a structured narrative via LLM — no raw transcript required. Three modes: `coach` (your collaboration habits), `tune` (agent drift, loops, hallucination), `both`. Every output opens with a scannable **NEXT ACTIONS** block. The `tune` and `both` modes include a **SKILL ASSESSMENT** that audits your installed agent skills against observed turn data and suggests behavioural gaps to fill.
+
 ### Handing it off
 
 ```bash
@@ -149,10 +160,11 @@ The `/unlost-walkthrough` agent skill does the same thing interactively: step th
 
 ## How it works
 
-1. **Capture:** After each agent exchange → extracts a structured capsule (intent, decision, rationale, symbols).
+1. **Capture:** After each agent exchange → extracts a structured capsule (intent, decision, rationale, symbols) plus a `TurnEval` — per-turn coaching and agent-tuning scores computed locally with zero LLM calls.
 2. **Store:** Capsules stay local, embedded with fastembed, indexed in LanceDB. Nothing leaves your machine.
 3. **Guide:** Before each prompt → checks for friction (loops, drift, misalignment). Injects a correction if something is off.
 4. **Recall:** Capsules are queryable anytime, by file, symbol, question, or concept.
+5. **Reflect:** `unlost reflect` reads the TurnEval timeline and generates a structured coaching/diagnostics narrative — developer habits, agent patterns, skill gaps — without touching raw transcript text.
 
 ---
 
@@ -202,6 +214,16 @@ The only network call unlost makes is to the LLM provider you configure for extr
 - **Cross-session recurrence scoring** — Capsules scored for `brief` by failure mode, explicit rationale/decision, and symbols recurring across multiple sessions (no recency bias)
 - **Recency-weighted fingerprint deduplication** — `recall` collapses near-duplicates by content fingerprint and caps older sessions at 3 results, with a 30-minute recency bypass
 - **Checkpoint summarization** — Background process compresses windows of capsules into narrative checkpoints; `recall` and `brief` use a fast path when the delta since last checkpoint is small
+
+### TurnEval: Per-Turn Evaluation
+
+- **Zero-LLM coaching scores** — Each capsule carries `clarity`, `context_freshness`, `verification_rigor`, `decision_progress`, `scope_discipline`, and `cost_acceleration` — all heuristic, computed at flush time from capsule content and usage metadata
+- **Agent-tuning channels** — Persisted governor `SymptomChannels` (repetition, novelty_collapse, semantic_stall, alignment_debt, path_hallucination, logic_churn, fluency, …) previously discarded after friction decisions; now stored per capsule
+- **Behavioral flags** — Derived thresholds: `retry_loop`, `session_heavy`, `session_too_long`, `unverified_claim`, `scope_shift`, `blind_acceptance`, `cost_spike`, etc.
+- **Outcome backfill** — At checkpoint time, `outcome_hint` (`progressed`/`stalled`/`regressed`/`unclear`) is retroactively set via deterministic lookahead heuristics and written back via LanceDB `UPDATE`
+- **Reflect-time LLM** — `unlost reflect` feeds the per-turn timeline + session aggregates to the LLM; the LLM narrates from structured telemetry only, no raw transcript crosses the wire
+- **Skill gap guidance** — Observed flag patterns are matched to a behavioural gap catalogue; the reflect output includes a "Look for skills that…" list grounded in actual session data
+- **Reindex backfill** — `unlost reindex` automatically populates TurnEval for all capsule history; post-v0.13 capsules restore full data from JSONL, pre-v0.13 get coach dimensions computed from content
 
 ### Storage & Infrastructure
 
