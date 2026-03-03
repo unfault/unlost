@@ -164,12 +164,13 @@ pub async fn run(
                     );
                     println!(
                         "  coach:    clarity={:.2} freshness={:.2} verify={:.2} \
-                         progress={:.2} scope={:.2}",
+                         progress={:.2} scope={:.2} cost_accel={:.2}",
                         te.clarity,
                         te.context_freshness,
                         te.verification_rigor,
                         te.decision_progress,
-                        te.scope_discipline
+                        te.scope_discipline,
+                        te.cost_acceleration
                     );
                     if !te.flags.is_empty() {
                         println!("  flags:    {:?}", te.flags);

@@ -1141,12 +1141,16 @@ pub struct CoachScores {
     pub verification_rigor: f32,
     pub decision_progress: f32,
     pub scope_discipline: f32,
+    /// Rolling slope of tokens_input over last 3 turns, normalised 0–1.
+    /// High = token spend accelerating without corresponding progress.
+    pub cost_acceleration: f32,
     /// Short auditable evidence strings.
     pub evidence: Vec<String>,
 }
 
-/// Patterns indicating a tool outcome was verified (build/test results).
+/// Patterns indicating a tool outcome was verified (build, test, or static analysis).
 const VERIFICATION_PASS_PATTERNS: &[&str] = &[
+    // Build / test
     "succeeded",
     "tests passed",
     "test passed",
@@ -1159,9 +1163,25 @@ const VERIFICATION_PASS_PATTERNS: &[&str] = &[
     "✔",
     "passing",
     "0 failed",
+    // Static analysis / type-checking (clean output)
+    "no errors",
+    "no warnings",
+    "0 errors",
+    "0 warnings",
+    "type-checked",
+    "type checked",
+    "clippy",
+    "mypy",
+    "tsc",
+    "pyright",
+    "eslint",
+    "ruff",
+    "biome",
+    "golangci",
 ];
 
 const VERIFICATION_FAIL_PATTERNS: &[&str] = &[
+    // Build / test failures
     "failed",
     "error",
     "exit code",
@@ -1170,6 +1190,15 @@ const VERIFICATION_FAIL_PATTERNS: &[&str] = &[
     "assertion failed",
     "stderr",
     "status 1",
+    // Static analysis / type-checking failures
+    "type error",
+    "type mismatch",
+    "cannot find",
+    "unresolved",
+    "lint error",
+    "lint warning",
+    "E0", // Rust compiler error codes
+    "TS", // TypeScript error prefix
 ];
 
 const CODE_TOUCHING_CATEGORIES: &[&str] = &[
@@ -1416,12 +1445,57 @@ pub fn compute_coach_scores(input: &CoachInput<'_>) -> CoachScores {
         }
     };
 
+    // ── cost_acceleration ────────────────────────────────────────────────────
+    // Rolling slope of tokens_input over last 3 turns, normalised to [0, 1].
+    // High = spend is growing without corresponding decision_progress.
+    // Requires at least 2 prior turns with usage data; 0.0 otherwise.
+    let cost_acceleration = {
+        // Collect tokens_input from the 3 most recent history entries that have it.
+        let token_history: Vec<i64> = input
+            .history
+            .iter()
+            .take(3)
+            .filter_map(|h| h.meta.usage.as_ref()?.tokens_input)
+            .collect();
+
+        let current_tokens = input.usage.and_then(|u| u.tokens_input).unwrap_or(0);
+
+        if token_history.len() >= 2 && current_tokens > 0 {
+            // Oldest of the window
+            let oldest = token_history.last().copied().unwrap_or(0);
+            if oldest > 0 {
+                // Relative growth over the window
+                let growth = (current_tokens - oldest) as f32 / oldest as f32;
+                // Only flag when growth is meaningful AND progress is not keeping up.
+                // growth > 0.5 = tokens grew >50% over 3 turns; penalise by lack of progress.
+                let accel = if growth > 0.0 {
+                    (growth * (1.0 - decision_progress)).clamp(0.0_f32, 1.0_f32)
+                } else {
+                    0.0
+                };
+                if accel > 0.5 {
+                    evidence.push(format!(
+                        "token spend grew {:.0}% over last {} turns without matching progress",
+                        growth * 100.0,
+                        token_history.len() + 1
+                    ));
+                }
+                accel
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    };
+
     CoachScores {
         clarity,
         context_freshness,
         verification_rigor,
         decision_progress,
         scope_discipline,
+        cost_acceleration,
         evidence,
     }
 }
@@ -1470,6 +1544,9 @@ pub fn compute_flags(
     }
     if coach.scope_discipline < 0.35 {
         flags.push("scope_shift".to_string());
+    }
+    if coach.cost_acceleration > 0.50 {
+        flags.push("cost_spike".to_string());
     }
 
     // ── Combined / meta flags ────────────────────────────────────────────────

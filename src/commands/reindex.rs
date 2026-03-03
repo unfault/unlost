@@ -241,6 +241,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
                         verification_rigor: coach.verification_rigor,
                         decision_progress: coach.decision_progress,
                         scope_discipline: coach.scope_discipline,
+                        cost_acceleration: coach.cost_acceleration,
                         flags,
                         outcome_hint: "unclear".to_string(),
                         evidence,
