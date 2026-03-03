@@ -2015,12 +2015,17 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
             continue;
         }
 
-        // Plain line — inline colouring only
+        // Plain line — inline colouring + word-wrap at WRAP columns
         if trimmed.is_empty() {
             out.push('\n');
         } else {
             let coloured = colour_reflect_inline(trimmed);
-            out.push_str(&coloured);
+            for (wi, wl) in wrap_ansi_line(&coloured, WRAP, 0).iter().enumerate() {
+                if wi > 0 {
+                    out.push('\n');
+                }
+                out.push_str(wl);
+            }
             out.push('\n');
         }
     }
