@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="unlost - your coding session memory. Recall the past: recall, brief, trace, pr-comment. Question the present: challenge. Imagine the future: explore. Review the journey: reflect (coming soon). AI gets code authorship. Context ownership stays with you.">
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="unlost - your coding session memory. Recall the past: recall, brief, trace, pr-comment. Question the present: challenge. Imagine the future: explore. Review the journey: reflect (coach, tune, both). AI gets code authorship. Context ownership stays with you.">
   <defs>
     <style>
       :root {
@@ -79,11 +79,12 @@
   <!-- Top Center: Review Loop -->
   <g transform="translate(600 340)">
     <circle cx="-54" cy="-54" r="3" fill="#D1B487"/>
-    <path d="M -54 -54 C -100 -200, 100 -200, 54 -54" fill="none" stroke="#D1B487" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+    <path d="M -54 -54 C -100 -200, 100 -200, 54 -54" fill="none" stroke="#D1B487" stroke-width="3" marker-end="url(#arrow)"/>
     
     <g transform="translate(0 -150)">
-      <text class="label-title display" x="0" y="0" text-anchor="middle" opacity="0.6">Review the journey</text>
-      <text class="cmd-dim mono" x="0" y="35" text-anchor="middle">reflect <tspan fill="#E74F26" font-weight="700" font-size="12" dy="-2">SOON</tspan></text>
+      <text class="label-title display" x="0" y="0" text-anchor="middle">Review the journey</text>
+      <text class="cmd mono" x="0" y="35" text-anchor="middle">reflect</text>
+      <text class="cmd-list mono" x="0" y="62" text-anchor="middle">--mode coach · tune · both</text>
     </g>
   </g>
 
