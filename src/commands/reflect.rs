@@ -22,7 +22,9 @@ const EXCLUDED_SKILL_NAMES: &[&str] = &[
     // not a participant in the behaviours being measured.
     "unlost",
     "unlost-walkthrough",
-    // unfault graph tools — static analysis helpers, not turn-level behaviour.
+    // unfault tools — static analysis, code review, and config helpers invoked
+    // manually; they have no influence on per-turn agent behaviour.
+    "unfault-review",
     "unfault-graph-explore",
     "unfault-graph-impact",
     "unfault-config",
