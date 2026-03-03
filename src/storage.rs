@@ -102,6 +102,8 @@ fn capsules_schema() -> Arc<Schema> {
         Field::new("te_verification_rigor", DataType::Float32, true),
         Field::new("te_decision_progress", DataType::Float32, true),
         Field::new("te_scope_discipline", DataType::Float32, true),
+        // TurnEval: cost efficiency — token spend growth vs progress.
+        Field::new("te_cost_acceleration", DataType::Float32, true),
         // TurnEval: flags (comma-joined) and outcome hint.
         Field::new("te_flags", DataType::Utf8, true),
         Field::new("te_outcome_hint", DataType::Utf8, true),
@@ -167,6 +169,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_f32("te_verification_rigor", &mut exprs);
                 add_f32("te_decision_progress", &mut exprs);
                 add_f32("te_scope_discipline", &mut exprs);
+                add_f32("te_cost_acceleration", &mut exprs);
                 add_str("te_flags", &mut exprs);
                 add_str("te_outcome_hint", &mut exprs);
 
@@ -274,6 +277,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let te_verification_rigor = te_f32_empty();
             let te_decision_progress = te_f32_empty();
             let te_scope_discipline = te_f32_empty();
+            let te_cost_acceleration = te_f32_empty();
             let te_flags = te_str_empty();
             let te_outcome_hint = te_str_empty();
 
@@ -332,6 +336,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     te_verification_rigor,
                     te_decision_progress,
                     te_scope_discipline,
+                    te_cost_acceleration,
                     te_flags,
                     te_outcome_hint,
                 ],
@@ -402,6 +407,7 @@ fn read_turn_eval(
     te_verification_rigor_col: Option<&Float32Array>,
     te_decision_progress_col: Option<&Float32Array>,
     te_scope_discipline_col: Option<&Float32Array>,
+    te_cost_acceleration_col: Option<&Float32Array>,
     te_flags_col: Option<&StringArray>,
     te_outcome_hint_col: Option<&StringArray>,
 ) -> Option<crate::types::TurnEval> {
@@ -459,6 +465,7 @@ fn read_turn_eval(
         verification_rigor: read_f32(te_verification_rigor_col),
         decision_progress: read_f32(te_decision_progress_col),
         scope_discipline: read_f32(te_scope_discipline_col),
+        cost_acceleration: read_f32(te_cost_acceleration_col),
         flags,
         outcome_hint,
         evidence: vec![],
@@ -577,6 +584,7 @@ pub(crate) fn record_batches_to_hits(
         let te_verification_rigor_col = col_f32("te_verification_rigor");
         let te_decision_progress_col = col_f32("te_decision_progress");
         let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_cost_acceleration_col = col_f32("te_cost_acceleration");
         let te_flags_col = col_str("te_flags");
         let te_outcome_hint_col = col_str("te_outcome_hint");
 
@@ -727,6 +735,7 @@ pub(crate) fn record_batches_to_hits(
                 te_verification_rigor_col,
                 te_decision_progress_col,
                 te_scope_discipline_col,
+                te_cost_acceleration_col,
                 te_flags_col,
                 te_outcome_hint_col,
             );
@@ -1009,6 +1018,7 @@ pub(crate) async fn query_capsules_lancedb(
         let te_verification_rigor_col = col_f32("te_verification_rigor");
         let te_decision_progress_col = col_f32("te_decision_progress");
         let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_cost_acceleration_col = col_f32("te_cost_acceleration");
         let te_flags_col = col_str("te_flags");
         let te_outcome_hint_col = col_str("te_outcome_hint");
 
@@ -1191,6 +1201,7 @@ pub(crate) async fn query_capsules_lancedb(
                     te_verification_rigor_col,
                     te_decision_progress_col,
                     te_scope_discipline_col,
+                    te_cost_acceleration_col,
                     te_flags_col,
                     te_outcome_hint_col,
                 ),
@@ -1487,6 +1498,7 @@ async fn scan_capsules_lancedb_impl(
         let te_verification_rigor_col = col_f32("te_verification_rigor");
         let te_decision_progress_col = col_f32("te_decision_progress");
         let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_cost_acceleration_col = col_f32("te_cost_acceleration");
         let te_flags_col = col_str("te_flags");
         let te_outcome_hint_col = col_str("te_outcome_hint");
 
@@ -1672,6 +1684,7 @@ async fn scan_capsules_lancedb_impl(
                     te_verification_rigor_col,
                     te_decision_progress_col,
                     te_scope_discipline_col,
+                    te_cost_acceleration_col,
                     te_flags_col,
                     te_outcome_hint_col,
                 ),
@@ -2041,6 +2054,7 @@ pub(crate) async fn trace_capsules_lancedb(
         let te_verification_rigor_col = col_f32("te_verification_rigor");
         let te_decision_progress_col = col_f32("te_decision_progress");
         let te_scope_discipline_col = col_f32("te_scope_discipline");
+        let te_cost_acceleration_col = col_f32("te_cost_acceleration");
         let te_flags_col = col_str("te_flags");
         let te_outcome_hint_col = col_str("te_outcome_hint");
 
@@ -2231,6 +2245,7 @@ pub(crate) async fn trace_capsules_lancedb(
                             te_verification_rigor_col,
                             te_decision_progress_col,
                             te_scope_discipline_col,
+                            te_cost_acceleration_col,
                             te_flags_col,
                             te_outcome_hint_col,
                         ),
@@ -2426,6 +2441,7 @@ pub(crate) async fn insert_capsule_row(
     let te_verification_rigor_arr = te_f32(turn_eval.verification_rigor);
     let te_decision_progress_arr = te_f32(turn_eval.decision_progress);
     let te_scope_discipline_arr = te_f32(turn_eval.scope_discipline);
+    let te_cost_acceleration_arr = te_f32(turn_eval.cost_acceleration);
     let te_flags_arr = Arc::new(StringArray::from(vec![te_flags_str.as_deref()]));
     let te_outcome_hint_arr = Arc::new(StringArray::from(vec![te_outcome_str]));
 
@@ -2484,6 +2500,7 @@ pub(crate) async fn insert_capsule_row(
             te_verification_rigor_arr,
             te_decision_progress_arr,
             te_scope_discipline_arr,
+            te_cost_acceleration_arr,
             te_flags_arr,
             te_outcome_hint_arr,
         ],
@@ -2578,6 +2595,7 @@ pub(crate) async fn insert_capsule_batch(
     let mut te_verification_rigor_vec: Vec<Option<f32>> = Vec::with_capacity(n);
     let mut te_decision_progress_vec: Vec<Option<f32>> = Vec::with_capacity(n);
     let mut te_scope_discipline_vec: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut te_cost_acceleration_vec: Vec<Option<f32>> = Vec::with_capacity(n);
     let mut te_flags_vec: Vec<Option<String>> = Vec::with_capacity(n);
     let mut te_outcome_hint_vec: Vec<Option<String>> = Vec::with_capacity(n);
     // Flat embedding storage: n * 384 f32 values
@@ -2648,6 +2666,7 @@ pub(crate) async fn insert_capsule_batch(
                 te_verification_rigor_vec.push(Some(te.verification_rigor));
                 te_decision_progress_vec.push(Some(te.decision_progress));
                 te_scope_discipline_vec.push(Some(te.scope_discipline));
+                te_cost_acceleration_vec.push(Some(te.cost_acceleration));
                 te_flags_vec.push(if te.flags.is_empty() {
                     None
                 } else {
@@ -2677,6 +2696,7 @@ pub(crate) async fn insert_capsule_batch(
                 te_verification_rigor_vec.push(None);
                 te_decision_progress_vec.push(None);
                 te_scope_discipline_vec.push(None);
+                te_cost_acceleration_vec.push(None);
                 te_flags_vec.push(None);
                 te_outcome_hint_vec.push(None);
             }
@@ -2808,6 +2828,7 @@ pub(crate) async fn insert_capsule_batch(
             Arc::new(Float32Array::from(te_verification_rigor_vec)),
             Arc::new(Float32Array::from(te_decision_progress_vec)),
             Arc::new(Float32Array::from(te_scope_discipline_vec)),
+            Arc::new(Float32Array::from(te_cost_acceleration_vec)),
             Arc::new(StringArray::from(
                 te_flags_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
             )),

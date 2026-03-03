@@ -885,6 +885,7 @@ async fn process_flush_job(
             verification_rigor: coach.verification_rigor,
             decision_progress: coach.decision_progress,
             scope_discipline: coach.scope_discipline,
+            cost_acceleration: coach.cost_acceleration,
             // Flags + outcome
             flags,
             outcome_hint: "unclear".to_string(),

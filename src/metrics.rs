@@ -34,6 +34,9 @@ pub(crate) enum MetricsEvent {
         /// TurnEval: behavioral flags (comma-joined)
         #[serde(default)]
         te_flags: Option<String>,
+        /// TurnEval: token spend acceleration (0–1)
+        #[serde(default)]
+        te_cost_acceleration: Option<f32>,
     },
     FrictionWarningInjected {
         ts_ms: i64,
@@ -156,6 +159,11 @@ pub(crate) fn record_capsule_saved(
             None
         },
         te_flags: te_flags_str,
+        te_cost_acceleration: if turn_eval.cost_acceleration > 0.0 {
+            Some(turn_eval.cost_acceleration)
+        } else {
+            None
+        },
     };
     append_event(&ws.metrics_jsonl, &ev)
 }

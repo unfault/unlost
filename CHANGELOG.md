@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **`TurnEval.cost_acceleration`**: New coach dimension (0–1) measuring whether token spend is accelerating without corresponding `decision_progress`. Computed as the relative growth of `tokens_input` over a 3-turn rolling window, weighted by lack of progress. Emits `cost_spike` flag when > 0.5. Stored in LanceDB (`te_cost_acceleration`), JSONL, and metrics. Surfaces in `unlost inspect` and triggers a new `unlost reflect` skill gap: "detects when token spend is accelerating without matching progress and proposes a scope reduction or session split."
+- **Extended `verification_rigor` detection**: Static analysis and type-checker tool outputs now count as verification evidence alongside build/test results. New pass patterns: `no errors`, `no warnings`, `clippy`, `mypy`, `tsc`, `pyright`, `eslint`, `ruff`, `biome`, `golangci`. New fail patterns: `type error`, `type mismatch`, `lint error`, `E0` (Rust), `TS` (TypeScript).
+
+### Added
 - **`unlost reflect --mode tune` SKILL ASSESSMENT**: The tune (and both) mode now includes a `SKILL ASSESSMENT` section after NEXT ACTIONS. It audits every installed skill found in `.opencode/skills/`, `.claude/skills/`, `.cursor/skills/`, and `.aider/skills/` — rating each `helped / hurt / neutral` based on observed turn patterns — then recommends 2-3 hypothetical skills from a hardcoded catalogue (keyed to observed flags like `retry_loop`, `hallucination_risk`, `session_heavy`, `alignment_debt`, etc.) as gap-fillers. Rendered in bold yellow with `◆` bullet leaders; verdict words are coloured green (helped), red (hurt), or dim (neutral).
 
 ### Changed

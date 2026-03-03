@@ -243,6 +243,16 @@ pub struct TurnEval {
     #[serde(default)]
     pub outcome_hint: String,
 
+    // ── Cost efficiency ───────────────────────────────────────────────────────
+    /// Rolling slope of `tokens_input` over the last 3 turns, normalised 0–1.
+    /// High value = token spend is accelerating without corresponding progress.
+    /// Computed only when usage metadata is available; 0 otherwise.
+    ///
+    /// Formula: (tokens_input[N] - tokens_input[N-2]) / tokens_input[N-2],
+    /// clamped to [0, 1]. Values > 0.5 indicate meaningful acceleration.
+    #[serde(default)]
+    pub cost_acceleration: f32,
+
     // ── Auditable evidence ────────────────────────────────────────────────────
     /// Compact, auditable facts explaining why scores are what they are.
     /// e.g. "no test/build outcome found after 3 code-touching turns"

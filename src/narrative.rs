@@ -2226,6 +2226,10 @@ const SKILL_GAPS: &[SkillGap] = &[
         triggers: &["session_heavy", "context_freshness"],
         guidance: "signals a session boundary recommendation when compaction pressure is high, preventing wasted turns",
     },
+    SkillGap {
+        triggers: &["cost_spike", "session_heavy"],
+        guidance: "detects when token spend is accelerating without matching progress and proposes a scope reduction or session split",
+    },
     // ── Output quality ───────────────────────────────────────────────────────
     SkillGap {
         triggers: &["blind_acceptance", "fluency"],
@@ -2336,6 +2340,8 @@ pub(crate) async fn llm_reflect_narrative(
             if te.context_freshness < 0.40   { observed_flags.insert("context_freshness"); }
             // verification_rigor low on a code-touching turn = unverified claim
             if te.verification_rigor < 0.30  { observed_flags.insert("unverified_claim"); }
+            // cost_acceleration high = token spend spiking without progress
+            if te.cost_acceleration > 0.50   { observed_flags.insert("cost_spike"); }
         }
     }
 
