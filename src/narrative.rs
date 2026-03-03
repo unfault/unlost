@@ -2156,6 +2156,7 @@ struct SkillGap {
 }
 
 const SKILL_GAPS: &[SkillGap] = &[
+    // ── Clarity & scope ──────────────────────────────────────────────────────
     SkillGap {
         triggers: &["needs_clarification", "scope_shift"],
         guidance: "requires definition of done and acceptance criteria before any implementation starts",
@@ -2164,26 +2165,40 @@ const SKILL_GAPS: &[SkillGap] = &[
         triggers: &["scope_shift", "high_churn", "logic_churn"],
         guidance: "pauses and restates scope when new topics or symbols appear mid-task",
     },
+    // ── Verification & code quality ──────────────────────────────────────────
     SkillGap {
         triggers: &["unverified_claim", "retry_loop"],
         guidance: "runs build/test after every code-touching turn and surfaces the outcome before continuing",
     },
     SkillGap {
+        triggers: &["unverified_claim", "high_churn"],
+        guidance: "runs static analysis or type-checking on generated code before presenting it as complete",
+    },
+    // ── Instruction alignment ────────────────────────────────────────────────
+    SkillGap {
         triggers: &["alignment_debt", "instruction_drift", "blind_acceptance"],
         guidance: "requires explicit user confirmation before irreversible changes or when instructions conflict",
     },
+    // ── Grounding & hallucination ────────────────────────────────────────────
     SkillGap {
         triggers: &["hallucination_risk", "path_hallucination"],
         guidance: "verifies file and symbol existence before referencing or editing paths",
     },
+    // ── Loop / stall recovery ────────────────────────────────────────────────
     SkillGap {
         triggers: &["retry_loop", "semantic_stall", "novelty_collapse"],
         guidance: "detects repeated failed approaches and proposes an alternative strategy instead of retrying",
     },
+    // ── Context & cost ───────────────────────────────────────────────────────
     SkillGap {
-        triggers: &["session_heavy", "session_too_long", "context_freshness"],
-        guidance: "summarises completed work and open questions when context is heavy or a session boundary is reached",
+        triggers: &["session_heavy", "session_too_long"],
+        guidance: "compresses or summarises prior context before it degrades, to reduce token spend and maintain coherence",
     },
+    SkillGap {
+        triggers: &["session_heavy", "context_freshness"],
+        guidance: "signals a session boundary recommendation when compaction pressure is high, preventing wasted turns",
+    },
+    // ── Output quality ───────────────────────────────────────────────────────
     SkillGap {
         triggers: &["blind_acceptance", "fluency"],
         guidance: "challenges its own outputs and surfaces potential issues before presenting results as complete",
@@ -2283,13 +2298,16 @@ pub(crate) async fn llm_reflect_narrative(
     let mut observed_flags = observed_flags;
     for h in capsules {
         if let Some(te) = &h.turn_eval {
-            if te.alignment_debt > 0.45 { observed_flags.insert("alignment_debt"); }
-            if te.path_hallucination > 0.45 { observed_flags.insert("path_hallucination"); }
-            if te.novelty_collapse > 0.45 { observed_flags.insert("novelty_collapse"); }
-            if te.semantic_stall > 0.45 { observed_flags.insert("semantic_stall"); }
-            if te.logic_churn > 0.45 { observed_flags.insert("logic_churn"); }
-            if te.fluency > 0.55 { observed_flags.insert("fluency"); }
-            if te.context_freshness < 0.4 { observed_flags.insert("context_freshness"); }
+            if te.alignment_debt > 0.45      { observed_flags.insert("alignment_debt"); }
+            if te.path_hallucination > 0.45  { observed_flags.insert("path_hallucination"); }
+            if te.novelty_collapse > 0.45    { observed_flags.insert("novelty_collapse"); }
+            if te.semantic_stall > 0.45      { observed_flags.insert("semantic_stall"); }
+            if te.logic_churn > 0.45         { observed_flags.insert("logic_churn"); }
+            if te.fluency > 0.55             { observed_flags.insert("fluency"); }
+            // context_freshness low = compaction pressure
+            if te.context_freshness < 0.40   { observed_flags.insert("context_freshness"); }
+            // verification_rigor low on a code-touching turn = unverified claim
+            if te.verification_rigor < 0.30  { observed_flags.insert("unverified_claim"); }
         }
     }
 
