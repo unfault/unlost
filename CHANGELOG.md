@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-03-03
+
+### Fixed
+
+- Previous release broke because release was created by agent as immutable
+  before the workflow existed
+
 ## [0.13.0] - 2026-03-03
 
 ### Added
