@@ -1667,8 +1667,9 @@ Format your response as:\n\
 NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
 no evidence citations, pure tuning changes to make; this section comes FIRST)\n\
 SKILL ASSESSMENT: (for each installed skill: one line — name: helped / hurt / neutral — \
-one-sentence reason; then 2-3 hypothetical skills from the provided list that would \
-address the top observed patterns, with a one-sentence justification each)\n\
+one-sentence reason grounded in turn data; then a Look for skills that: list with \
+2-4 bullet points describing desired agent behaviours from the skill gaps provided — \
+no skill names, just the behaviour)\n\
 AGENT HEALTH: (1-2 sentences overall — stable / degraded / poor)\n\
 FAILURE PATTERNS: (2-4 bullet points — specific failure modes observed with turn index)\n\
 STABILITY SIGNALS: (2-3 bullet points — where the agent performed well)\n\
@@ -1677,9 +1678,9 @@ TUNING RECOMMENDATIONS: (2-3 suggestions for system prompt, tool policy, or mode
 Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the change.\n\
 - SKILL ASSESSMENT: only audit skills from the provided installed list — do NOT \
-invent or assess skills not listed there. Base helped/hurt/neutral on concrete \
-turn-data evidence (specific flags or channel values). If evidence is weak or \
-absent, say neutral. If no installed skills are provided, only list recommendations.\n\
+invent or assess skills not listed. Base helped/hurt/neutral on concrete turn-data \
+evidence. If evidence is weak, say neutral. For the Look for skills that: list, \
+use only the skill gap descriptions provided — do not name specific skills or tools.\n\
 - Anchor every finding in FAILURE PATTERNS / STABILITY SIGNALS to specific channel values \
 (e.g. alignment_debt=0.72 at turn 4).\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
@@ -1694,8 +1695,9 @@ Format your response as:\n\
 NEXT ACTIONS: (3-5 bullet points — ultra-short imperatives, max 10 words each, \
 no evidence citations, mix of developer and agent changes; this section comes FIRST)\n\
 SKILL ASSESSMENT: (for each installed skill: one line — name: helped / hurt / neutral — \
-one-sentence reason; then 2-3 hypothetical skills from the provided list that would \
-address the top observed patterns, with a one-sentence justification each)\n\
+one-sentence reason grounded in turn data; then a Look for skills that: list with \
+2-4 bullet points describing desired agent behaviours from the skill gaps provided — \
+no skill names, just the behaviour)\n\
 SESSION QUALITY: (1-2 sentences — overall impression)\n\
 DEVELOPER PATTERNS: (2-3 bullet points — human collaboration habits, good or bad)\n\
 AGENT PATTERNS: (2-3 bullet points — agent drift, loops, or reliability issues)\n\
@@ -1706,7 +1708,8 @@ Rules:\n\
 - NEXT ACTIONS must be scannable in 5 seconds — no evidence, no scores, just the action.\n\
 - SKILL ASSESSMENT: only audit skills from the provided installed list — do NOT \
 invent or assess skills not listed. Base verdicts on concrete turn-data evidence. \
-If evidence is weak, say neutral. If no installed skills are provided, only list recommendations.\n\
+If evidence is weak, say neutral. For the Look for skills that: list, use only \
+the skill gap descriptions provided — do not name specific skills or tools.\n\
 - Every claim in the other sections must reference a specific turn index or flag name.\n\
 - Confidence: mark any claim with (low confidence) if fewer than 2 turns support it.\n\
 - Max 500 words total.";
@@ -2139,72 +2142,51 @@ fn colour_reflect_inline(s: &str) -> String {
     final_out
 }
 
-// ── Skill catalogue ───────────────────────────────────────────────────────────
+// ── Skill gap guidance ────────────────────────────────────────────────────────
 
-/// A skill in the hardcoded catalogue, keyed to observed tune signals.
-struct CatalogueSkill {
-    /// Short identifier used as the skill name.
-    name: &'static str,
-    /// One-sentence description of what the skill does.
-    description: &'static str,
-    /// Tune flags or channel names that suggest this skill is relevant.
-    /// If any of these appear in the session's observed flags/patterns, the
-    /// skill is considered a candidate recommendation.
+/// Maps an observed tune signal to a short behavioural description of what
+/// kind of skill would address it. Used to generate "Look for a skill that..."
+/// guidance without needing a skill registry.
+struct SkillGap {
+    /// Tune flags or channel names that trigger this gap.
     triggers: &'static [&'static str],
+    /// Short imperative describing the desired agent behaviour.
+    /// Written as a "reduces X" / "improves Y" phrase.
+    guidance: &'static str,
 }
 
-/// Hardcoded skill catalogue keyed to tune signals.
-/// These are hypothetical/recommended skills — they may not exist yet.
-const SKILL_CATALOGUE: &[CatalogueSkill] = &[
-    CatalogueSkill {
-        name: "confirm-before-execute",
-        description: "Require explicit user confirmation before any irreversible file change or command execution.",
-        triggers: &["alignment_debt", "instruction_drift", "blind_acceptance"],
+const SKILL_GAPS: &[SkillGap] = &[
+    SkillGap {
+        triggers: &["needs_clarification", "scope_shift"],
+        guidance: "requires definition of done and acceptance criteria before any implementation starts",
     },
-    CatalogueSkill {
-        name: "glob-before-edit",
-        description: "Always verify file existence via glob/search before referencing or editing a path.",
-        triggers: &["hallucination_risk", "path_hallucination"],
-    },
-    CatalogueSkill {
-        name: "test-after-change",
-        description: "Run build/test after every code-touching turn and surface the result before continuing.",
-        triggers: &["unverified_claim", "high_churn", "retry_loop"],
-    },
-    CatalogueSkill {
-        name: "scope-gate",
-        description: "Pause and restate the current scope when new symbols or topics are introduced mid-task.",
+    SkillGap {
         triggers: &["scope_shift", "high_churn", "logic_churn"],
+        guidance: "pauses and restates scope when new topics or symbols appear mid-task",
     },
-    CatalogueSkill {
-        name: "session-handoff",
-        description: "Summarise completed work and open questions at session end for clean handoff to a new context.",
-        triggers: &["session_heavy", "session_too_long", "context_freshness"],
+    SkillGap {
+        triggers: &["unverified_claim", "retry_loop"],
+        guidance: "runs build/test after every code-touching turn and surfaces the outcome before continuing",
     },
-    CatalogueSkill {
-        name: "loop-breaker",
-        description: "Detect when the same approach has been tried twice without progress and propose an alternative strategy.",
-        triggers: &["retry_loop", "semantic_stall", "novelty_collapse"],
-    },
-    CatalogueSkill {
-        name: "decision-checkpoint",
-        description: "Before implementing, explicitly state the decision, rationale, and reversibility for user sign-off.",
+    SkillGap {
         triggers: &["alignment_debt", "instruction_drift", "blind_acceptance"],
+        guidance: "requires explicit user confirmation before irreversible changes or when instructions conflict",
     },
-    CatalogueSkill {
-        name: "context-compaction-notice",
-        description: "Warn the user when token usage indicates context compaction is imminent and suggest a session boundary.",
-        triggers: &["session_heavy", "session_too_long"],
+    SkillGap {
+        triggers: &["hallucination_risk", "path_hallucination"],
+        guidance: "verifies file and symbol existence before referencing or editing paths",
     },
-    CatalogueSkill {
-        name: "explicit-acceptance-criteria",
-        description: "Request a definition of done before starting any implementation task.",
-        triggers: &["needs_clarification", "scope_shift", "high_churn"],
+    SkillGap {
+        triggers: &["retry_loop", "semantic_stall", "novelty_collapse"],
+        guidance: "detects repeated failed approaches and proposes an alternative strategy instead of retrying",
     },
-    CatalogueSkill {
-        name: "skeptical-reviewer",
-        description: "Challenge the agent's own outputs — surface potential issues before presenting results as complete.",
-        triggers: &["blind_acceptance", "fluency", "unverified_claim"],
+    SkillGap {
+        triggers: &["session_heavy", "session_too_long", "context_freshness"],
+        guidance: "summarises completed work and open questions when context is heavy or a session boundary is reached",
+    },
+    SkillGap {
+        triggers: &["blind_acceptance", "fluency"],
+        guidance: "challenges its own outputs and surfaces potential issues before presenting results as complete",
     },
 ];
 
@@ -2240,32 +2222,38 @@ fn build_skill_context(
         ctx.push_str("Installed skills eligible for audit: none found (infrastructure skills are excluded).\n\n");
     }
 
-    // Catalogue candidates — only those triggered by observed flags
-    let candidates: Vec<&CatalogueSkill> = SKILL_CATALOGUE
-        .iter()
-        .filter(|s| s.triggers.iter().any(|t| observed_flags.contains(t)))
-        .collect();
+    // Skill gap guidance — derived from observed signals, no registry needed.
+    // Deduped: take the first matching gap per unique guidance string.
+    let mut gaps: Vec<(&SkillGap, Vec<&str>)> = Vec::new();
+    let mut seen_guidance: Vec<&str> = Vec::new();
+    for g in SKILL_GAPS {
+        let matched: Vec<&str> = g
+            .triggers
+            .iter()
+            .copied()
+            .filter(|t| observed_flags.contains(*t))
+            .collect();
+        if matched.is_empty() || seen_guidance.contains(&g.guidance) {
+            continue;
+        }
+        seen_guidance.push(g.guidance);
+        gaps.push((g, matched));
+        if gaps.len() >= 5 {
+            break;
+        }
+    }
 
-    if !candidates.is_empty() {
-        ctx.push_str(
-            "Hypothetical skill recommendations (these do not exist yet — \
-             suggest only the 2-3 most impactful ones based on observed patterns):\n",
-        );
-        for s in &candidates {
-            let why: Vec<&&str> = s
-                .triggers
-                .iter()
-                .filter(|t| observed_flags.contains(**t))
-                .collect();
+    if !gaps.is_empty() {
+        ctx.push_str("Look for skills that:\n");
+        for (g, triggers) in &gaps {
             ctx.push_str(&format!(
-                "  - {} : {} [triggered by: {}]\n",
-                s.name,
-                s.description,
-                why.iter().map(|t| **t).collect::<Vec<_>>().join(", ")
+                "  - {} [evidence: {}]\n",
+                g.guidance,
+                triggers.join(", ")
             ));
         }
     } else {
-        ctx.push_str("Hypothetical skill recommendations: no strong matches for observed patterns.\n");
+        ctx.push_str("Skill gaps: no strong behavioural gaps detected from observed patterns.\n");
     }
 
     ctx
