@@ -2122,26 +2122,49 @@ fn colour_reflect_inline(s: &str) -> String {
     }
     result.push_str(remaining);
 
-    // Fourth pass: "turn N" or "Turn N" → dim cyan (char-safe)
+    // Fourth pass: turn references → dim (char-safe)
+    // Matches: "Turn N", "Turns N", "turn N", "turns N"
+    // followed by digits and optional range/list suffixes like "-24", ", 25-30"
     let mut final_out = String::with_capacity(result.len() + 32);
     let mut rest = result.as_str();
     while !rest.is_empty() {
-        if rest.starts_with("turn ") || rest.starts_with("Turn ") {
-            let prefix = &rest[..5];
-            let digits: String = rest[5..].chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !digits.is_empty() {
-                final_out.push_str("\x1b[2;36m");
-                final_out.push_str(prefix);
-                final_out.push_str(&digits);
-                final_out.push_str("\x1b[0m");
-                rest = &rest[5 + digits.len()..];
-                continue;
-            }
+        // Case-insensitive prefix match for "turn " or "turns "
+        let lower6 = rest.chars().take(6).collect::<String>().to_lowercase();
+        let (matched_prefix_len, prefix_str) = if lower6.starts_with("turns ") {
+            (6, &rest[..6])
+        } else if lower6.starts_with("turn ") {
+            (5, &rest[..5])
+        } else {
+            let ch = rest.chars().next().unwrap();
+            final_out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+            continue;
+        };
+
+        // What follows must start with a digit to be a real turn reference
+        let after = &rest[matched_prefix_len..];
+        if !after.starts_with(|c: char| c.is_ascii_digit()) {
+            // Not a turn reference — emit the prefix literally and move on
+            let ch = rest.chars().next().unwrap();
+            final_out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+            continue;
         }
-        // Advance one Unicode scalar
-        let ch = rest.chars().next().unwrap();
-        final_out.push(ch);
-        rest = &rest[ch.len_utf8()..];
+
+        // Consume the full turn reference including ranges (e.g. "1-2", "8-24")
+        // and comma-separated lists (e.g. "1, 3-5, 7")
+        let ref_body: String = after
+            .chars()
+            .take_while(|&c| c.is_ascii_digit() || c == '-' || c == ',' || c == ' ')
+            .collect();
+        // Trim trailing spaces/commas that aren't part of the reference
+        let ref_body = ref_body.trim_end_matches(|c: char| c == ',' || c == ' ');
+
+        final_out.push_str("\x1b[2m"); // dim only — no colour, just muted
+        final_out.push_str(prefix_str);
+        final_out.push_str(ref_body);
+        final_out.push_str("\x1b[0m");
+        rest = &rest[matched_prefix_len + ref_body.len()..];
     }
 
     final_out
