@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`unlost thread`**: New command that maps when a topic was explored over time, across all your projects. Results are sorted oldest-to-newest, grouped by 4-hour session clusters with dormancy gaps (>7d) shown. Each capsule entry shows category, decision, rationale, failure mode, next steps, and symbols. Optional LLM synthesis describes the intellectual arc of the topic — where the thinking started, how the framing shifted, and where it currently stands. Cross-workspace retrieval is the default (via `query_capsules_cross_workspace`). Supports `--since`, `--no-llm`, `--limit`, `--output plain`, and `--llm-model`.
+
 ## [0.13.1] - 2026-03-03
 
 ### Fixed
