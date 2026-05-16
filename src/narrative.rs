@@ -809,25 +809,24 @@ pub(crate) async fn llm_thread_narrative(
     context.push_str(&view.to_llm_context());
 
     let preamble = format!(
-        r#"A colleague skimmed my notes about "{topic}" and I asked: "so what's the deal with this?"
+        r#"I searched my memory for "{topic}" and got back clusters of past notes. Tell me about my journey with this topic like a colleague who read all my notes and is catching me up.
 
-Below are the notes, already clustered by time with gaps and echoes marked. Say the useful thing I can't see by scanning the notes myself.
+The data below is pre-clustered with dates, gaps, and echo counts. Source data says "User" — that's me. Never write "the user" or "User".
 
-Source data says "User" — that's me. Never write "the user" or "User".
+Talk to me naturally in 3-5 short sentences. Tell me:
+- When and where I explored this (reference the clusters, not individual notes)
+- Whether different sessions were about the same thing or branched from something else
+- What the gaps tell you — did I shelve it, or come back with a new angle?
+- What the connection is between the oldest and newest cluster
 
-Answer in exactly 2-3 sentences, like you're talking to me. Plain language. No metaphors, no poetry, no jargon. If you'd be embarrassed saying it out loud to a colleague, don't write it.
-
-Sentence 1: What's the one concrete thing I keep trying to get right here? Name the actual problem or goal, not an abstraction of it.
-
-Sentence 2: What changed between the oldest and newest notes? Be specific — name the shift. If there's a gap of weeks, say whether it looks like I dropped it or came back with a different angle.
-
-Sentence 3 (optional): One practical thing this pattern suggests I should watch out for or lean into.
+This is a story about how I think, not a summary of decisions. I can already see the notes — I need you to connect the dots between them.
 
 Hard rules:
-- No words like "throughline", "visceral", "worldview", "scope jump", "consolidation", "incubation". Write like a normal person.
-- Do not restate what any note says. If I can find your sentence in the notes, it's useless.
-- Do not be encouraging or affirming. Just be accurate.
-- Max 80 words total."#,
+- Plain language. No metaphors, no jargon, no poetry.
+- Do not restate what any note says. Add context the notes don't show.
+- Do not be encouraging or affirming. Just be accurate and useful.
+- Reference projects and dates from the clusters when relevant.
+- Max 100 words total."#,
     );
 
     Ok(
