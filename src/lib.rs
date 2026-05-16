@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod narrative;
 pub mod net;
 pub mod recording;
+pub mod resurfaced;
 pub mod storage;
 pub mod storage_checkpoint;
 pub mod types;

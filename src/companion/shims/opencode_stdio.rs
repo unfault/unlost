@@ -169,6 +169,21 @@ impl From<RecordParams> for RecordTurnEvent {
                 .and_then(|c| c.write),
         });
 
+        let source_pointer = match (p.agent_session_id.as_deref(), p.turn_key.as_deref()) {
+            (Some(session), Some(turn_key))
+                if !session.trim().is_empty() && !turn_key.trim().is_empty() =>
+            {
+                crate::companion::shims::opencode::build_opencode_source_pointer(
+                    session, turn_key,
+                )
+            }
+            (Some(session), _) if !session.trim().is_empty() => Some(format!(
+                "opencode+message://{}",
+                session.trim()
+            )),
+            _ => None,
+        };
+
         RecordTurnEvent {
             directory: p.directory,
             user_text: p.user_text,
@@ -180,6 +195,7 @@ impl From<RecordParams> for RecordTurnEvent {
             usage,
             grounding_note: None,
             source_ts_ms: None,
+            source_pointer,
         }
     }
 }
@@ -267,7 +283,7 @@ pub async fn run(embed_model: String, embed_cache_dir: Option<String>, no_extrac
             "check" => {
                 let params: CheckParams = serde_json::from_value(req.params).unwrap_or_default();
                 let event: CheckEvent = params.into();
-                let result = flow.check_friction(event).await;
+                let result = flow.check_turn(event).await;
                 result.into()
             }
             "record" => {

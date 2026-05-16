@@ -192,6 +192,7 @@ fn checkpoint_as_capsule_hit(
             request_path: String::new(),
             http_status: 200,
             agent_session_id: cp.session_id.clone(),
+            source_pointer: None,
             usage: None,
         },
         distance: 0.0,
@@ -200,6 +201,7 @@ fn checkpoint_as_capsule_hit(
         head_sha: None,
         commit_sha: None,
         turn_eval: None,
+        origin_workspace_id: None,
     }
 }
 

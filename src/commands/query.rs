@@ -423,6 +423,12 @@ pub async fn run(
                             println!("session:   {session}");
                         }
                     }
+                    if let Some(ptr) = meta.source_pointer.as_deref() {
+                        if let Some(label) = crate::workspace::resolve_source_label(ptr) {
+                            println!("source_ref: {label}");
+                        }
+                        println!("source_uri: {ptr}");
+                    }
                     if let Some(usage) = meta.usage.as_ref() {
                         print_usage(usage);
                     }

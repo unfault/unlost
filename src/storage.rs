@@ -107,6 +107,10 @@ fn capsules_schema() -> Arc<Schema> {
         // TurnEval: flags (comma-joined) and outcome hint.
         Field::new("te_flags", DataType::Utf8, true),
         Field::new("te_outcome_hint", DataType::Utf8, true),
+        // Source pointer: opaque URI back to the system of record for this turn
+        // (e.g. `claude+jsonl://...#L47`, `git+commit://...#sha`). None for HTTP
+        // proxy capsules whose bytes were transient. See internal/SOURCE_POINTERS.md.
+        Field::new("source_pointer", DataType::Utf8, true),
     ]))
 }
 
@@ -172,6 +176,8 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_f32("te_cost_acceleration", &mut exprs);
                 add_str("te_flags", &mut exprs);
                 add_str("te_outcome_hint", &mut exprs);
+                // Source pointer (additive — see internal/SOURCE_POINTERS.md).
+                add_str("source_pointer", &mut exprs);
 
                 if !exprs.is_empty() {
                     let _ = t
@@ -280,6 +286,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
             let te_cost_acceleration = te_f32_empty();
             let te_flags = te_str_empty();
             let te_outcome_hint = te_str_empty();
+            let source_pointer = te_str_empty();
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
@@ -339,6 +346,7 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                     te_cost_acceleration,
                     te_flags,
                     te_outcome_hint,
+                    source_pointer,
                 ],
             )
             .context("failed to build empty schema batch")?;
@@ -538,6 +546,7 @@ pub(crate) fn record_batches_to_hits(
         let upstream_host = col_str("upstream_host");
         let request_path = col_str("request_path");
         let agent_session_id_col = col_str("agent_session_id");
+        let source_pointer_col = col_str("source_pointer");
         let agent_provider_id_col = col_str("agent_provider_id");
         let agent_model_id_col = col_str("agent_model_id");
         let agent_cost_col =
@@ -759,6 +768,7 @@ pub(crate) fn record_batches_to_hits(
                 request_path: path.to_string(),
                 http_status: http_status as u16,
                 agent_session_id: agent_session,
+                source_pointer: source_pointer_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                 usage,
             };
             out.push(crate::CapsuleHit {
@@ -774,10 +784,106 @@ pub(crate) fn record_batches_to_hits(
                 head_sha,
                 commit_sha,
                 turn_eval,
+                origin_workspace_id: None,
             });
         }
     }
     Ok(out)
+}
+
+/// Fan-out ANN query across the current workspace and every other registered
+/// workspace. Each hit is tagged with its `origin_workspace_id` so callers
+/// (e.g. the recurrence channel) can attribute matches to the project they
+/// came from.
+///
+/// The signature mirrors [`query_capsules_lancedb`] but takes `current_ws`
+/// (used both as a query target and as the "skip this one elsewhere" key).
+/// `per_workspace_limit` caps how many hits we pull from each workspace before
+/// merging; `total_limit` caps the merged result.
+///
+/// Best-effort: an error opening a peer workspace's LanceDB is logged at debug
+/// and skipped — the cross-workspace channel must never break friction-check.
+///
+/// See `internal/SOURCE_POINTERS.md` §Recurrence Channel — Phase 3 cross-workspace.
+pub(crate) async fn query_capsules_cross_workspace(
+    query_text: &str,
+    embedder: crate::embed::Embedder,
+    current_ws: &crate::WorkspacePaths,
+    per_workspace_limit: usize,
+    total_limit: usize,
+) -> Vec<crate::CapsuleHit> {
+    let mut all: Vec<crate::CapsuleHit> = Vec::new();
+
+    // Local workspace first.
+    match query_capsules_lancedb(
+        query_text,
+        per_workspace_limit,
+        None,
+        None,
+        None,
+        None,
+        None,
+        embedder.clone(),
+        current_ws,
+    )
+    .await
+    {
+        Ok(hits) => {
+            for mut h in hits {
+                if h.origin_workspace_id.is_none() {
+                    h.origin_workspace_id = Some(current_ws.id.clone());
+                }
+                all.push(h);
+            }
+        }
+        Err(e) => {
+            tracing::debug!(workspace = %current_ws.id, error = %e, "cross-ws: local query failed");
+        }
+    }
+
+    // Peer workspaces — each has its own LanceDB directory.
+    for info in crate::workspace::list_other_workspaces(&current_ws.id) {
+        let ws_dir = crate::unlost_workspace_dir(&info.id);
+        let peer = crate::WorkspacePaths {
+            id: info.id.clone(),
+            root: std::path::PathBuf::from(&info.root),
+            db_dir: ws_dir.join("lancedb"),
+            capsules_jsonl: ws_dir.join("capsules.jsonl"),
+            metrics_jsonl: ws_dir.join("metrics.jsonl"),
+        };
+        match query_capsules_lancedb(
+            query_text,
+            per_workspace_limit,
+            None,
+            None,
+            None,
+            None,
+            None,
+            embedder.clone(),
+            &peer,
+        )
+        .await
+        {
+            Ok(hits) => {
+                for mut h in hits {
+                    h.origin_workspace_id = Some(info.id.clone());
+                    all.push(h);
+                }
+            }
+            Err(e) => {
+                tracing::debug!(workspace = %info.id, error = %e, "cross-ws: peer query failed");
+            }
+        }
+    }
+
+    // Merge: sort by distance ascending (smaller = closer), cap to total_limit.
+    all.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    all.truncate(total_limit);
+    all
 }
 
 pub(crate) async fn query_capsules_lancedb(
@@ -963,6 +1069,7 @@ pub(crate) async fn query_capsules_lancedb(
         let upstream_host = col_str("upstream_host");
         let request_path = col_str("request_path");
         let agent_session_id_col = col_str("agent_session_id");
+        let source_pointer_col = col_str("source_pointer");
 
         let agent_provider_id_col = col_str("agent_provider_id");
         let agent_model_id_col = col_str("agent_model_id");
@@ -1176,6 +1283,7 @@ pub(crate) async fn query_capsules_lancedb(
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
                     agent_session_id: agent_session,
+                    source_pointer: source_pointer_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                     usage,
                 },
                 head_sha: head_sha_col
@@ -1205,6 +1313,7 @@ pub(crate) async fn query_capsules_lancedb(
                     te_flags_col,
                     te_outcome_hint_col,
                 ),
+            origin_workspace_id: None,
             });
         }
     }
@@ -1449,6 +1558,7 @@ async fn scan_capsules_lancedb_impl(
         let upstream_host = col_str("upstream_host");
         let request_path = col_str("request_path");
         let agent_session_id_col = col_str("agent_session_id");
+        let source_pointer_col = col_str("source_pointer");
 
         let agent_provider_id_col = col_str("agent_provider_id");
         let agent_model_id_col = col_str("agent_model_id");
@@ -1659,6 +1769,7 @@ async fn scan_capsules_lancedb_impl(
                     request_path: path.to_string(),
                     http_status: (http_status.max(0) as u16),
                     agent_session_id: agent_session,
+                    source_pointer: source_pointer_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                     usage,
                 },
                 head_sha: head_sha_col
@@ -1688,6 +1799,7 @@ async fn scan_capsules_lancedb_impl(
                     te_flags_col,
                     te_outcome_hint_col,
                 ),
+            origin_workspace_id: None,
             });
         }
     }
@@ -2022,6 +2134,7 @@ pub(crate) async fn trace_capsules_lancedb(
             let upstream_host = col_str("upstream_host");
             let request_path = col_str("request_path");
             let agent_session_id_col = col_str("agent_session_id");
+            let source_pointer_col = col_str("source_pointer");
             let user_emotion_label = col_str("user_emotion");
             let user_emotion_conf = col_f32("user_emotion_conf");
             let user_valence = col_f32("user_valence");
@@ -2220,6 +2333,7 @@ pub(crate) async fn trace_capsules_lancedb(
                             request_path: path.to_string(),
                             http_status: http_status.max(0) as u16,
                             agent_session_id: agent_session,
+                            source_pointer: source_pointer_col.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string())),
                             usage: None,
                         },
                         head_sha: head_sha_col
@@ -2249,6 +2363,7 @@ pub(crate) async fn trace_capsules_lancedb(
                             te_flags_col,
                             te_outcome_hint_col,
                         ),
+                    origin_workspace_id: None,
                     },
                 );
 
@@ -2444,6 +2559,7 @@ pub(crate) async fn insert_capsule_row(
     let te_cost_acceleration_arr = te_f32(turn_eval.cost_acceleration);
     let te_flags_arr = Arc::new(StringArray::from(vec![te_flags_str.as_deref()]));
     let te_outcome_hint_arr = Arc::new(StringArray::from(vec![te_outcome_str]));
+    let source_pointer_arr = Arc::new(StringArray::from(vec![meta.source_pointer.as_deref()]));
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -2503,6 +2619,7 @@ pub(crate) async fn insert_capsule_row(
             te_cost_acceleration_arr,
             te_flags_arr,
             te_outcome_hint_arr,
+            source_pointer_arr,
         ],
     )
     .context("failed to build insert batch")?;
@@ -2598,6 +2715,7 @@ pub(crate) async fn insert_capsule_batch(
     let mut te_cost_acceleration_vec: Vec<Option<f32>> = Vec::with_capacity(n);
     let mut te_flags_vec: Vec<Option<String>> = Vec::with_capacity(n);
     let mut te_outcome_hint_vec: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut source_pointer_vec: Vec<Option<String>> = Vec::with_capacity(n);
     // Flat embedding storage: n * 384 f32 values
     let mut embeddings_flat: Vec<Option<Vec<Option<f32>>>> = Vec::with_capacity(n);
 
@@ -2641,6 +2759,7 @@ pub(crate) async fn insert_capsule_batch(
         });
         head_sha_vec.push(row.head_sha.clone());
         commit_sha_vec.push(row.commit_sha.clone());
+        source_pointer_vec.push(row.meta.source_pointer.clone());
 
         // TurnEval — push Some(value) when present, None for old/reindexed rows
         match &row.turn_eval {
@@ -2834,6 +2953,9 @@ pub(crate) async fn insert_capsule_batch(
             )),
             Arc::new(StringArray::from(
                 te_outcome_hint_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                source_pointer_vec.iter().map(|o| o.as_deref()).collect::<Vec<_>>(),
             )),
         ],
     )

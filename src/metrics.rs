@@ -73,6 +73,20 @@ pub(crate) enum MetricsEvent {
         has_emotion_filter: bool,
         has_provider_filter: bool,
     },
+    /// Emitted by the recurrence channel each time a dormant capsule is surfaced
+    /// via the resurfacing basin (standalone or as a modifier on another basin).
+    /// See `internal/SOURCE_POINTERS.md` §Recurrence Channel.
+    ResurfacingEmitted {
+        ts_ms: i64,
+        workspace_id: String,
+        agent_session_id: Option<String>,
+        matched_capsule_id: String,
+        similarity: f32,
+        /// `"standalone"` (no other basin firing) or `"modifier"` (appended to
+        /// another basin's intervention).
+        mode: String,
+        candidate_age_days: i64,
+    },
 }
 
 fn append_event(path: &std::path::Path, ev: &MetricsEvent) -> anyhow::Result<()> {
@@ -230,6 +244,28 @@ pub(crate) fn record_friction_warning_injected(
         top_channels,
         topic,
         watch_start_ts,
+    };
+    append_event(&path, &ev)
+}
+
+pub(crate) fn record_resurfacing_emitted(
+    workspace_id: &str,
+    agent_session_id: Option<String>,
+    matched_capsule_id: &str,
+    similarity: f32,
+    mode: &str,
+    candidate_age_days: i64,
+) -> anyhow::Result<()> {
+    let ws_dir = crate::unlost_workspace_dir(workspace_id);
+    let path = ws_dir.join("metrics.jsonl");
+    let ev = MetricsEvent::ResurfacingEmitted {
+        ts_ms: crate::now_ms(),
+        workspace_id: workspace_id.to_string(),
+        agent_session_id,
+        matched_capsule_id: matched_capsule_id.to_string(),
+        similarity,
+        mode: mode.to_string(),
+        candidate_age_days,
     };
     append_event(&path, &ev)
 }
@@ -574,6 +610,10 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
             MetricsEvent::CommandRecall { .. } => {
                 out.recall_commands += 1;
             }
+            MetricsEvent::ResurfacingEmitted { .. } => {
+                // Counted only on demand by future `unlost metrics resurfacings`;
+                // not folded into aggregate friction stats today.
+            }
         }
         all_events.push(ev);
     }
@@ -585,6 +625,7 @@ pub(crate) fn summarize_metrics(path: &std::path::Path) -> anyhow::Result<Metric
         MetricsEvent::FrictionWarningInjected { ts_ms, .. } => *ts_ms,
         MetricsEvent::CommandQuery { ts_ms, .. } => *ts_ms,
         MetricsEvent::CommandRecall { ts_ms, .. } => *ts_ms,
+        MetricsEvent::ResurfacingEmitted { ts_ms, .. } => *ts_ms,
     });
 
     let mut session_events: std::collections::HashMap<String, Vec<MetricsEvent>> =

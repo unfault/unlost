@@ -143,6 +143,12 @@ pub async fn run(
                         println!("question[{}]: {}", i, q);
                     }
                 }
+                if let Some(ptr) = meta.source_pointer.as_deref() {
+                    if let Some(label) = crate::workspace::resolve_source_label(ptr) {
+                        println!("source_ref: {label}");
+                    }
+                    println!("source_uri: {ptr}");
+                }
                 if let Some(ref te) = hit.turn_eval {
                     println!(
                         "turn_eval: {} intensity={:.2} state={:?}",

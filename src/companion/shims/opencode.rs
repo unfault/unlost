@@ -297,6 +297,24 @@ struct ParsedTurn {
     timestamp_ms: i64,
 }
 
+/// Build an `opencode+message://<session>/<assistant_msg_id>` URI from the
+/// session id and the `<user_msg_id>:<assistant_msg_id>` turn key.
+/// See `internal/SOURCE_POINTERS.md` for the scheme registry.
+pub(crate) fn build_opencode_source_pointer(
+    session_id: &str,
+    turn_key: &str,
+) -> Option<String> {
+    let session = session_id.trim();
+    if session.is_empty() {
+        return None;
+    }
+    let assistant_id = turn_key.split(':').nth(1).map(str::trim).unwrap_or("");
+    if assistant_id.is_empty() {
+        return Some(format!("opencode+message://{session}"));
+    }
+    Some(format!("opencode+message://{session}/{assistant_id}"))
+}
+
 /// Read full message text from parts if available.
 fn read_message_full_text(message_id: &str) -> Option<String> {
     let storage = opencode_storage_dir();
@@ -795,6 +813,8 @@ pub async fn replay(
                     (None, None) => None,
                 };
 
+                let source_pointer =
+                    build_opencode_source_pointer(&session_id_clone, &turn.turn_key);
                 let event = RecordTurnEvent {
                     directory: path.clone(),
                     user_text: turn.user_text,
@@ -810,6 +830,7 @@ pub async fn replay(
                     } else {
                         None
                     },
+                    source_pointer,
                 };
 
                 let result = flow.record_turn(event).await;

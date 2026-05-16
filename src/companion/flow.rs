@@ -123,6 +123,9 @@ pub(crate) struct RecordTurnEvent {
     /// Original message timestamp (ms since epoch). When set (replay path),
     /// this overrides the wall-clock time so capsules sort correctly.
     pub source_ts_ms: Option<i64>,
+    /// Optional URI back to the source system of record for this turn.
+    /// See `internal/SOURCE_POINTERS.md` for the scheme registry.
+    pub source_pointer: Option<String>,
 }
 
 /// Result of a record operation.
@@ -253,7 +256,7 @@ impl FlowState {
 
 pub(crate) struct Flow {
     state: FlowState,
-    _background_state: Arc<Mutex<BackgroundState>>,
+    background_state: Arc<Mutex<BackgroundState>>,
     worker_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -271,7 +274,7 @@ impl Flow {
 
         Self {
             state: FlowState::new(job_tx),
-            _background_state: background_state,
+            background_state,
             worker_handle: Some(worker_handle),
         }
     }
@@ -291,15 +294,29 @@ impl Flow {
     }
 
     pub(crate) async fn llm_calls(&self) -> u64 {
-        self._background_state
+        self.background_state
             .lock()
             .await
             .llm_calls
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Check for friction before an LLM call.
-    pub(crate) async fn check_friction(&mut self, event: CheckEvent) -> CheckResult {
+    /// Inspect a turn before the agent's LLM call.
+    ///
+    /// Mirrors [`Flow::record_turn`] (the post-call counterpart). Runs in the
+    /// hot path; everything inside must be cheap. Today this does:
+    ///
+    /// 1. Local emotion classification on the user text.
+    /// 2. A small chronological scan of recent capsules (last 5).
+    /// 3. An ANN query for dormant candidates feeding the recurrence channel.
+    /// 4. A pass through `TrajectoryController::update_with_candidates`, which
+    ///    may emit a SYSTEM NOTE for an existing basin (drift / spec / loop /
+    ///    anger) or a standalone resurfacing note from the recurrence channel.
+    /// 5. Fallback heuristics (`evaluate_friction`, `evaluate_failure_modes`).
+    ///
+    /// See `internal/SOURCE_POINTERS.md` §Recurrence Channel for the
+    /// resurfacing contract specifically.
+    pub(crate) async fn check_turn(&mut self, event: CheckEvent) -> CheckResult {
         if event.directory.is_empty() {
             return CheckResult {
                 note: None,
@@ -340,12 +357,44 @@ impl Flow {
         // Query recent history — exclude git capsules: they are facts about merged code,
         // not conversation turns, and their thin signals (no usage, no emotion, failure_mode=None)
         // would skew friction scoring if they land in the last-5 window.
-        let history =
+        let history: Vec<crate::CapsuleHit> =
             match crate::storage::scan_capsules_lancedb(&ws, 5, None, None, None, None, None).await
             {
                 Ok(h) => h.into_iter().filter(|c| c.meta.source != "git").collect(),
                 Err(_) => vec![],
             };
+
+        // Dormant candidates for the recurrence channel: ANN against the current
+        // user text, fanned out across all registered workspaces. We embed
+        // best-effort and fail silently — friction must keep working even if
+        // the embedder is cold or any workspace table is empty.
+        // See `internal/SOURCE_POINTERS.md` §Recurrence Channel.
+        let dormant_candidates: Vec<crate::CapsuleHit> = if event.text.trim().is_empty() {
+            Vec::new()
+        } else {
+            let embedder = {
+                let mut st = self.background_state.lock().await;
+                st.ensure_embedder().await.ok()
+            };
+            match embedder {
+                Some(emb) => {
+                    crate::storage::query_capsules_cross_workspace(
+                        &event.text,
+                        emb,
+                        &ws,
+                        // per-workspace pull: enough to catch the strongest match
+                        // even if a workspace has many near-duplicates.
+                        4,
+                        // total cap after merge: the controller only picks one,
+                        // but more candidates means dormancy/structural tiebreaks
+                        // have more to choose from.
+                        12,
+                    )
+                    .await
+                }
+                None => Vec::new(),
+            }
+        };
 
         let symbols = crate::net::extract_symbols_from_text(&event.text);
         let user_symbols = symbols.clone();
@@ -380,11 +429,13 @@ impl Flow {
                 .clone()
                 .or_else(|| controller.last_agent_session_id.clone());
 
-            let update = controller.update(
+            let update = controller.update_with_candidates(
                 &ws.id,
                 &current,
                 user_emotion.as_ref(),
                 &history,
+                &dormant_candidates,
+                sid.as_deref(),
                 crate::workspace::now_ms(),
             );
             (update, sid)
@@ -399,6 +450,26 @@ impl Flow {
                 intensity = %update.intensity,
                 "trajectory controller returned proactive warning"
             );
+
+            // Resurfacing telemetry: log every time a recurrence match landed in the
+            // emitted note, including modifier-mode appendings to other basins.
+            if let Some(m) = update.recurrence_match.as_ref() {
+                let mode = if update.cause == "resurfacing" {
+                    "standalone"
+                } else {
+                    "modifier"
+                };
+                let age_days = ((crate::workspace::now_ms() - m.ts_ms) / (24 * 60 * 60 * 1000))
+                    .max(0);
+                let _ = crate::metrics::record_resurfacing_emitted(
+                    &ws.id,
+                    final_session_id.clone(),
+                    &m.capsule_id,
+                    m.similarity,
+                    mode,
+                    age_days,
+                );
+            }
 
             // Record the intervention metric
             let _ = crate::metrics::record_friction_warning_injected(
@@ -575,6 +646,7 @@ impl Flow {
             exchange_text,
             commit_mentioned,
             agent_session_id: final_session_id,
+            source_pointer: event.source_pointer,
             usage: event.usage.map(UsageMeta::from),
             grounding_note: event.grounding_note,
             source_ts_ms: event.source_ts_ms,
@@ -803,7 +875,7 @@ async fn process_flush_job(
 
     // ── Build TurnEval ────────────────────────────────────────────────────────
     // All heuristic — zero LLM calls. Uses:
-    // (a) Governor channels snapshot carried in from check_friction via ChunkInput.
+    // (a) Governor channels snapshot carried in from check_turn via ChunkInput.
     // (b) Coach scores derived from the capsule + prior history + exchange text.
     let turn_eval = {
         // Query recent capsule history for coach scoring. Best-effort; empty on error.
@@ -1002,6 +1074,7 @@ fn append_capsule_jsonl(
         "request_path": meta.request_path,
         "http_status": meta.http_status,
         "agent_session_id": meta.agent_session_id,
+        "source_pointer": meta.source_pointer,
         "usage": usage,
         "capsule": capsule,
         "turn_eval": turn_eval,

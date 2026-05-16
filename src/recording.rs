@@ -132,6 +132,7 @@ fn append_capsule_jsonl(
         "request_path": meta.request_path,
         "http_status": meta.http_status,
         "agent_session_id": meta.agent_session_id,
+        "source_pointer": meta.source_pointer,
         "usage": usage,
         "capsule": capsule,
         "head_sha": head_sha,
@@ -209,6 +210,9 @@ pub(crate) struct ChunkInput {
     pub(crate) commit_mentioned: bool,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     pub(crate) agent_session_id: Option<String>,
+    /// Optional opaque URI pointing back to the source-of-truth for this turn
+    /// (e.g. `claude+jsonl://...#L47`). Rendered by unlost; resolved by the agent.
+    pub(crate) source_pointer: Option<String>,
     /// Best-effort usage metrics (tokens/cost). Not always present.
     pub(crate) usage: Option<crate::types::UsageMeta>,
     /// Optional grounding info (e.g. verified git commits)
@@ -218,7 +222,7 @@ pub(crate) struct ChunkInput {
     pub(crate) source_ts_ms: Option<i64>,
     /// Absolute path to the workspace root (git toplevel or directory).
     pub(crate) workspace_root: std::path::PathBuf,
-    /// Governor channels snapshot captured in check_friction for this turn.
+    /// Governor channels snapshot captured in `check_turn` for this turn.
     /// Carries (smoothed_channels, intensity, state) into the background flush worker.
     pub(crate) turn_eval_channels: Option<(crate::types::SymptomChannels, f32, crate::types::TrajectoryState)>,
 }
@@ -257,6 +261,7 @@ struct WorkspaceBuffer {
     last_http_status: u16,
     last_agent_session_id: Option<String>,
     last_usage: Option<crate::types::UsageMeta>,
+    last_source_pointer: Option<String>,
     last_grounding_note: Option<String>,
     last_source_ts_ms: Option<i64>,
     total_chars: usize,
@@ -286,6 +291,7 @@ impl WorkspaceBuffer {
             last_http_status: 0,
             last_agent_session_id: None,
             last_usage: None,
+            last_source_pointer: None,
             last_grounding_note: None,
             last_source_ts_ms: None,
             total_chars: 0,
@@ -352,6 +358,11 @@ impl WorkspaceChunker {
             buf.last_http_status = item.http_status;
             buf.last_agent_session_id = item.agent_session_id;
             buf.last_usage = item.usage;
+            // Sticky: only overwrite when a non-None pointer arrives, so a single
+            // chunk that spans multiple turns retains the earliest pointer.
+            if item.source_pointer.is_some() {
+                buf.last_source_pointer = item.source_pointer;
+            }
             buf.last_grounding_note = item.grounding_note;
             if item.source_ts_ms.is_some() {
                 buf.last_source_ts_ms = item.source_ts_ms;
@@ -483,6 +494,7 @@ fn build_flush_job(workspace_id: String, buf: &mut WorkspaceBuffer) -> FlushJob 
         request_path: buf.last_request_path.clone(),
         http_status: buf.last_http_status,
         agent_session_id: buf.last_agent_session_id.clone(),
+        source_pointer: buf.last_source_pointer.clone(),
         usage: buf.last_usage.clone(),
     };
 
@@ -911,6 +923,7 @@ pub(crate) async fn analysis_worker_multiplex(
             exchange_text: input.clone(),
             commit_mentioned: looks_like_commit_or_pr(&input),
             agent_session_id: None,
+            source_pointer: None,
             usage: None,
             grounding_note: None,
             source_ts_ms: None,
@@ -1012,6 +1025,7 @@ pub(crate) async fn analysis_worker(
             exchange_text: input.clone(),
             commit_mentioned: looks_like_commit_or_pr(&input),
             agent_session_id: None,
+            source_pointer: None,
             usage: None,
             grounding_note: None,
             source_ts_ms: None,

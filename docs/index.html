@@ -228,6 +228,16 @@
             constraint you were navigating, what's still open.
           </p>
         </div>
+
+        <div>
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-2 gap-1 sm:gap-0">
+            <div class="text-xl sm:text-2xl font-bold text-midnight-violet-950 transform -skew-x-6">The context you didn't know you needed</div>
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta"><code>unlost trace</code> (proactive)</h3>
+          </div>
+          <p class="text-midnight-violet-950/70 leading-relaxed">
+            You can't query what you don't remember. When a new change echoes a past decision, the recurrence channel surfaces the dormant capsule — before you ask, before you repeat a mistake.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -310,8 +320,31 @@
               </div>
             </div>
           </div>
-  
-          <!-- One Memory. Many Lenses. -->
+        </div>
+
+        <!-- Step 4 -->
+        <div id="step-04" class="flex flex-col sm:grid sm:grid-cols-12 gap-4 sm:gap-8 items-start">
+          <div class="sm:col-span-2">
+            <div class="text-4xl sm:text-6xl font-light text-midnight-violet-950/10 font-['Lexend']">04</div>
+          </div>
+          <div class="sm:col-span-10">
+            <h3 class="text-lg sm:text-xl font-semibold mb-3">Re-Surface</h3>
+            <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+              Dormant capsules don't sit idle. When a new movement of work echoes a past decision, the recurrence channel injects a SYSTEM NOTE into the agent's context — pointing back to the original reasoning, with source provenance attached. The agent decides whether to mention it to you.
+            </p>
+            <div class="mb-6">
+              <a href="#source-pointers" class="text-xs font-medium text-fiery-terracotta hover:underline inline-flex items-center gap-1 group">
+                See how pointers work <span class="group-hover:translate-x-0.5 transition-transform">→</span>
+              </a>
+            </div>
+            <div class="terminal">
+              <div class="text-white/40 mb-1"># SYSTEM NOTE (auto-injected)</div>
+              <div class="text-white/80">This continues a prior thread. On Jan 14, the decision was: "switch to HTTP/2 for upstream proxy." Source: claude+jsonl://...abc.jsonl#L47</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- One Memory. Many Lenses. -->
           <div class="pt-8 sm:pt-12 mt-8 sm:mt-12 border-t border-midnight-violet-950/5">
              <h3 class="text-2xl sm:text-3xl font-medium mb-8 flex items-baseline flex-wrap gap-2">
                 One Memory. Many Lenses.
@@ -323,10 +356,10 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                  <!-- Look Back -->
                  <div>
-                    <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Look Back</h4>
-                    <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
-                       Recover the context you lost. Whether it's a high-level staff engineer debrief or a specific decision trail, you get the <em>why</em> behind the code.
-                    </p>
+                     <h4 class="text-lg font-semibold text-fiery-terracotta mb-3">Look Back</h4>
+                     <p class="text-sm text-midnight-violet-950/60 leading-relaxed mb-3">
+                        Recover the context you lost. Whether it's a high-level staff engineer debrief or a specific decision trail, you get the <em>why</em> behind the code. Past context doesn't just wait for queries — it surfaces itself when it becomes relevant again.
+                     </p>
                     <div class="flex flex-wrap gap-2 text-xs font-mono text-midnight-violet-950/40">
                        <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">trace</span>
                        <span class="bg-midnight-violet-950/5 px-2 py-1 rounded">brief</span>
@@ -539,7 +572,7 @@ unlost recall src/</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost trace</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Reconstruct the causal chain of decisions that led to the current state of a file, symbol, or concept.</p>
+          <p class="text-midnight-violet-950/60 mb-4">Reconstruct the causal chain of decisions that led to the current state of a file, symbol, or concept. Every result includes a <code>Source:</code> footer pointing back to the original conversation, commit, or changelog entry.</p>
           <pre><code>unlost trace src/governor.rs
 unlost trace "why is the timeout 30s?"</code></pre>
         </div>
@@ -812,6 +845,46 @@ unlost reflect --mode coach --session ses_3a79</code></pre>
             <div class="border-l-2 border-fiery-terracotta/20 pl-4">
               <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">HyPE Embeddings</div>
               <p class="text-sm text-midnight-violet-950/60 leading-relaxed">We use Hypothetical Prompt Embeddings (HyPE). At indexing time, we generate questions the capsule answers. At retrieval time, we frame your query as a question. Matching questions-to-questions is significantly more accurate than matching queries-to-documents.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Source Pointers & Recurrence Channel -->
+        <div id="source-pointers">
+          <h3 class="text-base sm:text-lg font-semibold mb-3">Source Pointers &amp; the Recurrence Channel</h3>
+          <p class="text-midnight-violet-950/60 leading-relaxed mb-4">
+            Every capsule carries a <strong>source pointer</strong>: a URI back to the system of record where the conversation happened. Unlost never resolves it for content — that's the agent's job. This separation keeps unlost small while giving the agent a direct line back to original context.
+          </p>
+          <div class="space-y-5">
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">The Pointer Registry</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                Every capsule is stamped with a provenance URI from its shim:
+                <code class="text-xs">claude+jsonl://</code> (line-precise to transcript),
+                <code class="text-xs">opencode+message://</code> (session + message ID),
+                <code class="text-xs">copilot+events://</code> (byte-offset into events log),
+                <code class="text-xs">git+commit://</code> (pinned to SHA), or
+                <code class="text-xs">changelog+version://</code> (pinned to version string).
+                A <code>resolve_source_label</code> helper renders these as human-readable footers in every query command.
+              </p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">The Recurrence Channel</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                Before every LLM call, unlost runs an ANN vector search across dormant capsules. If a past capsule scores above the similarity gate, a SYSTEM NOTE is injected — quietly pointing the agent back. The note includes the capsule's decision, rationale, and the source pointer. The agent mentions it to you if it's relevant, or ignores it if not. No noise, no notifications, no new UI.
+              </p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Cross-Workspace Memory</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                The recurrence channel searches across <em>all</em> workspaces, not just the current one. A decision made in project A that proves relevant to project B surfaces naturally — with a label showing where it came from. Your memory isn't siloed by <code class="text-xs">cd</code> boundaries.
+              </p>
+            </div>
+            <div class="border-l-2 border-fiery-terracotta/20 pl-4">
+              <div class="font-mono text-sm font-semibold text-midnight-violet-950 mb-1">Point, Don't Fetch</div>
+              <p class="text-sm text-midnight-violet-950/60 leading-relaxed">
+                Unlost never fetches external content, never manages API credentials, and never builds source-specific connectors. The agent <em>is</em> the connector. When the agent fetched a Linear ticket via MCP or a GitHub PR during the original conversation, the URL lives inside the capsule's text. The source pointer points to the chat session where it was discussed. Six months later, the agent re-fetches using the same tools it used the first time.
+              </p>
             </div>
           </div>
         </div>

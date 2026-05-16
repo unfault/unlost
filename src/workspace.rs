@@ -54,6 +54,172 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// Return a short, human-readable label for a `source_pointer` URI, suitable for
+/// inclusion in a SYSTEM NOTE or read-command footer. Best-effort: no network calls,
+/// no shell-outs, side-effect free. Falls back to a purely structural rendering if
+/// the underlying source cannot be inspected.
+///
+/// See `internal/SOURCE_POINTERS.md` for the scheme registry. Unknown schemes are
+/// echoed verbatim so we never strip information.
+pub fn resolve_source_label(pointer: &str) -> Option<String> {
+    let pointer = pointer.trim();
+    if pointer.is_empty() {
+        return None;
+    }
+    // Generic URI split: scheme://body[#fragment]
+    let (scheme, rest) = pointer.split_once("://")?;
+    let (body, fragment) = match rest.split_once('#') {
+        Some((b, f)) => (b, Some(f)),
+        None => (rest, None),
+    };
+    match scheme {
+        "claude+jsonl" => {
+            let basename = std::path::Path::new(body)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(body);
+            let turn = fragment
+                .and_then(|f| f.strip_prefix("turn="))
+                .filter(|s| !s.is_empty());
+            match turn {
+                Some(t) => {
+                    let short = if t.len() > 8 { &t[..8] } else { t };
+                    Some(format!("Claude session ({basename}, turn {short}…)"))
+                }
+                None => Some(format!("Claude session ({basename})")),
+            }
+        }
+        "opencode+message" => {
+            // body is `<session>` or `<session>/<assistant_msg_id>`.
+            let (session, msg) = match body.split_once('/') {
+                Some((s, m)) => (s, Some(m)),
+                None => (body, None),
+            };
+            let session_short = if session.len() > 12 { &session[..12] } else { session };
+            match msg {
+                Some(m) if !m.is_empty() => {
+                    let m_short = if m.len() > 8 { &m[..8] } else { m };
+                    Some(format!(
+                        "OpenCode session ({session_short}…, message {m_short}…)"
+                    ))
+                }
+                _ => Some(format!("OpenCode session ({session_short}…)")),
+            }
+        }
+        "copilot+events" => {
+            let basename = std::path::Path::new(body)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("events.jsonl");
+            let offset = fragment
+                .and_then(|f| f.strip_prefix("offset="))
+                .and_then(|s| s.parse::<u64>().ok());
+            match offset {
+                Some(o) => Some(format!("Copilot session ({basename}, byte {o})")),
+                None => Some(format!("Copilot session ({basename})")),
+            }
+        }
+        "git+commit" => {
+            let sha = fragment.unwrap_or("");
+            let short = if sha.len() > 7 { &sha[..7] } else { sha };
+            if short.is_empty() {
+                Some("git commit".to_string())
+            } else {
+                Some(format!("git commit {short}"))
+            }
+        }
+        "git+tag" => {
+            let name = fragment.unwrap_or("");
+            if name.is_empty() {
+                Some("git tag".to_string())
+            } else {
+                Some(format!("git tag {name}"))
+            }
+        }
+        "changelog+version" => {
+            let version = fragment.unwrap_or("");
+            if version.is_empty() {
+                Some("CHANGELOG entry".to_string())
+            } else {
+                Some(format!("CHANGELOG {version}"))
+            }
+        }
+        // Unknown scheme: pass through verbatim so we never silently drop info.
+        _ => Some(pointer.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod source_pointer_tests {
+    use super::resolve_source_label;
+
+    #[test]
+    fn claude_with_turn() {
+        let s = resolve_source_label(
+            "claude+jsonl:///home/sylvain/.claude/projects/-h-s-d-u/abc.jsonl#turn=01234567abcdef",
+        )
+        .unwrap();
+        assert!(s.contains("Claude"));
+        assert!(s.contains("abc.jsonl"));
+        assert!(s.contains("01234567"));
+    }
+
+    #[test]
+    fn opencode_with_message() {
+        let s = resolve_source_label("opencode+message://ses_abcdefghijkl/msg_12345678").unwrap();
+        assert!(s.contains("OpenCode"));
+        // session truncated to first 12 chars
+        assert!(s.contains("ses_abcdefgh"));
+        // assistant message id truncated to first 8 chars
+        assert!(s.contains("msg_1234"));
+    }
+
+    #[test]
+    fn opencode_session_only() {
+        let s = resolve_source_label("opencode+message://ses_abc").unwrap();
+        assert!(s.contains("OpenCode"));
+        assert!(s.contains("ses_abc"));
+    }
+
+    #[test]
+    fn copilot_with_offset() {
+        let s = resolve_source_label("copilot+events:///x/y/events.jsonl#offset=12345").unwrap();
+        assert!(s.contains("Copilot"));
+        assert!(s.contains("events.jsonl"));
+        assert!(s.contains("12345"));
+    }
+
+    #[test]
+    fn git_commit() {
+        let s = resolve_source_label("git+commit:///repo#3e66cd2abc").unwrap();
+        assert_eq!(s, "git commit 3e66cd2");
+    }
+
+    #[test]
+    fn changelog_version() {
+        let s = resolve_source_label("changelog+version:///x/CHANGELOG.md#0.13.0").unwrap();
+        assert!(s.contains("CHANGELOG"));
+        assert!(s.contains("0.13.0"));
+    }
+
+    #[test]
+    fn empty_returns_none() {
+        assert!(resolve_source_label("").is_none());
+        assert!(resolve_source_label("   ").is_none());
+    }
+
+    #[test]
+    fn unknown_scheme_passthrough() {
+        let s = resolve_source_label("slack+message://team/C123/p456").unwrap();
+        assert!(s.starts_with("slack+message://"));
+    }
+
+    #[test]
+    fn malformed_returns_none() {
+        assert!(resolve_source_label("not-a-uri").is_none());
+    }
+}
+
 pub(crate) fn canonicalize_dir(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
     std::fs::canonicalize(path).context("failed to canonicalize path")
 }
@@ -219,6 +385,50 @@ pub(crate) fn compute_workspace_id(workspace_root: &std::path::Path) -> Option<(
         format!("wks_{}", compute_hash16(&format!("label:cli:{label}"))),
         "label".to_string(),
     ))
+}
+
+/// List all workspaces registered in the global config except the given one.
+///
+/// Used by cross-workspace recurrence retrieval: when a turn lands in workspace
+/// X, we also fan out to workspaces Y, Z, … to catch dormant matches from
+/// adjacent projects. The current workspace is excluded so its rows don't
+/// duplicate the local retrieval path.
+pub(crate) fn list_other_workspaces(current_workspace_id: &str) -> Vec<WorkspaceInfo> {
+    let cfg = load_workspace_config();
+    cfg.workspaces
+        .into_iter()
+        .filter_map(|(id, info)| {
+            if id == current_workspace_id {
+                None
+            } else {
+                Some(info)
+            }
+        })
+        .collect()
+}
+
+/// Render a short, human-readable label for a workspace. Best-effort: tries the
+/// canonical root's basename, then falls back to the workspace id prefix. Never
+/// returns an empty string.
+pub(crate) fn workspace_label(info: &WorkspaceInfo) -> String {
+    let base = std::path::Path::new(&info.root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(b) = base {
+        return b.to_string();
+    }
+    let id_short = if info.id.len() > 12 { &info.id[..12] } else { info.id.as_str() };
+    id_short.to_string()
+}
+
+/// Resolve a label for a workspace id by looking it up in the registry.
+/// Returns `None` if the id is unknown. Used to render the origin of a
+/// cross-workspace recurrence match.
+pub fn workspace_label_by_id(workspace_id: &str) -> Option<String> {
+    let cfg = load_workspace_config();
+    cfg.workspaces.get(workspace_id).map(workspace_label)
 }
 
 pub(crate) fn load_workspace_config() -> WorkspaceConfig {

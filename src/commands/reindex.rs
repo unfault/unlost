@@ -9,6 +9,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 struct JsonCapsule {
     #[serde(default)]
     agent_session_id: String,
+    #[serde(default)]
+    source_pointer: Option<String>,
     ts_ms: i64,
     conn_id: u64,
     exchange_seq: u64,
@@ -148,6 +150,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             request_path: capsule.request_path,
             http_status: 200,
             agent_session_id: Some(capsule.agent_session_id),
+            source_pointer: capsule.source_pointer,
             usage: capsule.usage.map(|u| crate::types::UsageMeta {
                 provider_id: u.provider_id,
                 model_id: u.model_id,
@@ -266,6 +269,7 @@ pub async fn run(path: String, yes: bool) -> anyhow::Result<()> {
             head_sha: capsule.head_sha.clone(),
             commit_sha: capsule.commit_sha.clone(),
             turn_eval: turn_eval.clone(),
+            origin_workspace_id: None,
         };
         reindex_history.push_front(history_hit);
         if reindex_history.len() > 8 {
