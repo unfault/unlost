@@ -455,11 +455,12 @@ fn render_capsule_entry(
 
 fn note_text(hit: &crate::CapsuleHit) -> String {
     let decision = hit.capsule.decision.trim();
-    if decision.is_empty() {
+    let text = if decision.is_empty() {
         truncate(hit.capsule.intent.trim(), 160)
     } else {
         decision.to_string()
-    }
+    };
+    humanize_note_text(&text)
 }
 
 fn fmt_range_date(ts_ms: i64) -> String {
@@ -603,10 +604,38 @@ fn first_sentence(s: &str) -> String {
 fn humanize_rationale(s: &str) -> String {
     let s = s.trim();
     let replacements = [
+        ("The user wants ", "Wanted "),
+        ("The user wanted ", "Wanted "),
+        ("The user needs ", "Needed "),
+        ("The user needed ", "Needed "),
+        ("The user expects ", "Expected "),
+        ("The user expected ", "Expected "),
+        ("The user expresses ", "Expressed "),
+        ("The user expressed ", "Expressed "),
+        ("The user is assessing ", "Assessing "),
+        ("The user was assessing ", "Assessing "),
+        ("The user agrees ", "Agreed "),
+        ("The user agreed ", "Agreed "),
+        ("The user highlighted ", "Flagged "),
+        ("The user asked ", "Asked "),
+        ("The user is interested in ", "Wanted to understand "),
+        ("The user was interested in ", "Wanted to understand "),
+        ("The user seeks to understand ", "Wanted to understand "),
+        ("The user sought to understand ", "Wanted to understand "),
+        ("User initiated ", "Started "),
+        ("User initiates ", "Started "),
+        ("User seeks to understand ", "Wanted to understand "),
+        ("User seeks ", "Wanted "),
+        ("User is interested in ", "Wanted to understand "),
+        ("User was interested in ", "Wanted to understand "),
         ("User wants ", "Wanted "),
         ("User wanted ", "Wanted "),
         ("User needs ", "Needed "),
         ("User needed ", "Needed "),
+        ("User expects ", "Expected "),
+        ("User expected ", "Expected "),
+        ("User expresses ", "Expressed "),
+        ("User expressed ", "Expressed "),
         ("User agrees ", "Agreed "),
         ("User agreed ", "Agreed "),
         ("User highlighted ", "Flagged "),
@@ -626,5 +655,31 @@ fn humanize_rationale(s: &str) -> String {
 
 fn polish_rationale(s: String) -> String {
     s.replace(" but wants ", " but wanted ")
+        .replace("user expects", "expected")
+        .replace("User expects", "Expected")
+        .replace(" and seeks clarity ", " and needed clarity ")
+        .replace(" seeks clarity ", " needed clarity ")
+        .replace("indicating a need for", "pointing toward")
+        .replace("their knowledge or project", "the design")
+        .replace("Wanted to understand analyzing ", "Wanted better ways to analyze ")
+        .replace("Wanted to understand expanding ", "Wanted to expand ")
         .replace("Needed code-level", "Needed a code-level")
+}
+
+fn humanize_note_text(s: &str) -> String {
+    let s = s.trim();
+    let replacements = [
+        ("User requests ", "Requested "),
+        ("User requested ", "Requested "),
+        ("User initiates ", "Started "),
+        ("User initiated ", "Started "),
+        ("The user requests ", "Requested "),
+        ("The user requested ", "Requested "),
+    ];
+    for (from, to) in replacements {
+        if let Some(rest) = s.strip_prefix(from) {
+            return format!("{to}{rest}");
+        }
+    }
+    s.to_string()
 }
