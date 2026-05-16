@@ -512,6 +512,9 @@ fn cluster_provenance(hits: &[&crate::CapsuleHit], ws: &crate::WorkspacePaths) -
 
 // ── Trail renderer (default) ────────────────────────────────────────────────
 
+/// Default view: narrative-first thread. The story is the content;
+/// anchor clusters are quote blocks that ground it. Use --timeline for
+/// the full reverse-chronological cluster dump.
 fn render_trail(
     topic: &str,
     narrative: Option<&str>,
@@ -524,77 +527,271 @@ fn render_trail(
     render_header(&mut out, topic, view, output);
     render_narrative_block(&mut out, narrative, narrative_warning, output);
 
-    // Trail: most recent cluster first, oldest last.
-    let cluster_count = view.clusters.len();
-    for (ci, cluster) in view.clusters.iter().rev().enumerate() {
-        let is_most_recent = ci == 0;
-        let is_origin = ci == cluster_count - 1;
+    // Pick at most 3 anchor clusters: the turning points worth showing.
+    let anchors = pick_thread_anchors(view);
+    let anchors_total = view.clusters.len();
+    let anchors_shown = anchors.len();
 
-        let date_str = fmt_day_label(cluster.earliest_ts);
+    for (i, idx) in anchors.iter().enumerate() {
+        let cluster = &view.clusters[*idx];
 
-        // Gap from previous (newer) cluster
-        if ci > 0 {
-            let newer_cluster = &view.clusters[cluster_count - ci];
-            let gap_ms = newer_cluster.earliest_ts - cluster.latest_ts;
-            if gap_ms >= DORMANCY_THRESHOLD_MS {
-                let label = gap_label(gap_ms);
-                if is_ansi(output) {
-                    out.push_str(&format!("\n\x1b[2m        ~ {}\x1b[0m\n", label));
-                } else {
-                    out.push_str(&format!("\n        ~ {}\n", label));
-                }
-            }
-        }
+        // Anchor role label, picked per position not per chronology.
+        let role = anchor_role(i, anchors_shown, *idx, anchors_total);
+
+        // Time-distance phrase relative to "today" / latest cluster.
+        let when_phrase = relative_when(cluster.earliest_ts, view.latest_ts);
 
         out.push('\n');
-        if is_ansi(output) {
-            // Section keyword in cyan, date in bold white
-            let keyword = if is_most_recent && is_origin {
-                String::new()
-            } else if is_most_recent {
-                "\x1b[36mCurrent shape\x1b[0m · ".to_string()
-            } else if is_origin {
-                "\x1b[36mOrigin\x1b[0m · ".to_string()
-            } else {
-                "\x1b[2mEarlier\x1b[0m · ".to_string()
-            };
-            out.push_str(&format!("{}\x1b[1;97m{}\x1b[0m", keyword, date_str));
-        } else {
-            let section_label = if is_most_recent && is_origin {
-                date_str.clone()
-            } else if is_most_recent {
-                format!("Current shape · {}", date_str)
-            } else if is_origin {
-                format!("Origin · {}", date_str)
-            } else {
-                format!("Earlier · {}", date_str)
-            };
-            out.push_str(&section_label);
-        }
-
-        // Provenance — dim cyan
-        if !cluster.provenance.is_empty() {
-            if is_ansi(output) {
-                out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
-            } else {
-                out.push_str(&format!("  {}", cluster.provenance));
-            }
-        }
-        out.push('\n');
-
-        // Source links — dim, one per line under the header
-        render_source_links(&mut out, cluster, output);
+        render_anchor_header(&mut out, role, &when_phrase, cluster, output);
 
         // Spatial context: what session this was part of, what else was nearby
-        render_spatial_context(&mut out, cluster, output);
+        render_spatial_context_compact(&mut out, cluster, output);
 
-        for note in cluster.notes.iter() {
-            render_note_compact(&mut out, note, output);
+        // Show up to 2 representative notes per anchor (the longest = most signal).
+        let notes_to_show = pick_representative_notes(&cluster.notes, 2);
+        for note in &notes_to_show {
+            render_note_anchor(&mut out, note, output);
+        }
+
+        // Source links — dim, under the notes
+        render_source_links_inline(&mut out, cluster, output);
+    }
+
+    // Hint: more notes available in --timeline
+    let hidden_clusters = anchors_total.saturating_sub(anchors_shown);
+    if hidden_clusters > 0 {
+        out.push('\n');
+        let hint = format!(
+            "  {} more cluster{} in `unlost thread \"{}\" --timeline`",
+            hidden_clusters,
+            if hidden_clusters == 1 { "" } else { "s" },
+            topic,
+        );
+        if is_ansi(output) {
+            out.push_str(&format!("\x1b[2;3m{}\x1b[0m\n", hint));
+        } else {
+            out.push_str(&format!("{}\n", hint));
         }
     }
 
     out.push('\n');
     out
+}
+
+/// Pick at most 3 cluster indices that represent the thread's turning points.
+/// Strategy: always include most-recent and origin; if there's room, pick the
+/// "pivot" — the cluster with the most notes, a failure mode, or sitting just
+/// after the longest gap.
+fn pick_thread_anchors(view: &ThreadView) -> Vec<usize> {
+    let n = view.clusters.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n <= 3 {
+        return (0..n).rev().collect(); // newest first
+    }
+
+    let newest = n - 1;
+    let origin = 0;
+
+    // Find the pivot among middle clusters: largest gap-after-previous wins,
+    // tiebreak by note count.
+    let mut best_pivot: Option<(usize, i64, usize)> = None;
+    for i in 1..n - 1 {
+        let gap = view.clusters[i].earliest_ts - view.clusters[i - 1].latest_ts;
+        let notes = view.clusters[i].notes.len();
+        let score = (gap, notes);
+        if best_pivot.map(|(_, g, n2)| (gap, notes) > (g, n2)).unwrap_or(true) {
+            best_pivot = Some((i, score.0, score.1));
+        }
+    }
+
+    let mut picks = vec![newest, origin];
+    if let Some((idx, _, _)) = best_pivot {
+        picks.push(idx);
+    }
+    picks.sort_by(|a, b| b.cmp(a)); // newest first
+    picks.dedup();
+    picks
+}
+
+/// Decide what to label this anchor based on its position in the chosen set.
+fn anchor_role(position: usize, total_shown: usize, cluster_idx: usize, total_clusters: usize) -> &'static str {
+    let is_newest = cluster_idx == total_clusters - 1;
+    let is_origin = cluster_idx == 0;
+    if total_shown == 1 {
+        ""
+    } else if is_newest {
+        "where it landed"
+    } else if is_origin {
+        "where it started"
+    } else {
+        let _ = position;
+        "the turn"
+    }
+}
+
+fn relative_when(ts_ms: i64, latest_ts: i64) -> String {
+    let days = ((latest_ts - ts_ms) / (24 * 60 * 60 * 1000)).max(0);
+    if days == 0 {
+        "today".to_string()
+    } else if days == 1 {
+        "yesterday".to_string()
+    } else if days < 7 {
+        format!("{} days ago", days)
+    } else if days < 30 {
+        let weeks = (days / 7).max(1);
+        format!("{} week{} ago", weeks, if weeks == 1 { "" } else { "s" })
+    } else if days < 90 {
+        let weeks = days / 7;
+        format!("{} weeks ago", weeks)
+    } else {
+        let months = (days / 30).max(3);
+        format!("{} months ago", months)
+    }
+}
+
+fn render_anchor_header(
+    out: &mut String,
+    role: &str,
+    when_phrase: &str,
+    cluster: &Cluster,
+    output: OutputFormat,
+) {
+    let date_str = fmt_day_label(cluster.earliest_ts);
+
+    if is_ansi(output) {
+        // Role keyword in cyan, then "—" date, then dim "when_phrase"
+        if !role.is_empty() {
+            out.push_str(&format!("\x1b[36m{}\x1b[0m  ", role));
+        }
+        out.push_str(&format!("\x1b[1;97m{}\x1b[0m", date_str));
+        if !when_phrase.is_empty() {
+            out.push_str(&format!("  \x1b[2m({})\x1b[0m", when_phrase));
+        }
+        if !cluster.provenance.is_empty() {
+            out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
+        }
+    } else {
+        if !role.is_empty() {
+            out.push_str(&format!("{}  ", role));
+        }
+        out.push_str(&date_str);
+        if !when_phrase.is_empty() {
+            out.push_str(&format!("  ({})", when_phrase));
+        }
+        if !cluster.provenance.is_empty() {
+            out.push_str(&format!("  {}", cluster.provenance));
+        }
+    }
+    out.push('\n');
+}
+
+/// Render spatial context as a single short line (not stacked).
+fn render_spatial_context_compact(out: &mut String, cluster: &Cluster, output: OutputFormat) {
+    if let Some(ref ctx) = cluster.session_context {
+        let line = format!("inside: {}", truncate(ctx, 72));
+        if is_ansi(output) {
+            push_wrapped_ansi(
+                out,
+                "  \x1b[2;3m",
+                "\x1b[0m",
+                "  \x1b[2;3m",
+                "\x1b[0m",
+                &line,
+                WRAP_WIDTH - 4,
+            );
+        } else {
+            push_wrapped_plain(out, "  ", "  ", &line, WRAP_WIDTH - 4);
+        }
+        out.push('\n');
+    }
+    if !cluster.nearby_topics.is_empty() {
+        // Single line, comma-separated, hard-truncated.
+        let joined = cluster
+            .nearby_topics
+            .iter()
+            .map(|t| truncate(t, 40))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = format!("alongside: {}", truncate(&joined, 100));
+        if is_ansi(output) {
+            push_wrapped_ansi(
+                out,
+                "  \x1b[2;3m",
+                "\x1b[0m",
+                "  \x1b[2;3m",
+                "\x1b[0m",
+                &line,
+                WRAP_WIDTH - 4,
+            );
+        } else {
+            push_wrapped_plain(out, "  ", "  ", &line, WRAP_WIDTH - 4);
+        }
+        out.push('\n');
+    }
+}
+
+/// Pick up to `max` representative notes from a cluster: longest decisions
+/// (more signal), preferring ones with failure modes.
+fn pick_representative_notes(notes: &[DisplayNote], max: usize) -> Vec<&DisplayNote> {
+    let mut scored: Vec<(usize, &DisplayNote)> = notes
+        .iter()
+        .map(|n| {
+            let mut score = n.decision.len();
+            if n.failure_mode.is_some() {
+                score += 1000;
+            }
+            score += n.echoes * 20;
+            (score, n)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().take(max).map(|(_, n)| n).collect()
+}
+
+/// Render a note inside an anchor — quote-style, indented with a bar.
+fn render_note_anchor(out: &mut String, note: &DisplayNote, output: OutputFormat) {
+    let text = truncate(&note.decision, 200);
+    let echo_suffix = if note.echoes > 0 {
+        if note.echoes == 1 {
+            " (+1)".to_string()
+        } else {
+            format!(" (+{})", note.echoes)
+        }
+    } else {
+        String::new()
+    };
+    let fm_prefix = if note.failure_mode.is_some() { "▲ " } else { "" };
+    let body = format!("{fm_prefix}{text}{echo_suffix}");
+
+    if is_ansi(output) {
+        push_wrapped_ansi(
+            out,
+            "  \x1b[36m│\x1b[0m \x1b[36m",
+            "\x1b[0m",
+            "  \x1b[36m│\x1b[0m \x1b[36m",
+            "\x1b[0m",
+            &body,
+            WRAP_WIDTH - 4,
+        );
+    } else {
+        push_wrapped_plain(out, "  │ ", "  │ ", &body, WRAP_WIDTH - 4);
+    }
+    out.push('\n');
+}
+
+fn render_source_links_inline(out: &mut String, cluster: &Cluster, output: OutputFormat) {
+    if cluster.source_links.is_empty() {
+        return;
+    }
+    // First link only — keep it tight.
+    let link = &cluster.source_links[0];
+    if is_ansi(output) {
+        out.push_str(&format!("  \x1b[2;36m→ {}\x1b[0m\n", link));
+    } else {
+        out.push_str(&format!("  → {}\n", link));
+    }
 }
 
 // ── Timeline renderer (--timeline) ──────────────────────────────────────────
@@ -644,6 +841,7 @@ fn render_timeline(
         out.push('\n');
 
         render_source_links(&mut out, cluster, output);
+        render_spatial_context(&mut out, cluster, output);
 
         for (ni, note) in cluster.notes.iter().rev().enumerate() {
             render_note(&mut out, note, ni + 1, output);
@@ -766,39 +964,6 @@ fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat
             out.push_str(&format!("  {}\n", link));
         }
     }
-}
-
-/// Compact note for trail view: decision wrapped to ~2 lines, no rationale.
-fn render_note_compact(out: &mut String, note: &DisplayNote, output: OutputFormat) {
-    let text = truncate(&note.decision, 148);
-    let echo_suffix = if note.echoes > 0 {
-        if note.echoes == 1 {
-            " (+1)".to_string()
-        } else {
-            format!(" (+{})", note.echoes)
-        }
-    } else {
-        String::new()
-    };
-    let fm_prefix = if note.failure_mode.is_some() { "▲ " } else { "" };
-    let full = format!("{fm_prefix}{text}{echo_suffix}");
-
-    if is_ansi(output) {
-        let fm_color = if note.failure_mode.is_some() { "\x1b[33m▲ \x1b[0;36m" } else { "" };
-        let display = format!("{fm_color}{}", truncate(&note.decision, 148));
-        push_wrapped_ansi(
-            out,
-            "    \x1b[36m",
-            "\x1b[0m",
-            "    \x1b[36m",
-            "\x1b[0m",
-            &format!("{display}{echo_suffix}"),
-            WRAP_WIDTH - 4,
-        );
-    } else {
-        push_wrapped_plain(out, "    ", "    ", &full, WRAP_WIDTH - 4);
-    }
-    out.push('\n');
 }
 
 /// Full multi-line note for --timeline view.

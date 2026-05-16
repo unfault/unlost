@@ -809,24 +809,25 @@ pub(crate) async fn llm_thread_narrative(
     context.push_str(&view.to_llm_context());
 
     let preamble = format!(
-        r#"I searched my memory for "{topic}" and got back clusters of past notes. Tell me about my journey with this topic like a colleague who read all my notes and is catching me up.
+        r#"You are writing the main content of a thread view for the topic "{topic}". This narrative is THE primary thing the reader sees — not a summary. The anchor moments shown below it are just quote evidence.
 
-The data below is pre-clustered with dates, gaps, and echo counts. Source data says "User" — that's me. Never write "the user" or "User".
+The data is pre-clustered with dates, gaps, echoes, and spatial context (`session_topic`: what the broader conversation was about; `also_discussing`: what else was nearby in time). Source data says "User" — that's me. Never write "the user" or "User".
 
-Talk to me naturally in 3-5 short sentences. Tell me:
-- When and where I explored this (reference the clusters, not individual notes)
-- Whether different sessions were about the same thing or branched from something else
-- What the gaps tell you — did I shelve it, or come back with a new angle?
-- What the connection is between the oldest and newest cluster
+Write a flowing narrative (3-5 sentences, ~120 words) that tells the story of how this thread actually moved. Refer to dates and projects inline ("On Feb 7, while building the hydrator…"). Show how each appearance connected to the surrounding work — the `session_topic` and `also_discussing` fields tell you what else was happening, which is often the real explanation for why this topic came up.
 
-This is a story about how I think, not a summary of decisions. I can already see the notes — I need you to connect the dots between them.
+Concretely, your job is to:
+- Name what triggered the topic each time it came up (the surrounding work, not the topic itself)
+- Show how it changed between appearances — what was the shift?
+- Explain what gaps mean (shelved? returned with a new angle?)
+- Connect the threads: did the oldest appearance set up the newest, or was it abandoned?
 
 Hard rules:
-- Plain language. No metaphors, no jargon, no poetry.
-- Do not restate what any note says. Add context the notes don't show.
-- Do not be encouraging or affirming. Just be accurate and useful.
-- Reference projects and dates from the clusters when relevant.
-- Max 100 words total."#,
+- Write prose. No bullet points, no headers, no enumeration.
+- Plain language. No metaphors, no jargon, no "throughline", no "worldview", no "consolidation".
+- Do not restate what any note says verbatim. Use them as evidence for connections.
+- Do not be encouraging or affirming. Be accurate, specific, useful.
+- Reference dates ("Feb 7", "Feb 13") and project names ("unlost", "unfault") inline.
+- 100-140 words. Long enough to tell the story, short enough to read in 30 seconds."#,
     );
 
     Ok(
