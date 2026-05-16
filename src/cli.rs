@@ -46,6 +46,7 @@ Memory:
   query       Semantic search across recorded capsules
   trace       Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
   recall      Recall the story so far (proactive overview)
+  thread      Map when you explored a topic over time, across all your projects
   reflect     Reflect on how you and the agent worked together — coaching and diagnostics
   explore     Explore future paths grounded in your workspace memory
   challenge   Pressure-test a past decision or technology choice using your workspace memory
@@ -470,6 +471,46 @@ pub enum Command {
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
+    },
+
+    /// Show a temporal map of when you explored a topic across all your projects.
+    /// Results are sorted oldest-to-newest, grouped by session, with dormancy
+    /// gaps marked. Builds a picture of how your thinking on the topic moved.
+    Thread {
+        /// The topic to map. Free text — describe it as you would to a colleague.
+        topic: Vec<String>,
+
+        /// Max capsules to pull (combined across workspaces)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Only show entries from this date onward (e.g. "1y", "6m", RFC3339)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Skip the LLM synthesis and print the raw map only
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
+        /// LLM model to use for thread narrative
+        #[arg(long)]
+        llm_model: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Ansi)]
+        output: OutputFormat,
+
+        /// Shortcut for `--output plain`
+        #[arg(long, default_value_t = false)]
+        plain: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
     },
 
     /// Show recent friction interventions applied to agents

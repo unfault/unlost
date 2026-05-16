@@ -17,5 +17,6 @@ pub mod record;
 pub mod reflect;
 pub mod reindex;
 pub mod serve;
+pub mod thread;
 pub mod trace;
 pub mod where_cmd;

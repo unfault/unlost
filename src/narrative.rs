@@ -797,6 +797,125 @@ Output format:
     )
 }
 
+pub(crate) async fn llm_thread_narrative(
+    llm_model_override: Option<&str>,
+    topic: &str,
+    hits: &[crate::CapsuleHit],
+) -> anyhow::Result<String> {
+    let fmt_ts = |ts_ms: i64| -> String {
+        chrono::Utc
+            .timestamp_millis_opt(ts_ms)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| ts_ms.to_string())
+    };
+
+    let mut context = String::new();
+    context.push_str("Thread query:\n");
+    context.push_str(topic);
+    context.push_str("\n\n");
+
+    let earliest = hits.first().map(|h| fmt_ts(h.ts_ms)).unwrap_or_default();
+    let latest = hits.last().map(|h| fmt_ts(h.ts_ms)).unwrap_or_default();
+
+    // Count distinct workspaces
+    let project_ids: std::collections::BTreeSet<&str> = hits
+        .iter()
+        .filter_map(|h| h.origin_workspace_id.as_deref())
+        .collect();
+    let project_count = project_ids.len().max(1);
+
+    context.push_str(&format!(
+        "Thread: {} moments across {} project(s), spanning {} to {}\n\n",
+        hits.len(),
+        project_count,
+        earliest,
+        latest,
+    ));
+
+    context.push_str("Moments (chronological, oldest first):\n");
+    for (i, hit) in hits.iter().enumerate() {
+        let cap = &hit.capsule;
+        let meta = &hit.meta;
+        let ts = fmt_ts(hit.ts_ms);
+
+        let origin = hit
+            .origin_workspace_id
+            .as_deref()
+            .and_then(crate::workspace::workspace_label_by_id)
+            .map(|l| format!(" project={l}"))
+            .unwrap_or_default();
+
+        let ref_tok = capsule_ref_token(meta)
+            .map(|r| format!(" ref={r}"))
+            .unwrap_or_default();
+
+        context.push_str(&format!(
+            "#{} date={} category={} source={}{}{}\n",
+            i + 1,
+            ts,
+            cap.category,
+            meta.source,
+            ref_tok,
+            origin,
+        ));
+        if cap.failure_mode != crate::types::FailureMode::None {
+            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
+            let fm = fm.trim_matches('"');
+            context.push_str(&format!("failure_mode: {fm}\n"));
+        }
+        if !cap.intent.trim().is_empty() {
+            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
+        }
+        if !cap.decision.trim().is_empty() {
+            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
+        }
+        if !cap.rationale.trim().is_empty() {
+            context.push_str(&format!(
+                "rationale: {}\n",
+                cap.rationale.replace('\n', " ")
+            ));
+        }
+        if !cap.symbols.is_empty() {
+            let syms = cap
+                .symbols
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            context.push_str(&format!("symbols: {syms}\n"));
+        }
+        context.push('\n');
+        if i >= 49 {
+            break;
+        }
+    }
+
+    let preamble = format!(
+        r#"You are unlost thread. Your job is to describe the intellectual arc of a topic that a developer has returned to over time.
+
+Topic: "{topic}"
+Spans {earliest} to {latest} across {project_count} project(s).
+
+The moments are listed in chronological order (oldest first). Your reader can see the dates and decisions in the timeline above — do NOT enumerate them one by one. Instead, step back and describe the arc:
+
+- Where did the thinking start? What was the first framing or question?
+- How did the framing shift across the engagements? Was there a progression — from exploration to design to implementation? From one approach to another?
+- Where did the thinking land most recently? What's the current state?
+
+This is an arc, not a checklist. Do NOT say "still open", "unresolved", or "things to address". Do NOT list individual items. Just describe how the understanding moved. If the topic was explored in multiple projects, note that shift but do not dwell on it.
+
+Output 3-5 sentences. First person, conversational, concise. No headings, no bullets, no "report" language. Wrap code identifiers in backticks."#
+    );
+
+    Ok(
+        crate::llm_extract::<crate::QueryNarrativeOutput>(llm_model_override, &preamble, &context)
+            .await?
+            .narrative,
+    )
+}
+
 pub(crate) async fn llm_brief_narrative(
     llm_model_override: Option<&str>,
     scope: Option<&str>,
