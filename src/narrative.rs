@@ -838,6 +838,20 @@ pub(crate) async fn llm_thread_narrative(
         let cap = &hit.capsule;
         let meta = &hit.meta;
         let ts = fmt_ts(hit.ts_ms);
+        let gap = if i > 0 {
+            let days = (hit.ts_ms - hits[i - 1].ts_ms) / (24 * 60 * 60 * 1000);
+            if days >= 90 {
+                format!(" gap_from_previous={} months", (days / 30).max(3))
+            } else if days >= 30 {
+                format!(" gap_from_previous={} weeks", (days / 7).max(4))
+            } else if days >= 7 {
+                format!(" gap_from_previous={} days", days)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
 
         let origin = hit
             .origin_workspace_id
@@ -851,9 +865,10 @@ pub(crate) async fn llm_thread_narrative(
             .unwrap_or_default();
 
         context.push_str(&format!(
-            "#{} date={} category={} source={}{}{}\n",
+            "#{} date={}{} category={} source={}{}{}\n",
             i + 1,
             ts,
+            gap,
             cap.category,
             meta.source,
             ref_tok,
@@ -895,16 +910,16 @@ pub(crate) async fn llm_thread_narrative(
     let preamble = format!(
         r#"Write the note I would want to find later after searching my own memory for "{topic}".
 
-This is me-to-me, not a report. It should feel like a short note I might have written after rereading my own working notes across these {n} moments ({earliest} → {latest}). Capture the thread of thought: what I kept circling, what changed in the framing, and what it became by the latest note.
+This is me-to-me, not a report. The timeline below is raw extraction; your job is to interpret what the story says about my journey. Tell me what I was really working through, how time changed the idea, and why the older notes matter to the current one. If a gap suggests I shelved the idea or returned after processing it, say that plainly, but only if the dates support it.
 
 Rules:
-- Put the throughline first. No preamble like "Initially" or "This thread shows".
+- Do not restate the extracted decisions. Explain the throughline behind them.
+- Put the strongest interpretation first. No preamble like "This thread shows".
 - No enumeration. No "first/then/finally" recap.
 - No "still open", "unresolved", "remains unclear". This is not task tracking.
-- Use "I" naturally, but don't overdo it.
+- Use "I" naturally; this should feel like a note from me to future me.
 - Anchor with 1-2 backticked tokens from the notes.
-- One paragraph, 2-3 short sentences, max 70 words."#,
-        n = hits.len(),
+- One paragraph, 2-4 short sentences, max 95 words."#,
     );
 
     Ok(

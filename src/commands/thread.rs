@@ -87,18 +87,32 @@ pub async fn run(
 
     hits.sort_by_key(|h| h.ts_ms);
 
-    let narrative = if no_llm {
-        None
+    let (narrative, narrative_warning) = if no_llm {
+        (None, None)
     } else {
-        Some(crate::narrative::llm_thread_narrative(
-            llm_model.as_deref(),
-            &query,
-            &hits,
-        )
-        .await?)
+        match crate::narrative::llm_thread_narrative(llm_model.as_deref(), &query, &hits).await {
+            Ok(n) => (Some(n), None),
+            Err(e) => {
+                tracing::debug!(error = %e, "thread narrative unavailable; falling back to extracted notes");
+                (
+                    None,
+                    Some(
+                        "No LLM configured; showing extracted notes only. Configure with `unlost config llm ollama --model <model>`."
+                            .to_string(),
+                    ),
+                )
+            }
+        }
     };
 
-    let rendered = render_thread_map(&query, narrative.as_deref(), &hits, output, &ws);
+    let rendered = render_thread_map(
+        &query,
+        narrative.as_deref(),
+        narrative_warning.as_deref(),
+        &hits,
+        output,
+        &ws,
+    );
     print!("{rendered}");
 
     Ok(())
@@ -111,6 +125,7 @@ fn is_ansi(output: OutputFormat) -> bool {
 fn render_thread_map(
     topic: &str,
     narrative: Option<&str>,
+    narrative_warning: Option<&str>,
     hits: &[crate::CapsuleHit],
     output: OutputFormat,
     _current_ws: &crate::WorkspacePaths,
@@ -135,30 +150,35 @@ fn render_thread_map(
         .sum();
     let earliest = fmt_range_date(hits.first().unwrap().ts_ms);
     let latest = fmt_range_date(hits.last().unwrap().ts_ms);
+    let span_days = ((hits.last().unwrap().ts_ms - hits.first().unwrap().ts_ms)
+        / (24 * 60 * 60 * 1000))
+        .max(0);
 
     render_title(&mut out, topic, output);
 
     if is_ansi(output) {
         out.push_str(&format!(
-            "\x1b[2m{} moment{} · {} note{}{} · {} → {}\x1b[0m\n\n",
+            "\x1b[2m{} moment{} · {} note{}{} · {} back to {}{}\x1b[0m\n\n",
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
             display_note_count,
             if display_note_count == 1 { "" } else { "s" },
             project_label,
-            earliest,
             latest,
+            earliest,
+            span_suffix(span_days),
         ));
     } else {
         out.push_str(&format!(
-            "{} moment{} · {} note{}{} · {} → {}\n\n",
+            "{} moment{} · {} note{}{} · {} back to {}{}\n\n",
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
             display_note_count,
             if display_note_count == 1 { "" } else { "s" },
             project_label,
-            earliest,
             latest,
+            earliest,
+            span_suffix(span_days),
         ));
     }
 
@@ -169,21 +189,41 @@ fn render_thread_map(
             out.push('\n');
         }
         out.push('\n');
+    } else if let Some(warning) = narrative_warning {
+        if is_ansi(output) {
+            push_wrapped_ansi(
+                &mut out,
+                "\x1b[2m",
+                "\x1b[0m",
+                "\x1b[2m",
+                "\x1b[0m",
+                warning,
+                WRAP_WIDTH,
+            );
+        } else {
+            push_wrapped_plain(&mut out, "", "", warning, WRAP_WIDTH);
+        }
+        out.push_str("\n\n");
     }
 
     let mut global_idx = 0usize;
+    let display_days: Vec<Vec<&crate::CapsuleHit>> = days
+        .iter()
+        .rev()
+        .map(|day| day.iter().rev().copied().collect())
+        .collect();
 
-    for (di, day) in days.iter().enumerate() {
+    for (di, day) in display_days.iter().enumerate() {
         if di > 0 {
-            let prev_last = days[di - 1].last().unwrap().ts_ms;
-            let curr_first = day.first().unwrap().ts_ms;
-            let gap = curr_first - prev_last;
+            let newer_day_oldest = display_days[di - 1].last().unwrap().ts_ms;
+            let older_day_newest = day.first().unwrap().ts_ms;
+            let gap = newer_day_oldest - older_day_newest;
             if gap >= DORMANCY_THRESHOLD_MS {
-                let days = gap / (24 * 60 * 60 * 1000);
+                let label = gap_label(gap);
                 if is_ansi(output) {
-                    out.push_str(&format!("\n\x1b[2m        {} days later\x1b[0m\n\n", days));
+                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n\n", label));
                 } else {
-                    out.push_str(&format!("\n        {} days later\n\n", days));
+                    out.push_str(&format!("\n        {}\n\n", label));
                 }
             } else {
                 out.push('\n');
@@ -247,6 +287,29 @@ fn render_title(out: &mut String, topic: &str, output: OutputFormat) {
     } else {
         out.push_str(topic);
         out.push('\n');
+    }
+}
+
+fn span_suffix(days: i64) -> String {
+    if days >= 90 {
+        format!(" · {}-month arc", (days / 30).max(3))
+    } else if days >= 30 {
+        format!(" · {}-week arc", (days / 7).max(4))
+    } else if days >= 7 {
+        format!(" · {}-day arc", days)
+    } else {
+        String::new()
+    }
+}
+
+fn gap_label(gap_ms: i64) -> String {
+    let days = (gap_ms / (24 * 60 * 60 * 1000)).max(1);
+    if days >= 90 {
+        format!("{} months earlier · long return", (days / 30).max(3))
+    } else if days >= 30 {
+        format!("{} weeks earlier · shelved for a while", (days / 7).max(4))
+    } else {
+        format!("{} days earlier", days)
     }
 }
 
