@@ -93,7 +93,11 @@ pub async fn run(
     // Sort chronologically for analysis; renderers handle display order.
     hits.sort_by_key(|h| h.ts_ms);
 
-    let view = ThreadView::from_hits(&hits, &ws);
+    let mut view = ThreadView::from_hits(&hits, &ws);
+
+    // Collect all hit ids so we can exclude them from neighbor scans.
+    let thread_hit_ids: BTreeSet<String> = hits.iter().map(|h| h.id.clone()).collect();
+    view.enrich_spatial_context(&ws, &thread_hit_ids).await;
 
     let llm_spinner = if !no_llm {
         if let Some(target) = crate::narrative::spinner_draw_target(output) {
@@ -156,6 +160,10 @@ pub struct Cluster {
     pub provenance: String,
     /// Distinct source_pointer URIs found in this cluster (for linking back).
     pub source_links: Vec<String>,
+    /// What the broader session was about (from checkpoint narrative).
+    pub session_context: Option<String>,
+    /// Other topics that were being discussed nearby in time (not in this thread).
+    pub nearby_topics: Vec<String>,
 }
 
 pub struct DisplayNote {
@@ -225,6 +233,8 @@ impl ThreadView {
                 latest_ts: latest,
                 provenance: prov,
                 source_links,
+                session_context: None,
+                nearby_topics: Vec::new(),
             });
         }
 
@@ -255,6 +265,140 @@ impl ThreadView {
             project_count,
         }
     }
+
+    /// Enrich clusters with spatial context: what session they belonged to
+    /// and what other topics were being discussed nearby.
+    pub async fn enrich_spatial_context(
+        &mut self,
+        ws: &crate::WorkspacePaths,
+        thread_hit_ids: &BTreeSet<String>,
+    ) {
+        const NEIGHBOR_WINDOW_MS: i64 = 30 * 60 * 1000; // ±30 minutes
+
+        for cluster in &mut self.clusters {
+            // 1. Checkpoint: find the session narrative covering this cluster's time range.
+            if let Ok(db) = lancedb::connect(ws.db_dir.to_string_lossy().as_ref())
+                .execute()
+                .await
+            {
+                if let Ok(checkpoints) =
+                    crate::storage_checkpoint::get_checkpoints_in_range(
+                        &db,
+                        &ws.id,
+                        cluster.earliest_ts,
+                        cluster.latest_ts,
+                    )
+                    .await
+                {
+                    // Take the first checkpoint that covers this time range.
+                    if let Some(cp) = checkpoints.first() {
+                        cluster.session_context = extract_session_topic(&cp.narrative);
+                    }
+                }
+            }
+
+            // 2. Nearby topics: scan a time window around the cluster for
+            //    capsules not in the thread.
+            let since = cluster.earliest_ts - NEIGHBOR_WINDOW_MS;
+            let until = cluster.latest_ts + NEIGHBOR_WINDOW_MS;
+            if let Ok(nearby) = crate::storage::scan_capsules_lancedb(
+                ws,
+                20,
+                None,
+                None,
+                None,
+                Some(since),
+                Some(until),
+            )
+            .await
+            {
+                let mut topics: Vec<String> = Vec::new();
+                let mut seen = BTreeSet::new();
+                for hit in &nearby {
+                    // Skip notes already in the thread.
+                    if thread_hit_ids.contains(&hit.id) {
+                        continue;
+                    }
+                    // Skip git/changelog/init — those are facts, not conversation.
+                    if matches!(hit.meta.source.as_str(), "git" | "changelog" | "init") {
+                        continue;
+                    }
+                    let text = hit.capsule.decision.trim();
+                    if text.is_empty() || text.len() < 20 {
+                        continue;
+                    }
+                    // Skip low-signal placeholder decisions.
+                    let lower = text.to_ascii_lowercase();
+                    if matches!(
+                        lower.as_str(),
+                        "proceed" | "defer" | "pause" | "continue"
+                            | "no_action_required" | "accepted/implemented"
+                            | "awaiting_commit_instruction" | "awaiting_user_instruction"
+                    ) {
+                        continue;
+                    }
+                    // Skip decisions that look like status markers (single word, no spaces).
+                    if !text.contains(' ') && text.len() < 30 {
+                        continue;
+                    }
+                    let short = truncate(text, 60);
+                    // Deduplicate similar neighbor topics.
+                    let key = short.to_ascii_lowercase();
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    // Skip if this topic overlaps with any note in the cluster.
+                    let dominated = cluster
+                        .notes
+                        .iter()
+                        .any(|n| similar_notes_loose(&short, &n.decision));
+                    if dominated {
+                        continue;
+                    }
+                    seen.insert(key);
+                    topics.push(short);
+                    if topics.len() >= 3 {
+                        break;
+                    }
+                }
+                cluster.nearby_topics = topics;
+            }
+        }
+    }
+}
+
+/// Extract the "WHAT WAS WORKED ON" section from a checkpoint narrative,
+/// or fall back to the first non-empty line.
+fn extract_session_topic(narrative: &str) -> Option<String> {
+    let narrative = narrative.trim();
+    if narrative.is_empty() {
+        return None;
+    }
+    // Look for the structured section header.
+    let marker = "WHAT WAS WORKED ON";
+    if let Some(start) = narrative.find(marker) {
+        let after = &narrative[start + marker.len()..];
+        // Skip the header line itself and any blank lines.
+        let content: String = after
+            .lines()
+            .skip_while(|l| l.trim().is_empty() || l.trim() == marker)
+            .take(2)
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !content.is_empty() {
+            return Some(truncate(&content, 120));
+        }
+    }
+    // Fallback: first non-empty line.
+    for line in narrative.lines() {
+        let l = line.trim();
+        if !l.is_empty() && !l.chars().all(|c| c == '─' || c == '-' || c == '=') {
+            return Some(truncate(l, 120));
+        }
+    }
+    None
 }
 
 fn cluster_hits<'a>(hits: &'a [crate::CapsuleHit]) -> Vec<Vec<&'a crate::CapsuleHit>> {
@@ -424,6 +568,9 @@ fn render_trail(
         // Source links — dim, one per line under the header
         render_source_links(&mut out, cluster, output);
 
+        // Spatial context: what session this was part of, what else was nearby
+        render_spatial_context(&mut out, cluster, output);
+
         for note in cluster.notes.iter() {
             render_note_compact(&mut out, note, output);
         }
@@ -551,6 +698,43 @@ fn render_narrative_block(
             push_wrapped_plain(out, "", "", w, WRAP_WIDTH);
         }
         out.push('\n');
+    }
+}
+
+fn render_spatial_context(out: &mut String, cluster: &Cluster, output: OutputFormat) {
+    // Session context — what the broader conversation was about
+    if let Some(ref ctx) = cluster.session_context {
+        if is_ansi(output) {
+            push_wrapped_ansi(
+                out,
+                "  \x1b[2;3mpart of: ",
+                "\x1b[0m\n",
+                "          \x1b[2;3m",
+                "\x1b[0m\n",
+                ctx,
+                WRAP_WIDTH - 10,
+            );
+        } else {
+            push_wrapped_plain(out, "  part of: ", "          ", ctx, WRAP_WIDTH - 10);
+            out.push('\n');
+        }
+    }
+
+    // Nearby topics — what else was being discussed at the same time
+    if !cluster.nearby_topics.is_empty() {
+        let label = if cluster.nearby_topics.len() == 1 {
+            "  also discussing: "
+        } else {
+            "  also discussing: "
+        };
+        for (i, topic) in cluster.nearby_topics.iter().enumerate() {
+            let prefix = if i == 0 { label } else { "                    " };
+            if is_ansi(output) {
+                out.push_str(&format!("\x1b[2m{}{}\x1b[0m\n", prefix, truncate(topic, 58)));
+            } else {
+                out.push_str(&format!("{}{}\n", prefix, truncate(topic, 58)));
+            }
+        }
     }
 }
 
@@ -714,6 +898,15 @@ impl ThreadView {
                 gap_ctx,
                 cluster.provenance,
             ));
+            if let Some(ref session_ctx) = cluster.session_context {
+                ctx.push_str(&format!("  session_topic: {}\n", session_ctx));
+            }
+            if !cluster.nearby_topics.is_empty() {
+                ctx.push_str(&format!(
+                    "  also_discussing: {}\n",
+                    cluster.nearby_topics.join("; "),
+                ));
+            }
             for note in &cluster.notes {
                 ctx.push_str(&format!("  decision: {}\n", note.decision));
                 if let Some(ref r) = note.rationale {
@@ -948,6 +1141,19 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 }
 
 // ── Similarity ──────────────────────────────────────────────────────────────
+
+/// Looser similarity check for excluding neighbor topics that overlap with cluster notes.
+fn similar_notes_loose(a: &str, b: &str) -> bool {
+    let a_tokens = note_tokens(a);
+    let b_tokens = note_tokens(b);
+    if a_tokens.is_empty() || b_tokens.is_empty() {
+        return false;
+    }
+    let intersection = a_tokens.intersection(&b_tokens).count() as f32;
+    let smaller = (a_tokens.len().min(b_tokens.len())) as f32;
+    // If more than 30% of the smaller set's tokens appear in the other, it's dominated.
+    (intersection / smaller) >= 0.3
+}
 
 fn similar_notes(a: &str, b: &str) -> bool {
     let a_tokens = note_tokens(a);
