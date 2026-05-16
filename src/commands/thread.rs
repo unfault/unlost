@@ -90,10 +90,10 @@ pub async fn run(
     print!("{rendered}");
 
     if !no_llm {
-        if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            println!("\n\x1b[2m{}\x1b[0m", "─".repeat(72));
+        if output == OutputFormat::Ansi && std::env::var_os("NO_COLOR").is_none() {
+            println!("\x1b[2m{}\x1b[0m", "─".repeat(72));
         } else {
-            println!("\n{}", "─".repeat(72));
+            println!("{}", "─".repeat(72));
         }
 
         let narrative = crate::narrative::llm_thread_narrative(
@@ -110,78 +110,119 @@ pub async fn run(
     Ok(())
 }
 
-fn render_thread_map(hits: &[crate::CapsuleHit], output: OutputFormat, _current_ws: &crate::WorkspacePaths) -> String {
+fn is_ansi(output: OutputFormat) -> bool {
+    output == OutputFormat::Ansi && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn render_thread_map(
+    hits: &[crate::CapsuleHit],
+    output: OutputFormat,
+    _current_ws: &crate::WorkspacePaths,
+) -> String {
     let mut out = String::new();
 
+    // Header line
     let project_ids: std::collections::BTreeSet<&str> = hits
         .iter()
         .filter_map(|h| h.origin_workspace_id.as_deref())
         .collect();
     let project_count = if project_ids.is_empty() { 1 } else { project_ids.len() };
-    let project_label = if project_ids.is_empty() || project_count == 1 {
-        String::new()
-    } else {
+    let project_label = if project_count > 1 {
         format!(" across {} projects", project_count)
+    } else {
+        String::new()
     };
 
     let earliest = fmt_date(hits.first().unwrap().ts_ms);
     let latest = fmt_date(hits.last().unwrap().ts_ms);
 
-    out.push_str(&format!(
-        "unlost: {} moments{} ({} → {})\n",
-        hits.len(),
-        project_label,
-        earliest,
-        latest,
-    ));
+    if is_ansi(output) {
+        out.push_str(&format!(
+            "\x1b[2m{} moment{}{} · {} → {}\x1b[0m\n\n",
+            hits.len(),
+            if hits.len() == 1 { "" } else { "s" },
+            project_label,
+            earliest,
+            latest,
+        ));
+    } else {
+        out.push_str(&format!(
+            "{} moment{}{} · {} → {}\n\n",
+            hits.len(),
+            if hits.len() == 1 { "" } else { "s" },
+            project_label,
+            earliest,
+            latest,
+        ));
+    }
 
     let sessions = group_into_sessions(hits);
+    let mut global_idx = 0usize;
 
     for (si, session) in sessions.iter().enumerate() {
+        // Blank line + dormancy gap between sessions
         if si > 0 {
             let prev_last = sessions[si - 1].last().unwrap().ts_ms;
             let curr_first = session.first().unwrap().ts_ms;
             let gap = curr_first - prev_last;
             if gap >= DORMANCY_THRESHOLD_MS {
                 let days = gap / (24 * 60 * 60 * 1000);
-                if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-                    out.push_str(&format!("  \x1b[2m· · · {} days dormant · · ·\x1b[0m\n\n", days));
+                if is_ansi(output) {
+                    out.push_str(&format!("\x1b[2m  · · ·  {} days  · · ·\x1b[0m\n\n", days));
                 } else {
-                    out.push_str(&format!("  · · · {} days dormant · · ·\n\n", days));
+                    out.push_str(&format!("  · · ·  {} days  · · ·\n\n", days));
                 }
+            } else {
+                out.push('\n');
             }
         }
 
+        // Session date header
         let first_hit = session.first().unwrap();
         let date_str = fmt_date(first_hit.ts_ms);
 
+        // Workspace label — only show when there's a single distinct project for this session
         let ws_labels: std::collections::BTreeSet<String> = session
             .iter()
             .filter_map(|h| h.origin_workspace_id.as_deref())
             .filter_map(|id| crate::workspace::workspace_label_by_id(id))
             .collect();
-        let ws_suffix = if ws_labels.len() == 1 {
+        let ws_tag = if ws_labels.len() == 1 {
             let label = ws_labels.iter().next().unwrap();
             if !label.is_empty() {
-                format!("  [{}]", label)
+                Some(label.clone())
             } else {
-                String::new()
+                None
             }
         } else {
-            String::new()
+            None
         };
 
-        let line = if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            let dashes = "─".repeat(60usize.saturating_sub(date_str.len() + ws_suffix.len()));
-            format!("\x1b[2m── {} {ws_suffix} {dashes}\x1b[0m\n", date_str)
+        if is_ansi(output) {
+            // Bold white date, cyan project tag, dim trailing dashes
+            let tag_part = match &ws_tag {
+                Some(t) => format!("  \x1b[0;36m{}\x1b[0m", t),
+                None => String::new(),
+            };
+            let tag_visible_len = ws_tag.as_deref().map(|t| t.len() + 2).unwrap_or(0);
+            let dash_count = 52usize.saturating_sub(date_str.len() + tag_visible_len);
+            out.push_str(&format!(
+                "\x1b[1;97m{}\x1b[0m{}\x1b[2m  {}\x1b[0m\n",
+                date_str,
+                tag_part,
+                "─".repeat(dash_count),
+            ));
         } else {
-            let dashes = "─".repeat(60usize.saturating_sub(date_str.len() + ws_suffix.len()));
-            format!("── {} {ws_suffix} {dashes}\n", date_str)
-        };
-        out.push_str(&line);
+            let tag_part = match &ws_tag {
+                Some(t) => format!("  {}", t),
+                None => String::new(),
+            };
+            out.push_str(&format!("{}{}\n", date_str, tag_part));
+        }
 
-        for (hi, hit) in session.iter().enumerate() {
-            let entry = render_capsule_entry(hit, hi + 1, output);
+        for hit in session.iter() {
+            global_idx += 1;
+            let entry = render_capsule_entry(hit, global_idx, output);
             out.push_str(&entry);
             out.push('\n');
         }
@@ -217,77 +258,65 @@ fn render_capsule_entry(hit: &crate::CapsuleHit, index: usize, output: OutputFor
     let cap = &hit.capsule;
     let mut lines = Vec::new();
 
-    let category = if cap.category.trim().is_empty() {
-        "note".to_string()
+    // ── Decision line — the primary signal, full width ──────────────────────
+    let decision = cap.decision.trim();
+    let decision_display = if decision.is_empty() {
+        // Fall back to intent if no decision was extracted
+        truncate(cap.intent.trim(), 120)
     } else {
-        cap.category.trim().to_string()
+        decision.to_string()
     };
-    let decision = truncate(cap.decision.trim(), 80);
 
-    if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
+    if is_ansi(output) {
+        // Index dim, decision bold white
         lines.push(format!(
-            "  #{}  \x1b[1m{}\x1b[0m  \"{}\"",
-            index, category, decision
+            "\n  \x1b[2m{:>2}\x1b[0m  \x1b[1m{}\x1b[0m",
+            index, decision_display
         ));
     } else {
-        lines.push(format!("  #{}  {}  \"{}\"", index, category, decision));
+        lines.push(format!("\n  {:>2}  {}", index, decision_display));
     }
 
+    // ── Support lines — all dim, no labels, compact ──────────────────────────
+
+    // Rationale: first sentence, max 80 chars, no "Rationale:" prefix
     if !cap.rationale.trim().is_empty() {
-        let rationale = first_sentence(cap.rationale.trim());
-        if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            lines.push(format!("      \x1b[2mRationale:\x1b[0m {}", rationale));
+        let rationale = truncate(&first_sentence(cap.rationale.trim()), 100);
+        if is_ansi(output) {
+            lines.push(format!("      \x1b[2m{}\x1b[0m", rationale));
         } else {
-            lines.push(format!("      Rationale: {}", rationale));
+            lines.push(format!("      {}", rationale));
         }
     }
 
+    // Failure mode — amber warning glyph, stays visible
     if cap.failure_mode != crate::types::FailureMode::None {
         let fm = match cap.failure_mode {
-            crate::types::FailureMode::None => "none",
-            crate::types::FailureMode::Drift => "Drift",
-            crate::types::FailureMode::Rediscovery => "Rediscovery",
-            crate::types::FailureMode::DecisionConflict => "DecisionConflict",
-            crate::types::FailureMode::RetrySpiral => "RetrySpiral",
-            crate::types::FailureMode::FalseProgress => "FalseProgress",
-            crate::types::FailureMode::UnboundedHorizon => "UnboundedHorizon",
+            crate::types::FailureMode::None => "",
+            crate::types::FailureMode::Drift => "drift",
+            crate::types::FailureMode::Rediscovery => "rediscovery",
+            crate::types::FailureMode::DecisionConflict => "decision conflict",
+            crate::types::FailureMode::RetrySpiral => "retry spiral",
+            crate::types::FailureMode::FalseProgress => "false progress",
+            crate::types::FailureMode::UnboundedHorizon => "unbounded horizon",
         };
-        if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            lines.push(format!("      \x1b[31m▲\x1b[0m {}", fm));
-        } else {
-            lines.push(format!("      ▲ {}", fm));
-        }
-    }
-
-    if !cap.next_steps.is_empty() {
-        let next = truncate(&cap.next_steps[0], 60);
-        if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            lines.push(format!("      \x1b[36m○\x1b[0m next: {}", next));
-        } else {
-            lines.push(format!("      ○ next: {}", next));
-        }
-    }
-
-    if !cap.symbols.is_empty() {
-        let syms: Vec<&str> = cap.symbols.iter().map(|s| s.as_str()).take(3).collect();
-        let sym_str = syms.join(", ");
-        if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-            lines.push(format!("      \x1b[2m@\x1b[0m {}", sym_str));
-        } else {
-            lines.push(format!("      @ {}", sym_str));
-        }
-    }
-
-    if let Some(ref sp) = hit.meta.source_pointer {
-        let label = crate::workspace::resolve_source_label(sp);
-        if let Some(l) = label {
-            if !l.is_empty() {
-                if output == OutputFormat::Ansi && !std::env::var_os("NO_COLOR").is_some() {
-                    lines.push(format!("      \x1b[2m↗\x1b[0m {}", l));
-                } else {
-                    lines.push(format!("      ↗ {}", l));
-                }
+        if !fm.is_empty() {
+            if is_ansi(output) {
+                lines.push(format!("      \x1b[33m▲ {}\x1b[0m", fm));
+            } else {
+                lines.push(format!("      ▲ {}", fm));
             }
+        }
+    }
+
+    // Symbols — dim, no prefix glyph
+    if !cap.symbols.is_empty() {
+        let syms: Vec<&str> = cap.symbols.iter().map(|s| s.as_str()).take(4).collect();
+        let sym_str = syms.join("  ");
+        if is_ansi(output) {
+            lines.push(format!("      \x1b[2m{}\x1b[0m", sym_str));
+        } else {
+            lines.push(format!("      {}", sym_str));
         }
     }
 
@@ -303,19 +332,29 @@ fn fmt_date(ts_ms: i64) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    // Truncate on a char boundary to avoid splitting multi-byte chars
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max.saturating_sub(1)])
+        let end = s.char_indices().nth(max.saturating_sub(1)).map(|(i, _)| i).unwrap_or(s.len());
+        format!("{}…", &s[..end])
     }
 }
 
 fn first_sentence(s: &str) -> String {
-    if let Some(pos) = s.find('.') {
-        let candidate = s[..=pos].trim();
-        if !candidate.is_empty() {
-            return candidate.to_string();
+    // Find the first sentence-ending period that isn't inside an abbreviation.
+    // Simple heuristic: period followed by space or end-of-string.
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'.' {
+            let after = i + 1;
+            if after >= bytes.len() || bytes[after] == b' ' || bytes[after] == b'\n' {
+                let candidate = s[..=i].trim();
+                if !candidate.is_empty() {
+                    return candidate.to_string();
+                }
+            }
         }
     }
-    truncate(s, 80)
+    s.to_string()
 }
