@@ -424,8 +424,8 @@ fn render_trail(
         // Source links — dim, one per line under the header
         render_source_links(&mut out, cluster, output);
 
-        for (ni, note) in cluster.notes.iter().enumerate() {
-            render_note(&mut out, note, ni + 1, output);
+        for note in cluster.notes.iter() {
+            render_note_compact(&mut out, note, output);
         }
     }
 
@@ -567,6 +567,32 @@ fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat
     }
 }
 
+/// Compact one-liner for trail view: just the decision, hard-truncated.
+fn render_note_compact(out: &mut String, note: &DisplayNote, output: OutputFormat) {
+    let text = truncate(&note.decision, 72);
+    let echo_suffix = if note.echoes > 0 {
+        if note.echoes == 1 { " (+1)" } else { &format!(" (+{})", note.echoes) }
+    } else {
+        ""
+    };
+    let fm_prefix = if note.failure_mode.is_some() { "▲ " } else { "" };
+
+    if is_ansi(output) {
+        let fm_color = if note.failure_mode.is_some() { "\x1b[33m" } else { "" };
+        let fm_reset = if note.failure_mode.is_some() { "\x1b[0;36m" } else { "" };
+        out.push_str(&format!(
+            "    \x1b[36m{fm_color}{fm_prefix}{fm_reset}{text}\x1b[0m",
+        ));
+        if !echo_suffix.is_empty() {
+            out.push_str(&format!("\x1b[2;3m{echo_suffix}\x1b[0m"));
+        }
+    } else {
+        out.push_str(&format!("    {fm_prefix}{text}{echo_suffix}"));
+    }
+    out.push('\n');
+}
+
+/// Full multi-line note for --timeline view.
 fn render_note(out: &mut String, note: &DisplayNote, index: usize, output: OutputFormat) {
     // Decision — the primary signal, cyan tint
     if is_ansi(output) {
