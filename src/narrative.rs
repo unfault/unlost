@@ -893,20 +893,16 @@ pub(crate) async fn llm_thread_narrative(
     }
 
     let preamble = format!(
-        r#"You are unlost thread. Your job is to describe the intellectual arc of a topic that a developer has returned to over time.
+        r#"Describe the intellectual arc of "{topic}" across these {n} moments ({earliest} → {latest}).
 
-Topic: "{topic}"
-Spans {earliest} to {latest} across {project_count} project(s).
+The reader already sees the timeline. Your job is a single short paragraph — 2-4 sentences — that captures how the *framing* of this topic shifted. Not what happened each time; how the thinking moved overall. Where did it start, what was the pivot, where did it land?
 
-The moments are listed in chronological order (oldest first). Your reader can see the dates and decisions in the timeline above — do NOT enumerate them one by one. Instead, step back and describe the arc:
-
-- Where did the thinking start? What was the first framing or question?
-- How did the framing shift across the engagements? Was there a progression — from exploration to design to implementation? From one approach to another?
-- Where did the thinking land most recently? What's the current state?
-
-This is an arc, not a checklist. Do NOT say "still open", "unresolved", or "things to address". Do NOT list individual items. Just describe how the understanding moved. If the topic was explored in multiple projects, note that shift but do not dwell on it.
-
-Output 3-5 sentences. First person, conversational, concise. No headings, no bullets, no "report" language. Wrap code identifiers in backticks."#
+Rules:
+- No enumeration. No "first", "then", "finally" recaps.
+- No "still open", "unresolved", "remains unclear". This is not a status report.
+- Anchor each claim to 1-2 backticked tokens from the decisions. Be specific; vague arcs are useless.
+- Conversational, first person. Max 60 words."#,
+        n = hits.len(),
     );
 
     Ok(
