@@ -131,6 +131,8 @@ pub struct Cluster {
     pub earliest_ts: i64,
     pub latest_ts: i64,
     pub provenance: String,
+    /// Distinct source_pointer URIs found in this cluster (for linking back).
+    pub source_links: Vec<String>,
 }
 
 pub struct DisplayNote {
@@ -184,11 +186,22 @@ impl ThreadView {
             let earliest = raw.first().unwrap().ts_ms;
             let latest = raw.last().unwrap().ts_ms;
 
+            let mut source_links: Vec<String> = raw
+                .iter()
+                .filter_map(|h| h.meta.source_pointer.as_deref())
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            source_links.truncate(3);
+
             clusters.push(Cluster {
                 notes: folded,
                 earliest_ts: earliest,
                 latest_ts: latest,
                 provenance: prov,
+                source_links,
             });
         }
 
@@ -257,7 +270,7 @@ fn fold_similar(hits: &[&crate::CapsuleHit]) -> Vec<DisplayNote> {
             } else {
                 Some(truncate(
                     &humanize_rationale(&first_sentence(cap.rationale.trim())),
-                    112,
+                    80,
                 ))
             };
             let failure_mode = match cap.failure_mode {
@@ -269,7 +282,13 @@ fn fold_similar(hits: &[&crate::CapsuleHit]) -> Vec<DisplayNote> {
                 crate::types::FailureMode::FalseProgress => Some("false progress".into()),
                 crate::types::FailureMode::UnboundedHorizon => Some("unbounded horizon".into()),
             };
-            let symbols: Vec<String> = cap.symbols.iter().take(4).cloned().collect();
+            let symbols: Vec<String> = cap
+                .symbols
+                .iter()
+                .filter(|s| s.contains('/') || s.contains('.'))
+                .take(2)
+                .cloned()
+                .collect();
             notes.push(DisplayNote {
                 decision: text,
                 rationale,
@@ -360,7 +379,7 @@ fn render_trail(
             out.push_str(&section_label);
         }
 
-        // Provenance for the cluster — dim, on the same line or next
+        // Provenance for the cluster — dim, on the same line
         if !cluster.provenance.is_empty() {
             if is_ansi(output) {
                 out.push_str(&format!("  \x1b[2m{}\x1b[0m", cluster.provenance));
@@ -369,6 +388,9 @@ fn render_trail(
             }
         }
         out.push('\n');
+
+        // Source links — dim, one per line under the header
+        render_source_links(&mut out, cluster, output);
 
         for (ni, note) in cluster.notes.iter().enumerate() {
             render_note(&mut out, note, ni + 1, output);
@@ -424,6 +446,8 @@ fn render_timeline(
             }
         }
         out.push('\n');
+
+        render_source_links(&mut out, cluster, output);
 
         for (ni, note) in cluster.notes.iter().rev().enumerate() {
             render_note(&mut out, note, ni + 1, output);
@@ -495,6 +519,19 @@ fn render_narrative_block(
             push_wrapped_plain(out, "", "", w, WRAP_WIDTH);
         }
         out.push('\n');
+    }
+}
+
+fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat) {
+    if cluster.source_links.is_empty() {
+        return;
+    }
+    for link in &cluster.source_links {
+        if is_ansi(output) {
+            out.push_str(&format!("  \x1b[2m{}\x1b[0m\n", link));
+        } else {
+            out.push_str(&format!("  {}\n", link));
+        }
     }
 }
 
@@ -690,22 +727,51 @@ fn fallback_source_label(hit: &crate::CapsuleHit) -> Option<String> {
     if source.is_empty() {
         return None;
     }
-    match (source, path.is_empty()) {
-        ("changelog", false) => Some(format!("CHANGELOG {path}")),
-        ("git", false) => Some(format!("git {path}")),
-        (_, true) => Some(source.to_string()),
-        _ => Some(format!("{source} · {path}")),
+    // Map internal source/path combos to human-readable labels.
+    if source == "changelog" {
+        return if path.is_empty() {
+            Some("CHANGELOG".into())
+        } else {
+            Some(format!("CHANGELOG {path}"))
+        };
     }
+    if source == "git" {
+        return if path.is_empty() {
+            Some("git".into())
+        } else {
+            Some(format!("git {path}"))
+        };
+    }
+    if source == "record" {
+        // /opencode/record, /companion, /v1/chat/completions, etc.
+        if path.contains("opencode") || path.contains("companion") {
+            return Some("OpenCode".into());
+        }
+        if path.contains("claude") {
+            return Some("Claude".into());
+        }
+        if path.contains("copilot") {
+            return Some("Copilot".into());
+        }
+        if path.contains("chat/completions") {
+            return Some("chat".into());
+        }
+        return None; // Just show workspace, not "record"
+    }
+    if source == "init" {
+        return Some("init".into());
+    }
+    None
 }
 
 fn note_text(hit: &crate::CapsuleHit) -> String {
     let decision = hit.capsule.decision.trim();
     let text = if decision.is_empty() {
-        truncate(hit.capsule.intent.trim(), 160)
+        hit.capsule.intent.trim().to_string()
     } else {
         decision.to_string()
     };
-    humanize_note_text(&text)
+    truncate(&humanize_note_text(&text), 140)
 }
 
 fn span_suffix(days: i64) -> String {
