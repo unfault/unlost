@@ -473,11 +473,11 @@ pub enum Command {
         path: String,
     },
 
-    /// Show a temporal map of when you explored a topic across all your projects.
-    /// Results are sorted oldest-to-newest, grouped by session, with dormancy
-    /// gaps marked. Builds a picture of how your thinking on the topic moved.
+    /// Re-walk a trail of thought: how a topic evolved across your projects.
+    /// Default view is trail (current shape → origin). Use --timeline for
+    /// flat reverse-chronological.
     Thread {
-        /// The topic to map. Free text — describe it as you would to a colleague.
+        /// The topic to trace. Free text — describe it as you would to a colleague.
         topic: Vec<String>,
 
         /// Max capsules to pull (combined across workspaces)
@@ -488,9 +488,13 @@ pub enum Command {
         #[arg(long)]
         since: Option<String>,
 
-        /// Skip the LLM synthesis and print the raw map only
+        /// Skip the LLM synthesis and print the raw notes only
         #[arg(long, default_value_t = false)]
         no_llm: bool,
+
+        /// Use flat reverse-chronological view instead of trail
+        #[arg(long, default_value_t = false)]
+        timeline: bool,
 
         /// LLM model to use for thread narrative
         #[arg(long)]

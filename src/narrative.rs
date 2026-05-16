@@ -800,136 +800,38 @@ Output format:
 pub(crate) async fn llm_thread_narrative(
     llm_model_override: Option<&str>,
     topic: &str,
-    hits: &[crate::CapsuleHit],
+    view: &crate::commands::thread::ThreadView,
 ) -> anyhow::Result<String> {
-    let fmt_ts = |ts_ms: i64| -> String {
-        chrono::Utc
-            .timestamp_millis_opt(ts_ms)
-            .single()
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| ts_ms.to_string())
-    };
-
     let mut context = String::new();
     context.push_str("Thread query:\n");
     context.push_str(topic);
     context.push_str("\n\n");
-
-    let earliest = hits.first().map(|h| fmt_ts(h.ts_ms)).unwrap_or_default();
-    let latest = hits.last().map(|h| fmt_ts(h.ts_ms)).unwrap_or_default();
-
-    // Count distinct workspaces
-    let project_ids: std::collections::BTreeSet<&str> = hits
-        .iter()
-        .filter_map(|h| h.origin_workspace_id.as_deref())
-        .collect();
-    let project_count = project_ids.len().max(1);
-
-    context.push_str(&format!(
-        "Thread: {} moments across {} project(s), spanning {} to {}\n\n",
-        hits.len(),
-        project_count,
-        earliest,
-        latest,
-    ));
-
-    context.push_str("Moments (chronological, oldest first):\n");
-    for (i, hit) in hits.iter().enumerate() {
-        let cap = &hit.capsule;
-        let meta = &hit.meta;
-        let ts = fmt_ts(hit.ts_ms);
-        let gap = if i > 0 {
-            let days = (hit.ts_ms - hits[i - 1].ts_ms) / (24 * 60 * 60 * 1000);
-            if days >= 90 {
-                format!(" gap_from_previous={} months", (days / 30).max(3))
-            } else if days >= 30 {
-                format!(" gap_from_previous={} weeks", (days / 7).max(4))
-            } else if days >= 7 {
-                format!(" gap_from_previous={} days", days)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        let origin = hit
-            .origin_workspace_id
-            .as_deref()
-            .and_then(crate::workspace::workspace_label_by_id)
-            .map(|l| format!(" project={l}"))
-            .unwrap_or_default();
-
-        let ref_tok = capsule_ref_token(meta)
-            .map(|r| format!(" ref={r}"))
-            .unwrap_or_default();
-
-        context.push_str(&format!(
-            "#{} date={}{} category={} source={}{}{}\n",
-            i + 1,
-            ts,
-            gap,
-            cap.category,
-            meta.source,
-            ref_tok,
-            origin,
-        ));
-        if cap.failure_mode != crate::types::FailureMode::None {
-            let fm = serde_json::to_string(&cap.failure_mode).unwrap_or_default();
-            let fm = fm.trim_matches('"');
-            context.push_str(&format!("failure_mode: {fm}\n"));
-        }
-        if !cap.intent.trim().is_empty() {
-            context.push_str(&format!("intent: {}\n", cap.intent.replace('\n', " ")));
-        }
-        if !cap.decision.trim().is_empty() {
-            context.push_str(&format!("decision: {}\n", cap.decision.replace('\n', " ")));
-        }
-        if !cap.rationale.trim().is_empty() {
-            context.push_str(&format!(
-                "rationale: {}\n",
-                cap.rationale.replace('\n', " ")
-            ));
-        }
-        if !cap.symbols.is_empty() {
-            let syms = cap
-                .symbols
-                .iter()
-                .take(8)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
-            context.push_str(&format!("symbols: {syms}\n"));
-        }
-        context.push('\n');
-        if i >= 49 {
-            break;
-        }
-    }
+    context.push_str(&view.to_llm_context());
 
     let preamble = format!(
         r#"Write the note I would want to find later after searching my own memory for "{topic}".
 
-The timeline is raw extraction. Do NOT summarize it. Analyze it. I am paying for the interpretation: what this thread means, why I kept returning to it, what belief or design instinct was forming underneath, and what the older notes change about how I should read the latest ones.
+Below is a pre-analyzed thread: clusters of notes grouped by time, with gaps and echoes already identified. Your job is to interpret the structure, not restate the content.
 
 Important: the source may say "User" because capsules are extracted from chat logs. Treat that as "me". Never write "the user" or "User" in the answer.
 
-Useful output answers at least two of these:
-- What was I actually trying to protect, sharpen, or avoid?
-- What changed in my stance over time?
-- Why did this topic matter enough to recur?
-- What is the non-obvious implication for the system now?
-- Did a gap suggest shelving, processing, or a long return?
+Output exactly three short lines:
+
+Line 1 — The throughline: what this thread is really about, in one plain sentence. Not what the notes say; what they reveal about what I was working through.
+
+Line 2 — Why it recurred: what made me keep returning to this. Was I protecting something? Learning by repetition? Circling because I hadn't committed?
+
+Line 3 — What the oldest notes change: how reading the origin cluster alongside the latest one shifts the meaning. If there was a long gap, say what the gap tells you.
 
 Rules:
-- Start with the strongest "so what" claim, not chronology.
-- Do not restate extracted decisions. If a sentence merely paraphrases a note, delete it.
+- Use simple words. If a sentence needs re-reading, rewrite it shorter.
+- Do not restate decisions from the notes. If a sentence paraphrases a note, delete it.
 - Do not tell me what I did; tell me what it means.
 - No "first/then/finally" recap. No "this thread shows".
-- No "still open", "unresolved", "remains unclear". This is not task tracking.
-- Use "I" naturally; this should feel like a note from me to future me.
-- Anchor with 1-2 backticked tokens from the notes, but only as evidence.
-- One paragraph, 3-5 dense sentences, max 130 words."#,
+- No "still open", "unresolved", "remains unclear".
+- Use "I" naturally.
+- Anchor with at most 1-2 backticked tokens, only as evidence.
+- Each line max 35 words. Total max 100 words."#,
     );
 
     Ok(

@@ -230,6 +230,7 @@ async fn main() -> anyhow::Result<()> {
             limit,
             since,
             no_llm,
+            timeline,
             llm_model,
             output,
             plain,
@@ -246,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
                 output,
                 embed_model,
                 embed_cache_dir,
+                timeline,
             )
             .await?;
         }

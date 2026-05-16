@@ -6,6 +6,10 @@ use std::time::Duration;
 
 const WRAP_WIDTH: usize = 80;
 const DORMANCY_THRESHOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// Two notes within this gap are part of the same cluster.
+const CLUSTER_GAP_MS: i64 = 4 * 60 * 60 * 1000;
+
+// ── Public entry point ──────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -17,6 +21,7 @@ pub async fn run(
     output: OutputFormat,
     embed_model: String,
     embed_cache_dir: Option<String>,
+    timeline: bool,
 ) -> anyhow::Result<()> {
     let query = topic.join(" ");
     let query = query.trim().to_string();
@@ -85,15 +90,18 @@ pub async fn run(
         return Ok(());
     }
 
+    // Sort chronologically for analysis; renderers handle display order.
     hits.sort_by_key(|h| h.ts_ms);
+
+    let view = ThreadView::from_hits(&hits, &ws);
 
     let (narrative, narrative_warning) = if no_llm {
         (None, None)
     } else {
-        match crate::narrative::llm_thread_narrative(llm_model.as_deref(), &query, &hits).await {
+        match crate::narrative::llm_thread_narrative(llm_model.as_deref(), &query, &view).await {
             Ok(n) => (Some(n), None),
             Err(e) => {
-                tracing::debug!(error = %e, "thread narrative unavailable; falling back to extracted notes");
+                tracing::debug!(error = %e, "thread narrative unavailable");
                 (
                     None,
                     Some(
@@ -105,189 +113,599 @@ pub async fn run(
         }
     };
 
-    let rendered = render_thread_map(
-        &query,
-        narrative.as_deref(),
-        narrative_warning.as_deref(),
-        &hits,
-        output,
-        &ws,
-    );
+    let rendered = if timeline {
+        render_timeline(&query, narrative.as_deref(), narrative_warning.as_deref(), &view, output)
+    } else {
+        render_trail(&query, narrative.as_deref(), narrative_warning.as_deref(), &view, output)
+    };
     print!("{rendered}");
 
     Ok(())
+}
+
+// ── ThreadView: pre-analyzed structure ──────────────────────────────────────
+
+/// A cluster of nearby notes (within CLUSTER_GAP_MS of each other).
+pub struct Cluster {
+    pub notes: Vec<DisplayNote>,
+    pub earliest_ts: i64,
+    pub latest_ts: i64,
+    pub provenance: String,
+}
+
+pub struct DisplayNote {
+    pub decision: String,
+    pub rationale: Option<String>,
+    pub failure_mode: Option<String>,
+    pub symbols: Vec<String>,
+    pub echoes: usize,
+    pub ts_ms: i64,
+}
+
+pub struct LongGap {
+    pub from_ts: i64,
+    pub to_ts: i64,
+    pub days: i64,
+}
+
+pub struct ThreadView {
+    /// All clusters, sorted chronologically (oldest first).
+    pub clusters: Vec<Cluster>,
+    /// Gaps >=7d between consecutive clusters, chronological.
+    pub long_gaps: Vec<LongGap>,
+    /// Total moments before dedup.
+    pub total_moments: usize,
+    /// Total notes after dedup.
+    pub total_notes: usize,
+    pub earliest_ts: i64,
+    pub latest_ts: i64,
+    pub span_days: i64,
+    pub project_count: usize,
+}
+
+impl ThreadView {
+    pub fn from_hits(hits: &[crate::CapsuleHit], ws: &crate::WorkspacePaths) -> Self {
+        let project_ids: BTreeSet<&str> = hits
+            .iter()
+            .filter_map(|h| h.origin_workspace_id.as_deref())
+            .collect();
+        let project_count = project_ids.len().max(1);
+
+        // Group into clusters by temporal proximity.
+        let raw_clusters = cluster_hits(hits);
+        let mut clusters: Vec<Cluster> = Vec::new();
+        let mut total_notes = 0usize;
+
+        for raw in &raw_clusters {
+            let folded = fold_similar(raw);
+            total_notes += folded.len();
+
+            let prov = cluster_provenance(raw, ws);
+            let earliest = raw.first().unwrap().ts_ms;
+            let latest = raw.last().unwrap().ts_ms;
+
+            clusters.push(Cluster {
+                notes: folded,
+                earliest_ts: earliest,
+                latest_ts: latest,
+                provenance: prov,
+            });
+        }
+
+        // Find long gaps between consecutive clusters.
+        let mut long_gaps: Vec<LongGap> = Vec::new();
+        for i in 1..clusters.len() {
+            let from_ts = clusters[i - 1].latest_ts;
+            let to_ts = clusters[i].earliest_ts;
+            let gap = to_ts - from_ts;
+            if gap >= DORMANCY_THRESHOLD_MS {
+                let days = (gap / (24 * 60 * 60 * 1000)).max(1);
+                long_gaps.push(LongGap { from_ts, to_ts, days });
+            }
+        }
+
+        let earliest_ts = hits.first().unwrap().ts_ms;
+        let latest_ts = hits.last().unwrap().ts_ms;
+        let span_days = ((latest_ts - earliest_ts) / (24 * 60 * 60 * 1000)).max(0);
+
+        ThreadView {
+            clusters,
+            long_gaps,
+            total_moments: hits.len(),
+            total_notes,
+            earliest_ts,
+            latest_ts,
+            span_days,
+            project_count,
+        }
+    }
+}
+
+fn cluster_hits<'a>(hits: &'a [crate::CapsuleHit]) -> Vec<Vec<&'a crate::CapsuleHit>> {
+    let mut clusters: Vec<Vec<&crate::CapsuleHit>> = Vec::new();
+    let mut current: Vec<&crate::CapsuleHit> = Vec::new();
+
+    for hit in hits {
+        if current.is_empty() {
+            current.push(hit);
+            continue;
+        }
+        let prev_ts = current.last().unwrap().ts_ms;
+        if hit.ts_ms - prev_ts <= CLUSTER_GAP_MS {
+            current.push(hit);
+        } else {
+            clusters.push(std::mem::take(&mut current));
+            current.push(hit);
+        }
+    }
+    if !current.is_empty() {
+        clusters.push(current);
+    }
+    clusters
+}
+
+fn fold_similar(hits: &[&crate::CapsuleHit]) -> Vec<DisplayNote> {
+    let mut notes: Vec<DisplayNote> = Vec::new();
+    for hit in hits {
+        let text = note_text(hit);
+        if let Some(existing) = notes.iter_mut().find(|n| similar_notes(&text, &n.decision)) {
+            existing.echoes += 1;
+        } else {
+            let cap = &hit.capsule;
+            let rationale = if cap.rationale.trim().is_empty() {
+                None
+            } else {
+                Some(truncate(
+                    &humanize_rationale(&first_sentence(cap.rationale.trim())),
+                    112,
+                ))
+            };
+            let failure_mode = match cap.failure_mode {
+                crate::types::FailureMode::None => None,
+                crate::types::FailureMode::Drift => Some("drift".into()),
+                crate::types::FailureMode::Rediscovery => Some("rediscovery".into()),
+                crate::types::FailureMode::DecisionConflict => Some("decision conflict".into()),
+                crate::types::FailureMode::RetrySpiral => Some("retry spiral".into()),
+                crate::types::FailureMode::FalseProgress => Some("false progress".into()),
+                crate::types::FailureMode::UnboundedHorizon => Some("unbounded horizon".into()),
+            };
+            let symbols: Vec<String> = cap.symbols.iter().take(4).cloned().collect();
+            notes.push(DisplayNote {
+                decision: text,
+                rationale,
+                failure_mode,
+                symbols,
+                echoes: 0,
+                ts_ms: hit.ts_ms,
+            });
+        }
+    }
+    notes
+}
+
+fn cluster_provenance(hits: &[&crate::CapsuleHit], ws: &crate::WorkspacePaths) -> String {
+    // Collect unique provenances across all notes in this cluster.
+    let mut labels: BTreeSet<String> = BTreeSet::new();
+    for hit in hits {
+        if let Some(label) = provenance_label(hit, ws) {
+            labels.insert(label);
+        }
+    }
+    if labels.len() == 1 {
+        labels.into_iter().next().unwrap()
+    } else if labels.is_empty() {
+        workspace_label_from_root(&ws.root).unwrap_or_default()
+    } else {
+        // Multiple sources within the cluster — just show workspace.
+        let ws_name = workspace_label_from_root(&ws.root).unwrap_or_default();
+        let sources: Vec<&String> = labels.iter().collect();
+        if sources.iter().all(|s| s.starts_with(&ws_name)) {
+            ws_name
+        } else {
+            labels.into_iter().collect::<Vec<_>>().join(", ")
+        }
+    }
+}
+
+// ── Trail renderer (default) ────────────────────────────────────────────────
+
+fn render_trail(
+    topic: &str,
+    narrative: Option<&str>,
+    narrative_warning: Option<&str>,
+    view: &ThreadView,
+    output: OutputFormat,
+) -> String {
+    let mut out = String::new();
+
+    render_header(&mut out, topic, view, output);
+    render_narrative_block(&mut out, narrative, narrative_warning, output);
+
+    // Trail: most recent cluster first, oldest last.
+    let cluster_count = view.clusters.len();
+    for (ci, cluster) in view.clusters.iter().rev().enumerate() {
+        let is_most_recent = ci == 0;
+        let is_origin = ci == cluster_count - 1;
+
+        // Section label
+        let date_str = fmt_day_label(cluster.earliest_ts);
+        let section_label = if is_most_recent && is_origin {
+            format!("{}", date_str)
+        } else if is_most_recent {
+            format!("Current shape · {}", date_str)
+        } else if is_origin {
+            format!("Origin · {}", date_str)
+        } else {
+            format!("Earlier · {}", date_str)
+        };
+
+        // Gap from previous (newer) cluster
+        if ci > 0 {
+            let newer_cluster = &view.clusters[cluster_count - ci];
+            let gap_ms = newer_cluster.earliest_ts - cluster.latest_ts;
+            if gap_ms >= DORMANCY_THRESHOLD_MS {
+                let label = gap_label(gap_ms);
+                if is_ansi(output) {
+                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n", label));
+                } else {
+                    out.push_str(&format!("\n        {}\n", label));
+                }
+            }
+        }
+
+        out.push('\n');
+        if is_ansi(output) {
+            out.push_str(&format!("\x1b[1;97m{}\x1b[0m", section_label));
+        } else {
+            out.push_str(&section_label);
+        }
+
+        // Provenance for the cluster — dim, on the same line or next
+        if !cluster.provenance.is_empty() {
+            if is_ansi(output) {
+                out.push_str(&format!("  \x1b[2m{}\x1b[0m", cluster.provenance));
+            } else {
+                out.push_str(&format!("  {}", cluster.provenance));
+            }
+        }
+        out.push('\n');
+
+        for (ni, note) in cluster.notes.iter().enumerate() {
+            render_note(&mut out, note, ni + 1, output);
+        }
+    }
+
+    out.push('\n');
+    out
+}
+
+// ── Timeline renderer (--timeline) ──────────────────────────────────────────
+
+fn render_timeline(
+    topic: &str,
+    narrative: Option<&str>,
+    narrative_warning: Option<&str>,
+    view: &ThreadView,
+    output: OutputFormat,
+) -> String {
+    let mut out = String::new();
+
+    render_header(&mut out, topic, view, output);
+    render_narrative_block(&mut out, narrative, narrative_warning, output);
+
+    // Timeline: most recent first (reverse chronological).
+    let cluster_count = view.clusters.len();
+    for (ci, cluster) in view.clusters.iter().rev().enumerate() {
+        // Gap from the previous (newer) cluster
+        if ci > 0 {
+            let newer_cluster = &view.clusters[cluster_count - ci];
+            let gap_ms = newer_cluster.earliest_ts - cluster.latest_ts;
+            if gap_ms >= DORMANCY_THRESHOLD_MS {
+                let label = gap_label(gap_ms);
+                if is_ansi(output) {
+                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n", label));
+                } else {
+                    out.push_str(&format!("\n        {}\n", label));
+                }
+            }
+        }
+
+        let date_str = fmt_day_label(cluster.earliest_ts);
+        out.push('\n');
+        if is_ansi(output) {
+            out.push_str(&format!("\x1b[1;97m{}\x1b[0m", date_str));
+            if !cluster.provenance.is_empty() {
+                out.push_str(&format!("  \x1b[2m{}\x1b[0m", cluster.provenance));
+            }
+        } else {
+            out.push_str(&date_str);
+            if !cluster.provenance.is_empty() {
+                out.push_str(&format!("  {}", cluster.provenance));
+            }
+        }
+        out.push('\n');
+
+        for (ni, note) in cluster.notes.iter().rev().enumerate() {
+            render_note(&mut out, note, ni + 1, output);
+        }
+    }
+
+    out.push('\n');
+    out
+}
+
+// ── Shared rendering helpers ────────────────────────────────────────────────
+
+fn render_header(out: &mut String, topic: &str, view: &ThreadView, output: OutputFormat) {
+    let topic = topic.trim();
+    if is_ansi(output) {
+        out.push_str(&format!("\x1b[1m{}\x1b[0m\n", topic));
+    } else {
+        out.push_str(topic);
+        out.push('\n');
+    }
+
+    let project_label = if view.project_count > 1 {
+        format!(" across {} projects", view.project_count)
+    } else {
+        String::new()
+    };
+
+    let earliest = fmt_range_date(view.earliest_ts);
+    let latest = fmt_range_date(view.latest_ts);
+
+    let meta = format!(
+        "{} moment{} · {} note{}{} · {} back to {}{}",
+        view.total_moments,
+        if view.total_moments == 1 { "" } else { "s" },
+        view.total_notes,
+        if view.total_notes == 1 { "" } else { "s" },
+        project_label,
+        latest,
+        earliest,
+        span_suffix(view.span_days),
+    );
+
+    if is_ansi(output) {
+        out.push_str(&format!("\x1b[2m{}\x1b[0m\n", meta));
+    } else {
+        out.push_str(&meta);
+        out.push('\n');
+    }
+}
+
+fn render_narrative_block(
+    out: &mut String,
+    narrative: Option<&str>,
+    warning: Option<&str>,
+    output: OutputFormat,
+) {
+    if let Some(n) = narrative {
+        out.push('\n');
+        let rendered = crate::narrative::render_narrative(output, n);
+        for line in rendered.lines() {
+            out.push_str(line);
+            out.push('\n');
+        }
+    } else if let Some(w) = warning {
+        out.push('\n');
+        if is_ansi(output) {
+            push_wrapped_ansi(out, "\x1b[2m", "\x1b[0m", "\x1b[2m", "\x1b[0m", w, WRAP_WIDTH);
+        } else {
+            push_wrapped_plain(out, "", "", w, WRAP_WIDTH);
+        }
+        out.push('\n');
+    }
+}
+
+fn render_note(out: &mut String, note: &DisplayNote, index: usize, output: OutputFormat) {
+    // Decision — the primary signal
+    if is_ansi(output) {
+        push_wrapped_ansi(
+            out,
+            &format!("\n  \x1b[2m{:>2}\x1b[0m  ", index),
+            "",
+            "      ",
+            "",
+            &note.decision,
+            WRAP_WIDTH - 6,
+        );
+    } else {
+        push_wrapped_plain(
+            out,
+            &format!("\n  {:>2}  ", index),
+            "      ",
+            &note.decision,
+            WRAP_WIDTH - 6,
+        );
+    }
+
+    // Rationale — dim
+    if let Some(ref rationale) = note.rationale {
+        if is_ansi(output) {
+            push_wrapped_ansi(
+                out,
+                "\n      \x1b[2m",
+                "\x1b[0m",
+                "      \x1b[2m",
+                "\x1b[0m",
+                rationale,
+                WRAP_WIDTH - 6,
+            );
+        } else {
+            push_wrapped_plain(out, "\n      ", "      ", rationale, WRAP_WIDTH - 6);
+        }
+    }
+
+    // Failure mode
+    if let Some(ref fm) = note.failure_mode {
+        if is_ansi(output) {
+            out.push_str(&format!("\n      \x1b[33m▲ {}\x1b[0m", fm));
+        } else {
+            out.push_str(&format!("\n      ▲ {}", fm));
+        }
+    }
+
+    // Symbols
+    if !note.symbols.is_empty() {
+        let sym_str = note.symbols.join("  ");
+        if is_ansi(output) {
+            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", sym_str));
+        } else {
+            out.push_str(&format!("\n      {}", sym_str));
+        }
+    }
+
+    // Echoes
+    if note.echoes > 0 {
+        let line = if note.echoes == 1 {
+            "same idea appears once more"
+        } else {
+            &format!("same idea appears {} more times", note.echoes)
+        };
+        if is_ansi(output) {
+            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", line));
+        } else {
+            out.push_str(&format!("\n      {}", line));
+        }
+    }
+
+    out.push('\n');
 }
 
 fn is_ansi(output: OutputFormat) -> bool {
     output == OutputFormat::Ansi && std::env::var_os("NO_COLOR").is_none()
 }
 
-fn render_thread_map(
-    topic: &str,
-    narrative: Option<&str>,
-    narrative_warning: Option<&str>,
-    hits: &[crate::CapsuleHit],
-    output: OutputFormat,
-    _current_ws: &crate::WorkspacePaths,
-) -> String {
-    let mut out = String::new();
+// ── ThreadView to LLM context ───────────────────────────────────────────────
 
-    let project_ids: BTreeSet<&str> = hits
-        .iter()
-        .filter_map(|h| h.origin_workspace_id.as_deref())
-        .collect();
-    let project_count = if project_ids.is_empty() { 1 } else { project_ids.len() };
-    let project_label = if project_count > 1 {
-        format!(" across {} projects", project_count)
-    } else {
-        String::new()
-    };
+impl ThreadView {
+    /// Build the structured context string for the LLM, giving it pre-analyzed
+    /// clusters, gaps, and motifs instead of raw hit rows.
+    pub fn to_llm_context(&self) -> String {
+        let mut ctx = String::new();
 
-    let days = group_into_days(hits);
-    let display_note_count: usize = days
-        .iter()
-        .map(|day| display_notes_for_day(day).len())
-        .sum();
-    let earliest = fmt_range_date(hits.first().unwrap().ts_ms);
-    let latest = fmt_range_date(hits.last().unwrap().ts_ms);
-    let span_days = ((hits.last().unwrap().ts_ms - hits.first().unwrap().ts_ms)
-        / (24 * 60 * 60 * 1000))
-        .max(0);
-
-    render_title(&mut out, topic, output);
-
-    if is_ansi(output) {
-        out.push_str(&format!(
-            "\x1b[2m{} moment{} · {} note{}{} · {} back to {}{}\x1b[0m\n\n",
-            hits.len(),
-            if hits.len() == 1 { "" } else { "s" },
-            display_note_count,
-            if display_note_count == 1 { "" } else { "s" },
-            project_label,
-            latest,
-            earliest,
-            span_suffix(span_days),
+        ctx.push_str(&format!(
+            "Thread: {} moments, {} notes, {} clusters, spanning {} days\n\n",
+            self.total_moments,
+            self.total_notes,
+            self.clusters.len(),
+            self.span_days,
         ));
-    } else {
-        out.push_str(&format!(
-            "{} moment{} · {} note{}{} · {} back to {}{}\n\n",
-            hits.len(),
-            if hits.len() == 1 { "" } else { "s" },
-            display_note_count,
-            if display_note_count == 1 { "" } else { "s" },
-            project_label,
-            latest,
-            earliest,
-            span_suffix(span_days),
-        ));
-    }
 
-    if let Some(n) = narrative {
-        let rendered = crate::narrative::render_narrative(output, n);
-        for line in rendered.lines() {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push('\n');
-    } else if let Some(warning) = narrative_warning {
-        if is_ansi(output) {
-            push_wrapped_ansi(
-                &mut out,
-                "\x1b[2m",
-                "\x1b[0m",
-                "\x1b[2m",
-                "\x1b[0m",
-                warning,
-                WRAP_WIDTH,
-            );
-        } else {
-            push_wrapped_plain(&mut out, "", "", warning, WRAP_WIDTH);
-        }
-        out.push_str("\n\n");
-    }
-
-    let mut global_idx = 0usize;
-    let display_days: Vec<Vec<&crate::CapsuleHit>> = days
-        .iter()
-        .rev()
-        .map(|day| day.iter().rev().copied().collect())
-        .collect();
-
-    for (di, day) in display_days.iter().enumerate() {
-        if di > 0 {
-            let newer_day_oldest = display_days[di - 1].last().unwrap().ts_ms;
-            let older_day_newest = day.first().unwrap().ts_ms;
-            let gap = newer_day_oldest - older_day_newest;
-            if gap >= DORMANCY_THRESHOLD_MS {
-                let label = gap_label(gap);
-                if is_ansi(output) {
-                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n\n", label));
+        for (ci, cluster) in self.clusters.iter().enumerate() {
+            let date = fmt_range_date(cluster.earliest_ts);
+            let gap_ctx = if ci > 0 {
+                let prev = &self.clusters[ci - 1];
+                let gap_days =
+                    (cluster.earliest_ts - prev.latest_ts) / (24 * 60 * 60 * 1000);
+                if gap_days >= 90 {
+                    format!(" (returned after {} months)", (gap_days / 30).max(3))
+                } else if gap_days >= 30 {
+                    format!(" (returned after {} weeks)", (gap_days / 7).max(4))
+                } else if gap_days >= 7 {
+                    format!(" (gap: {} days)", gap_days)
                 } else {
-                    out.push_str(&format!("\n        {}\n\n", label));
+                    String::new()
                 }
             } else {
-                out.push('\n');
-            }
-        }
-
-        let first_hit = day.first().unwrap();
-        let date_str = fmt_day_label(first_hit.ts_ms);
-
-        let ws_labels: BTreeSet<String> = day
-            .iter()
-            .filter_map(|h| h.origin_workspace_id.as_deref())
-            .filter_map(|id| crate::workspace::workspace_label_by_id(id))
-            .collect();
-        let ws_tag = if project_count > 1 && ws_labels.len() == 1 {
-            let label = ws_labels.iter().next().unwrap();
-            if !label.is_empty() {
-                Some(label.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if is_ansi(output) {
-            let tag_part = match &ws_tag {
-                Some(t) => format!("  \x1b[2;36m{}\x1b[0m", t),
-                None => String::new(),
+                String::new()
             };
-            out.push_str(&format!(
-                "\x1b[1;97m{}\x1b[0m{}\n",
-                date_str,
-                tag_part,
+
+            ctx.push_str(&format!(
+                "Cluster {} · {}{} · {}\n",
+                ci + 1,
+                date,
+                gap_ctx,
+                cluster.provenance,
             ));
-        } else {
-            let tag_part = match &ws_tag {
-                Some(t) => format!("  {}", t),
-                None => String::new(),
-            };
-            out.push_str(&format!("{}{}\n", date_str, tag_part));
+            for note in &cluster.notes {
+                ctx.push_str(&format!("  decision: {}\n", note.decision));
+                if let Some(ref r) = note.rationale {
+                    ctx.push_str(&format!("  rationale: {}\n", r));
+                }
+                if let Some(ref fm) = note.failure_mode {
+                    ctx.push_str(&format!("  failure_mode: {}\n", fm));
+                }
+                if !note.symbols.is_empty() {
+                    ctx.push_str(&format!("  symbols: {}\n", note.symbols.join(", ")));
+                }
+                if note.echoes > 0 {
+                    ctx.push_str(&format!("  echoes: {} similar notes folded\n", note.echoes));
+                }
+            }
+            ctx.push('\n');
         }
 
-        for note in display_notes_for_day(day) {
-            global_idx += 1;
-            let entry = render_capsule_entry(note.hit, note.echoes, global_idx, output);
-            out.push_str(&entry);
-            out.push('\n');
+        if !self.long_gaps.is_empty() {
+            ctx.push_str("Long gaps:\n");
+            for g in &self.long_gaps {
+                ctx.push_str(&format!(
+                    "  {} → {} ({} days)\n",
+                    fmt_range_date(g.from_ts),
+                    fmt_range_date(g.to_ts),
+                    g.days,
+                ));
+            }
+            ctx.push('\n');
         }
+
+        ctx
     }
-
-    out
 }
 
-fn render_title(out: &mut String, topic: &str, output: OutputFormat) {
-    let topic = topic.trim();
-    if is_ansi(output) {
-        out.push_str("\x1b[1m");
-        out.push_str(topic);
-        out.push_str("\x1b[0m\n");
-    } else {
-        out.push_str(topic);
-        out.push('\n');
+// ── Text helpers ────────────────────────────────────────────────────────────
+
+fn provenance_label(hit: &crate::CapsuleHit, ws: &crate::WorkspacePaths) -> Option<String> {
+    let workspace = hit
+        .origin_workspace_id
+        .as_deref()
+        .and_then(crate::workspace::workspace_label_by_id)
+        .or_else(|| workspace_label_from_root(&ws.root))?;
+
+    let source = hit
+        .meta
+        .source_pointer
+        .as_deref()
+        .and_then(crate::workspace::resolve_source_label)
+        .or_else(|| fallback_source_label(hit));
+
+    match source {
+        Some(source) if !source.trim().is_empty() => Some(format!("{workspace} · {source}")),
+        _ => Some(workspace),
     }
+}
+
+fn workspace_label_from_root(root: &std::path::Path) -> Option<String> {
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn fallback_source_label(hit: &crate::CapsuleHit) -> Option<String> {
+    let source = hit.meta.source.trim();
+    let path = hit.meta.request_path.trim();
+    if source.is_empty() {
+        return None;
+    }
+    match (source, path.is_empty()) {
+        ("changelog", false) => Some(format!("CHANGELOG {path}")),
+        ("git", false) => Some(format!("git {path}")),
+        (_, true) => Some(source.to_string()),
+        _ => Some(format!("{source} · {path}")),
+    }
+}
+
+fn note_text(hit: &crate::CapsuleHit) -> String {
+    let decision = hit.capsule.decision.trim();
+    let text = if decision.is_empty() {
+        truncate(hit.capsule.intent.trim(), 160)
+    } else {
+        decision.to_string()
+    };
+    humanize_note_text(&text)
 }
 
 fn span_suffix(days: i64) -> String {
@@ -313,165 +731,7 @@ fn gap_label(gap_ms: i64) -> String {
     }
 }
 
-fn group_into_days<'a>(hits: &'a [crate::CapsuleHit]) -> Vec<Vec<&'a crate::CapsuleHit>> {
-    let mut days: Vec<Vec<&crate::CapsuleHit>> = Vec::new();
-    let mut current: Vec<&crate::CapsuleHit> = Vec::new();
-    let mut current_day = String::new();
-
-    for hit in hits {
-        let day = fmt_day_key(hit.ts_ms);
-        if current.is_empty() {
-            current_day = day;
-            current.push(hit);
-            continue;
-        }
-        if day == current_day {
-            current.push(hit);
-        } else {
-            days.push(std::mem::take(&mut current));
-            current_day = day;
-            current.push(hit);
-        }
-    }
-    if !current.is_empty() {
-        days.push(current);
-    }
-    days
-}
-
-struct DisplayNote<'a> {
-    hit: &'a crate::CapsuleHit,
-    echoes: usize,
-}
-
-fn display_notes_for_day<'a>(hits: &[&'a crate::CapsuleHit]) -> Vec<DisplayNote<'a>> {
-    let mut notes: Vec<DisplayNote<'a>> = Vec::new();
-    for hit in hits {
-        let decision = note_text(hit);
-        if let Some(existing) = notes
-            .iter_mut()
-            .find(|note| similar_notes(&decision, &note_text(note.hit)))
-        {
-            existing.echoes += 1;
-        } else {
-            notes.push(DisplayNote { hit, echoes: 0 });
-        }
-    }
-    notes
-}
-
-fn render_capsule_entry(
-    hit: &crate::CapsuleHit,
-    echoes: usize,
-    index: usize,
-    output: OutputFormat,
-) -> String {
-    let cap = &hit.capsule;
-    let mut out = String::new();
-
-    let decision_display = note_text(hit);
-
-    if is_ansi(output) {
-        push_wrapped_ansi(
-            &mut out,
-            &format!("\n  \x1b[2m{:>2}\x1b[0m  \x1b[1m", index),
-            "\x1b[0m",
-            "      \x1b[1m",
-            "\x1b[0m",
-            &decision_display,
-            WRAP_WIDTH - 6,
-        );
-    } else {
-        push_wrapped_plain(
-            &mut out,
-            &format!("\n  {:>2}  ", index),
-            "      ",
-            &decision_display,
-            WRAP_WIDTH - 6,
-        );
-    }
-
-    if !cap.rationale.trim().is_empty() {
-        let rationale = truncate(&humanize_rationale(&first_sentence(cap.rationale.trim())), 112);
-        if is_ansi(output) {
-            push_wrapped_ansi(
-                &mut out,
-                "\n      \x1b[2m",
-                "\x1b[0m",
-                "      \x1b[2m",
-                "\x1b[0m",
-                &rationale,
-                WRAP_WIDTH - 6,
-            );
-        } else {
-            push_wrapped_plain(&mut out, "\n      ", "      ", &rationale, WRAP_WIDTH - 6);
-        }
-    }
-
-    if cap.failure_mode != crate::types::FailureMode::None {
-        let fm = match cap.failure_mode {
-            crate::types::FailureMode::None => "",
-            crate::types::FailureMode::Drift => "drift",
-            crate::types::FailureMode::Rediscovery => "rediscovery",
-            crate::types::FailureMode::DecisionConflict => "decision conflict",
-            crate::types::FailureMode::RetrySpiral => "retry spiral",
-            crate::types::FailureMode::FalseProgress => "false progress",
-            crate::types::FailureMode::UnboundedHorizon => "unbounded horizon",
-        };
-        if !fm.is_empty() {
-            if is_ansi(output) {
-                out.push_str(&format!("\n      \x1b[33m▲ {}\x1b[0m", fm));
-            } else {
-                out.push_str(&format!("\n      ▲ {}", fm));
-            }
-        }
-    }
-
-    if !cap.symbols.is_empty() {
-        let syms: Vec<&str> = cap.symbols.iter().map(|s| s.as_str()).take(4).collect();
-        let sym_str = syms.join("  ");
-        if is_ansi(output) {
-            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", sym_str));
-        } else {
-            out.push_str(&format!("\n      {}", sym_str));
-        }
-    }
-
-    if echoes > 0 {
-        let line = if echoes == 1 {
-            "same idea appears once more".to_string()
-        } else {
-            format!("same idea appears {} more times", echoes)
-        };
-        if is_ansi(output) {
-            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", line));
-        } else {
-            out.push_str(&format!("\n      {}", line));
-        }
-    }
-
-    out
-}
-
-fn note_text(hit: &crate::CapsuleHit) -> String {
-    let decision = hit.capsule.decision.trim();
-    let text = if decision.is_empty() {
-        truncate(hit.capsule.intent.trim(), 160)
-    } else {
-        decision.to_string()
-    };
-    humanize_note_text(&text)
-}
-
 fn fmt_range_date(ts_ms: i64) -> String {
-    chrono::Utc
-        .timestamp_millis_opt(ts_ms)
-        .single()
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| ts_ms.to_string())
-}
-
-fn fmt_day_key(ts_ms: i64) -> String {
     chrono::Utc
         .timestamp_millis_opt(ts_ms)
         .single()
@@ -487,7 +747,15 @@ fn fmt_day_label(ts_ms: i64) -> String {
         .unwrap_or_else(|| ts_ms.to_string())
 }
 
-fn push_wrapped_plain(out: &mut String, first_prefix: &str, cont_prefix: &str, text: &str, width: usize) {
+// ── Word wrapping ───────────────────────────────────────────────────────────
+
+fn push_wrapped_plain(
+    out: &mut String,
+    first_prefix: &str,
+    cont_prefix: &str,
+    text: &str,
+    width: usize,
+) {
     let lines = wrap_words(text, width);
     for (i, line) in lines.iter().enumerate() {
         if i == 0 {
@@ -555,6 +823,8 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+// ── Similarity ──────────────────────────────────────────────────────────────
+
 fn similar_notes(a: &str, b: &str) -> bool {
     let a_tokens = note_tokens(a);
     let b_tokens = note_tokens(b);
@@ -573,19 +843,22 @@ fn note_tokens(s: &str) -> BTreeSet<String> {
         .collect()
 }
 
+// ── Text normalization ──────────────────────────────────────────────────────
+
 fn truncate(s: &str, max: usize) -> String {
-    // Truncate on a char boundary to avoid splitting multi-byte chars
     if s.chars().count() <= max {
         s.to_string()
     } else {
-        let end = s.char_indices().nth(max.saturating_sub(1)).map(|(i, _)| i).unwrap_or(s.len());
+        let end = s
+            .char_indices()
+            .nth(max.saturating_sub(1))
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
         format!("{}…", &s[..end])
     }
 }
 
 fn first_sentence(s: &str) -> String {
-    // Find the first sentence-ending period that isn't inside an abbreviation.
-    // Simple heuristic: period followed by space or end-of-string.
     let bytes = s.as_bytes();
     for i in 0..bytes.len() {
         if bytes[i] == b'.' {
