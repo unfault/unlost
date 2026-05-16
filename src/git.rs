@@ -213,12 +213,17 @@ pub async fn ingest_git_commits(
     for commit in &new_commits {
         let capsule = commit_to_capsule(commit);
 
+        let source_pointer = repo_root
+            .to_str()
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("git+commit://{p}#{}", commit.hash));
         let meta = crate::ResponseMeta {
             source: "git".to_string(),
             upstream_host: "git".to_string(),
             request_path: commit.hash[..7.min(commit.hash.len())].to_string(),
             http_status: 0,
             agent_session_id: None,
+            source_pointer,
             usage: None,
         };
 
@@ -466,6 +471,10 @@ pub async fn ingest_git_tags(
     for tag in &new_tags {
         let capsule = tag_to_capsule(tag);
 
+        let source_pointer = repo_root
+            .to_str()
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("git+tag://{p}#{}", tag.name));
         let meta = crate::ResponseMeta {
             source: "git".to_string(),
             upstream_host: "git".to_string(),
@@ -473,6 +482,7 @@ pub async fn ingest_git_tags(
             request_path: format!("tag:{}", tag.name),
             http_status: 0,
             agent_session_id: None,
+            source_pointer,
             usage: None,
         };
 

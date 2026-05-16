@@ -207,6 +207,25 @@ fn turn_key(turn: &ParsedTurn) -> Option<String> {
     Some(format!("{u}:{a}"))
 }
 
+/// Build a `claude+jsonl://` URI for a parsed transcript turn.
+/// Returns None when we have neither a usable path nor a user UUID.
+/// See `internal/SOURCE_POINTERS.md` for the scheme registry.
+fn build_claude_source_pointer(transcript_path: &Path, turn: &ParsedTurn) -> Option<String> {
+    let path_str = transcript_path.to_str()?;
+    if path_str.is_empty() {
+        return None;
+    }
+    let uuid = turn
+        .user_uuid
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match uuid {
+        Some(u) => Some(format!("claude+jsonl://{path_str}#turn={u}")),
+        None => Some(format!("claude+jsonl://{path_str}")),
+    }
+}
+
 fn truncate_for_recording(mut s: String, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s;
@@ -739,7 +758,7 @@ async fn handle_user_prompt_submit(flow: &mut Flow, input: &HookInput) -> anyhow
         agent_session_id: Some(input.session_id.clone()),
     };
 
-    let result = flow.check_friction(event).await;
+    let result = flow.check_turn(event).await;
 
     // Output hook response
     let output = if let Some(note) = result.note {
@@ -846,6 +865,7 @@ async fn handle_stop(
             seen.insert(k.clone());
             new_keys.push(k);
         }
+        let source_pointer = build_claude_source_pointer(&transcript_path, &turn);
         let event = RecordTurnEvent {
             directory: input.cwd.clone(),
             user_text: turn.user_text,
@@ -857,6 +877,7 @@ async fn handle_stop(
             usage: turn.usage,
             grounding_note: None,
             source_ts_ms: None,
+            source_pointer,
         };
 
         let result = flow.record_turn(event).await;
@@ -1367,6 +1388,7 @@ pub async fn replay(
                     (None, None) => None,
                 };
 
+                let source_pointer = build_claude_source_pointer(&file_path, &turn);
                 let event = RecordTurnEvent {
                     directory: path.clone(),
                     user_text: turn.user_text,
@@ -1382,6 +1404,7 @@ pub async fn replay(
                     } else {
                         None
                     },
+                    source_pointer,
                 };
                 let result = flow.record_turn(event).await;
                 if result.error.is_none() {

@@ -1,7 +1,7 @@
 //! GitHub Copilot CLI hooks shim.
 //!
 //! Invoked by Copilot CLI hooks (sessionStart, userPromptSubmitted, sessionEnd)
-//! via stdin JSON. Dispatches to Flow.check_friction() or events.jsonl ingestion.
+//! via stdin JSON. Dispatches to Flow::check_turn() or events.jsonl ingestion.
 //!
 //! # Hook payload format (actual, from observation)
 //!
@@ -143,6 +143,9 @@ struct ParsedTurn {
     assistant_text: String,
     touched_paths: Vec<String>,
     timestamp_ms: i64,
+    /// Byte offset where this turn's `user.message` event begins in `events.jsonl`.
+    /// Used to build the `copilot+events://...#offset=N` source pointer.
+    byte_offset: u64,
 }
 
 fn parse_iso8601_ms(s: &str) -> Option<i64> {
@@ -285,6 +288,7 @@ fn parse_events_from_cursor(
     let mut current_assistant_chunks: Vec<String> = Vec::new();
     let mut current_touched: HashSet<String> = HashSet::new();
     let mut current_timestamp_ms: i64 = 0;
+    let mut current_user_offset: u64 = 0;
 
     let mut last_event_id: Option<String> = cursor.last_event_id.clone();
     let mut new_offset = start_offset;
@@ -292,6 +296,10 @@ fn parse_events_from_cursor(
 
     for line in reader.lines() {
         let line = line?;
+        // `line_start_offset` is the byte offset of the start of this event's line
+        // in the file (before we advance `new_offset` past it). Used to anchor a
+        // source pointer at the user.message event that opens a turn.
+        let line_start_offset = new_offset;
         new_offset += line.len() as u64 + 1; // +1 for newline
 
         if line.trim().is_empty() {
@@ -346,6 +354,7 @@ fn parse_events_from_cursor(
                         assistant_text,
                         touched_paths: current_touched.drain().collect(),
                         timestamp_ms: current_timestamp_ms,
+                        byte_offset: current_user_offset,
                     });
                 }
                 current_assistant_chunks.clear();
@@ -355,6 +364,7 @@ fn parse_events_from_cursor(
                     let text = content.trim().to_string();
                     if !text.is_empty() {
                         current_user_text = Some(text);
+                        current_user_offset = line_start_offset;
                     }
                 }
             }
@@ -388,6 +398,7 @@ fn parse_events_from_cursor(
             assistant_text,
             touched_paths: current_touched.drain().collect(),
             timestamp_ms: current_timestamp_ms,
+            byte_offset: current_user_offset,
         });
     }
 
@@ -451,7 +462,7 @@ async fn handle_session_start(flow: &mut Flow, input: &HookInput) -> anyhow::Res
                 agent_kind: AgentKind::Copilot,
                 agent_session_id: Some(input.session_id.clone()),
             };
-            flow.check_friction(event).await;
+            flow.check_turn(event).await;
         }
     }
 
@@ -477,7 +488,7 @@ async fn handle_user_prompt_submitted(flow: &mut Flow, input: &HookInput, prompt
 
     // Note: userPromptSubmitted hook output is currently ignored by Copilot CLI.
     // We run the check for metrics/logging only.
-    flow.check_friction(event).await;
+    flow.check_turn(event).await;
 
     Ok(())
 }
@@ -536,6 +547,10 @@ async fn handle_session_end(
         all_touched.extend(turn.touched_paths.iter().cloned());
         all_assistant_texts.push(turn.assistant_text.clone());
 
+        let source_pointer = events_path
+            .to_str()
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("copilot+events://{p}#offset={}", turn.byte_offset));
         let event = RecordTurnEvent {
             directory: input.cwd.clone(),
             user_text: turn.user_text,
@@ -551,6 +566,7 @@ async fn handle_session_end(
             } else {
                 None
             },
+            source_pointer,
         };
 
         let result = flow.record_turn(event).await;

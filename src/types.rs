@@ -44,6 +44,9 @@ pub struct ResponseMeta {
     pub http_status: u16,
     /// Agent session ID (e.g., OpenCode session) for grouping conversations
     pub agent_session_id: Option<String>,
+    /// Optional pointer back to the source system of record for this turn.
+    /// Stored as an opaque URI; unlost only renders it, the agent fetches it.
+    pub source_pointer: Option<String>,
     /// Best-effort usage metrics (tokens/cost). Not always present.
     pub usage: Option<UsageMeta>,
 }
@@ -112,6 +115,11 @@ pub struct SymptomChannels {
     pub logic_churn: f32,
     /// Measure of assistant verbosity vs user input (fluency/blind acceptance signal).
     pub fluency: f32,
+    /// Measure of how strongly the current user text matches a dormant capsule
+    /// (semantically similar, not in the recent-N window, not surfaced lately).
+    /// Drives the resurfacing basin. See `internal/SOURCE_POINTERS.md` §Recurrence.
+    #[serde(default)]
+    pub recurrence_signal: f32,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -304,6 +312,11 @@ pub struct CapsuleHit {
     pub commit_sha: Option<String>,
     /// Turn-level evaluation metadata (coach + tune dimensions).
     pub turn_eval: Option<TurnEval>,
+    /// Workspace this capsule was retrieved from. Set by cross-workspace
+    /// retrieval; left as `None` by single-workspace queries (caller knows the
+    /// workspace already). Used by the recurrence channel to render
+    /// "you discussed this in <project> before".
+    pub origin_workspace_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -475,6 +488,7 @@ mod tests {
             request_path: "/api/test".to_string(),
             http_status: 200,
             agent_session_id: None,
+            source_pointer: None,
             usage: None,
         };
 
@@ -507,6 +521,7 @@ mod tests {
             request_path: "/test".to_string(),
             http_status: 200,
             agent_session_id: Some("test_session".to_string()),
+            source_pointer: None,
             usage: None,
         };
 
@@ -523,6 +538,7 @@ mod tests {
             head_sha: None,
             commit_sha: None,
             turn_eval: None,
+            origin_workspace_id: None,
         };
 
         assert_eq!(hit.id, "test_id");

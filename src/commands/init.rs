@@ -468,6 +468,7 @@ pub async fn run(
             request_path: "init".to_string(),
             http_status: 0,
             agent_session_id: None,
+            source_pointer: None,
             usage: None,
         },
     ));
@@ -519,6 +520,7 @@ pub async fn run(
                     request_path: file_path,
                     http_status: 0,
                     agent_session_id: None,
+                    source_pointer: None,
                     usage: None,
                 },
             ));
@@ -605,6 +607,7 @@ pub async fn run(
                     request_path: "init".to_string(),
                     http_status: 0,
                     agent_session_id: None,
+                    source_pointer: None,
                     usage: None,
                 },
             ));
@@ -635,6 +638,7 @@ pub async fn run(
                         request_path: "init".to_string(),
                         http_status: 0,
                         agent_session_id: None,
+                        source_pointer: None,
                         usage: None,
                     },
                 ));

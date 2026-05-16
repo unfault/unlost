@@ -259,12 +259,17 @@ pub async fn ingest_changelog(
     for entry in &new_entries {
         let capsule = entry_to_capsule(entry);
 
+        let source_pointer = changelog_path
+            .to_str()
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("changelog+version://{p}#{}", entry.version));
         let meta = crate::ResponseMeta {
             source: "changelog".to_string(),
             upstream_host: "changelog".to_string(),
             request_path: entry.version.clone(),
             http_status: 0,
             agent_session_id: None,
+            source_pointer,
             usage: None,
         };
 

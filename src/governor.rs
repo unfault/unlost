@@ -26,6 +26,14 @@ const THRESHOLD_WATCH: f32 = 0.5;
 const THRESHOLD_INTERVENE: f32 = 0.8;
 const THRESHOLD_STABLE_OFF: f32 = 0.4;
 
+/// Resurfacing gate (see `internal/SOURCE_POINTERS.md` §Recurrence Channel).
+/// `1.0 - distance >= REC_SIM_THRESHOLD` to qualify.
+const REC_SIM_THRESHOLD: f32 = 0.78;
+/// Standalone (no-other-basin) resurfacing fires only when `recurrence_signal`
+/// crosses this bar. Identical to the candidate gate today; broken out for
+/// future tuning without touching the gate.
+const REC_FIRE_THRESHOLD: f32 = REC_SIM_THRESHOLD;
+
 const EMA_ALPHA: f32 = 0.3;
 const COFFEE_PAUSE_MS: i64 = 30 * 60 * 1000;
 const PERSISTENCE_WINDOW: usize = 3;
@@ -62,6 +70,35 @@ pub struct TrajectoryController {
     /// recent `update()` call. Read by `record_turn` so the background worker can persist
     /// them into the capsule without re-deriving EMA state.
     pub last_channels: Option<(SymptomChannels, f32, TrajectoryState)>,
+    /// Resurfacing channel: the capsule that this turn matched (if any), kept so the
+    /// intervention selector can build a SYSTEM NOTE without a second query.
+    pub recurrence_match: Option<RecurrenceMatch>,
+    /// In-memory cooldown map keyed by capsule id (loaded lazily from
+    /// `resurfaced.jsonl`). `None` means "not yet loaded for this workspace".
+    pub resurfaced_cache: Option<std::collections::HashMap<String, i64>>,
+    /// Session id of the last standalone resurfacing intervention, to enforce
+    /// "one standalone resurfacing per agent session".
+    pub last_resurfacing_session_id: Option<String>,
+}
+
+/// A dormant capsule that the current movement matched, scored, and is a candidate
+/// for resurfacing.
+#[derive(Debug, Clone)]
+pub struct RecurrenceMatch {
+    pub capsule_id: String,
+    pub ts_ms: i64,
+    /// Similarity in [0, 1]. We derive this from LanceDB distance via `1 - dist`.
+    pub similarity: f32,
+    /// Composite recurrence score (similarity × structural_weight).
+    pub score: f32,
+    pub decision: String,
+    pub rationale: String,
+    pub source_pointer: Option<String>,
+    /// Workspace where this capsule lives. `None` for matches inside the
+    /// current workspace (the local case — caller already knows). `Some(id)`
+    /// when the match came from a peer workspace via cross-workspace
+    /// retrieval; rendered as a label in the SYSTEM NOTE.
+    pub origin_workspace_id: Option<String>,
 }
 
 const CORRECTION_PATTERNS: &[&str] = &[
@@ -138,6 +175,9 @@ pub struct TrajectoryUpdate {
     pub cause: String,
     pub channels: SymptomChannels,
     pub watch_start_ts: Option<i64>,
+    /// When set, the recurrence channel matched this dormant capsule. Carried
+    /// outward so `record_resurfacing_emitted` can log the surfacing.
+    pub recurrence_match: Option<RecurrenceMatch>,
 }
 
 impl TrajectoryController {
@@ -147,6 +187,31 @@ impl TrajectoryController {
         current: &IntentCapsule,
         current_emotion: Option<&crate::emotion::EmotionMeta>,
         history: &[CapsuleHit],
+        ts_ms: i64,
+    ) -> TrajectoryUpdate {
+        self.update_with_candidates(
+            workspace_id,
+            current,
+            current_emotion,
+            history,
+            &[],
+            None,
+            ts_ms,
+        )
+    }
+
+    /// Like [`update`], but also considers a set of *dormant* candidates retrieved
+    /// via ANN to drive the recurrence channel. `current_session_id` lets the
+    /// controller enforce one-standalone-resurfacing-per-session. See
+    /// `internal/SOURCE_POINTERS.md` §Recurrence Channel.
+    pub fn update_with_candidates(
+        &mut self,
+        workspace_id: &str,
+        current: &IntentCapsule,
+        current_emotion: Option<&crate::emotion::EmotionMeta>,
+        history: &[CapsuleHit],
+        dormant_candidates: &[CapsuleHit],
+        current_session_id: Option<&str>,
         ts_ms: i64,
     ) -> TrajectoryUpdate {
         let mut reset_note = None;
@@ -264,6 +329,85 @@ impl TrajectoryController {
             EMA_ALPHA * s_churn + (1.0 - EMA_ALPHA) * self.smoothed_channels.logic_churn;
         self.smoothed_channels.fluency =
             EMA_ALPHA * s_fluency + (1.0 - EMA_ALPHA) * self.smoothed_channels.fluency;
+
+        // ── Recurrence channel ───────────────────────────────────────────────────
+        // Score dormant ANN candidates: similarity = 1 - distance (BGE cosine in
+        // LanceDB). Weight by structural value (decision + rationale present).
+        // Filter out capsules that are still cooling per `resurfaced.jsonl`.
+        let recent_ids: std::collections::HashSet<&str> =
+            history.iter().map(|h| h.id.as_str()).collect();
+        if self.resurfaced_cache.is_none() {
+            self.resurfaced_cache = Some(crate::resurfaced::load(workspace_id));
+        }
+        let cooldown_map = self.resurfaced_cache.as_ref().expect("just initialised");
+        let mut best: Option<RecurrenceMatch> = None;
+        for cand in dormant_candidates {
+            if recent_ids.contains(cand.id.as_str()) {
+                continue;
+            }
+            // Skip non-conversational sources — git/changelog rows are facts, not
+            // unfinished threads. See doc §Recurrence Channel filters.
+            let src = cand.meta.source.as_str();
+            if matches!(src, "git" | "changelog" | "init") {
+                continue;
+            }
+            let category = cand.capsule.category.as_str();
+            if matches!(category, "GitCommit" | "GitTag" | "Version" | "Replay" | "replay") {
+                continue;
+            }
+            if crate::resurfaced::is_cooling(cooldown_map, &cand.id, ts_ms) {
+                continue;
+            }
+            let similarity = (1.0_f32 - cand.distance).clamp(0.0, 1.0);
+            if similarity < REC_SIM_THRESHOLD {
+                continue;
+            }
+            let has_decision = !cand.capsule.decision.trim().is_empty();
+            let has_rationale = !cand.capsule.rationale.trim().is_empty();
+            let structural_weight = if has_decision && has_rationale {
+                1.0_f32
+            } else {
+                0.5_f32
+            };
+            let score = similarity * structural_weight;
+            // Tag the match with its origin workspace only when it came from a
+            // *different* workspace than the one we're currently scoring against.
+            // Same-workspace matches leave this field as None so the SYSTEM NOTE
+            // doesn't render a redundant "in <current project>" suffix.
+            let origin_ws = cand
+                .origin_workspace_id
+                .as_deref()
+                .filter(|id| *id != workspace_id)
+                .map(str::to_string);
+            let candidate_match = RecurrenceMatch {
+                capsule_id: cand.id.clone(),
+                ts_ms: cand.ts_ms,
+                similarity,
+                score,
+                decision: cand.capsule.decision.clone(),
+                rationale: cand.capsule.rationale.clone(),
+                source_pointer: cand.meta.source_pointer.clone(),
+                origin_workspace_id: origin_ws,
+            };
+            best = match best {
+                None => Some(candidate_match),
+                Some(prev) => {
+                    // Tiebreak by dormancy: older capsule wins on equal score.
+                    if score > prev.score
+                        || (score == prev.score && candidate_match.ts_ms < prev.ts_ms)
+                    {
+                        Some(candidate_match)
+                    } else {
+                        Some(prev)
+                    }
+                }
+            };
+        }
+        let s_recurrence = best.as_ref().map(|m| m.score).unwrap_or(0.0);
+        // Recurrence is intentionally NOT EMA-smoothed: it's a per-turn match signal,
+        // not a slow-burning channel. Store directly.
+        self.smoothed_channels.recurrence_signal = s_recurrence;
+        self.recurrence_match = best;
 
         // 4. Intensity Calculation
         let loop_intensity = WEIGHT_REPETITION * self.smoothed_channels.repetition
@@ -397,6 +541,28 @@ impl TrajectoryController {
             "loop"
         };
 
+        // Resurfacing: emit a standalone SYSTEM NOTE when (a) the recurrence
+        // channel exceeds the firing threshold, (b) no other basin is at Watch+,
+        // and (c) we have not already surfaced a standalone in this session.
+        let mut standalone_resurfacing = false;
+        if self.smoothed_channels.recurrence_signal >= REC_FIRE_THRESHOLD
+            && self.recurrence_match.is_some()
+            && self.state == TrajectoryState::Stable
+        {
+            let already_fired = match (
+                self.last_resurfacing_session_id.as_deref(),
+                current_session_id,
+            ) {
+                (Some(prev), Some(cur)) => prev == cur,
+                // Replay / unattributed turns: don't fire standalone — we have no
+                // good way to throttle per session.
+                _ => current_session_id.is_none(),
+            };
+            if !already_fired {
+                standalone_resurfacing = true;
+            }
+        }
+
         // Anger escalation override: if the user has been angry/frustrated for 2+ consecutive
         // turns AND the trajectory intensity is already elevated (>= Watch threshold), fire a
         // de-escalation note. The trajectory gate prevents pure emotion-classification noise
@@ -414,6 +580,7 @@ impl TrajectoryController {
             None
         };
 
+        let mut effective_cause = cause.to_string();
         let mut note = if anger_override.is_some() {
             anger_override
         } else if self.state != prev_state || self.state == TrajectoryState::Intervene {
@@ -435,7 +602,7 @@ impl TrajectoryController {
                     };
                     self.basin_cooldowns.insert(cause.to_string(), cooldown);
 
-                    select_intervention_with_substance(
+                    let primary = select_intervention_with_substance(
                         self.intensity,
                         self.state,
                         current_emotion,
@@ -443,9 +610,39 @@ impl TrajectoryController {
                         workspace_id,
                         current,
                         history,
-                    )
+                    );
+                    // Modifier mode: when another basin fires AND we have a strong
+                    // recurrence match, append the resurfacing context. Modifier is
+                    // unthrottled — we ride on the existing intervention.
+                    match (primary, self.recurrence_match.as_ref()) {
+                        (Some(p), Some(m))
+                            if self.smoothed_channels.recurrence_signal >= REC_FIRE_THRESHOLD =>
+                        {
+                            // Record surfacing (modifier-mode counts too).
+                            crate::resurfaced::record(workspace_id, &m.capsule_id, ts_ms);
+                            if let Some(cache) = self.resurfaced_cache.as_mut() {
+                                cache.insert(m.capsule_id.clone(), ts_ms);
+                            }
+                            Some(format!("{p}\n{}", format_resurfacing_addendum(m)))
+                        }
+                        (other, _) => other,
+                    }
                 }
             }
+        } else if standalone_resurfacing {
+            // No other basin fired — emit a standalone resurfacing SYSTEM NOTE.
+            effective_cause = "resurfacing".to_string();
+            // Mark this session so we don't fire standalone again.
+            self.last_resurfacing_session_id = current_session_id.map(str::to_string);
+            let m = self
+                .recurrence_match
+                .as_ref()
+                .expect("standalone_resurfacing implies a match");
+            crate::resurfaced::record(workspace_id, &m.capsule_id, ts_ms);
+            if let Some(cache) = self.resurfaced_cache.as_mut() {
+                cache.insert(m.capsule_id.clone(), ts_ms);
+            }
+            Some(format_resurfacing_standalone_note(m))
         } else {
             None
         };
@@ -467,9 +664,10 @@ impl TrajectoryController {
             state: self.state,
             note,
             intensity: self.intensity,
-            cause: cause.to_string(),
+            cause: effective_cause,
             channels: self.smoothed_channels.clone(),
             watch_start_ts: self.watch_start_ts,
+            recurrence_match: self.recurrence_match.clone(),
         }
     }
 
@@ -610,6 +808,87 @@ fn calculate_logic_churn(current: &str, last: &Option<String>) -> f32 {
     } else {
         0.0
     }
+}
+
+/// Truncate a string at a UTF-8-safe character boundary, appending an ellipsis
+/// when truncation occurred.
+fn truncate_for_note(s: &str, max_chars: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+/// Render a calendar-date label for a UTC timestamp. Falls back to the raw
+/// epoch ms if conversion fails.
+fn render_date_label(ts_ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_millis_opt(ts_ms)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| format!("ts_ms={ts_ms}"))
+}
+
+/// Build the standalone resurfacing SYSTEM NOTE — fired when no other basin
+/// fires AND the recurrence channel matched a dormant capsule. See
+/// `internal/SOURCE_POINTERS.md` §Recurrence Channel.
+pub(crate) fn format_resurfacing_standalone_note(m: &RecurrenceMatch) -> String {
+    let date = render_date_label(m.ts_ms);
+    let decision = truncate_for_note(&m.decision, 200);
+    let rationale = truncate_for_note(&m.rationale, 200);
+    let source_line = match m.source_pointer.as_deref() {
+        Some(uri) => match crate::workspace::resolve_source_label(uri) {
+            Some(label) => format!("\n Source: {uri}\n ({label})"),
+            None => format!("\n Source: {uri}"),
+        },
+        None => String::new(),
+    };
+    let rationale_line = if rationale.is_empty() {
+        String::new()
+    } else {
+        format!("\n Rationale: \"{rationale}\".")
+    };
+    let origin_clause = format_origin_clause(m);
+    format!(
+        "[SYSTEM NOTE: This appears to continue a prior thread{origin_clause}.\n \
+         On {date}, the decision was: \"{decision}\".{rationale_line}\n \
+         If relevant, the user may want to revisit this before proceeding.{source_line}]"
+    )
+}
+
+/// Build the modifier-mode addendum — appended to another basin's intervention
+/// when the recurrence channel also matched. Kept terse on purpose: the primary
+/// note carries the main signal; this is supplementary.
+pub(crate) fn format_resurfacing_addendum(m: &RecurrenceMatch) -> String {
+    let date = render_date_label(m.ts_ms);
+    let decision = truncate_for_note(&m.decision, 160);
+    let origin_clause = format_origin_clause(m);
+    let source = m
+        .source_pointer
+        .as_deref()
+        .and_then(crate::workspace::resolve_source_label)
+        .map(|label| format!(" Source: {label}."))
+        .unwrap_or_default();
+    format!(
+        "[SYSTEM NOTE: Related prior thread from {date}{origin_clause}: \
+         \"{decision}\".{source}]"
+    )
+}
+
+/// Render the " in <project>" clause when the matched capsule lives in a
+/// different workspace. Returns an empty string for same-workspace matches so
+/// the note reads naturally in the local case.
+fn format_origin_clause(m: &RecurrenceMatch) -> String {
+    let Some(ws_id) = m.origin_workspace_id.as_deref() else {
+        return String::new();
+    };
+    let label = crate::workspace::workspace_label_by_id(ws_id)
+        .unwrap_or_else(|| ws_id.to_string());
+    format!(" in {label}")
 }
 
 fn select_intervention_with_substance(
@@ -1567,5 +1846,360 @@ mod tests {
         assert!(detect_correction("actually I meant", None) > 0.5);
         assert!(detect_correction("wait stop", None) > 0.5);
         assert_eq!(detect_correction("looks good", None), 0.0);
+    }
+
+    // ── Recurrence channel tests ─────────────────────────────────────────────
+    //
+    // These tests exercise the resurfacing path in isolation, without ANN. We
+    // synthesise dormant candidates with controlled `distance` values, feed
+    // them through the controller, and inspect the resulting TrajectoryUpdate.
+    //
+    // See `internal/SOURCE_POINTERS.md` §Recurrence Channel for the contract.
+
+    fn empty_capsule(intent: &str) -> IntentCapsule {
+        IntentCapsule {
+            category: String::new(),
+            intent: intent.to_string(),
+            decision: String::new(),
+            rationale: String::new(),
+            next_steps: vec![],
+            symbols: vec![],
+            user_symbols: vec![],
+            failure_mode: crate::types::FailureMode::None,
+            failure_signals: None,
+            extraction_mode: crate::types::ExtractionMode::None,
+            questions: vec![],
+        }
+    }
+
+    /// Build a synthetic dormant capsule with a per-test unique id. Use
+    /// `prefix` to scope the ids (passed to `WorkspaceCleanup` so the global
+    /// resurfaced ledger is cleaned at test end).
+    fn make_candidate(
+        prefix: &str,
+        suffix: &str,
+        distance: f32,
+        decision: &str,
+        rationale: &str,
+    ) -> CapsuleHit {
+        let mut cap = empty_capsule("prior intent");
+        cap.decision = decision.to_string();
+        cap.rationale = rationale.to_string();
+        CapsuleHit {
+            id: format!("{prefix}-{suffix}"),
+            ts_ms: 1_700_000_000_000, // older than 'now' in tests below
+            conn_id: 0,
+            exchange_seq: 0,
+            distance,
+            user_emotion: None,
+            assistant_emotion: None,
+            capsule: cap,
+            meta: crate::ResponseMeta {
+                source: "record".to_string(),
+                upstream_host: String::new(),
+                request_path: String::new(),
+                http_status: 200,
+                agent_session_id: Some("prior-session".to_string()),
+                source_pointer: Some(
+                    "claude+jsonl:///tmp/a.jsonl#turn=abc".to_string(),
+                ),
+                usage: None,
+            },
+            head_sha: None,
+            commit_sha: None,
+            turn_eval: None,
+            origin_workspace_id: None,
+        }
+    }
+
+    /// Return a `(workspace_id, capsule_id_prefix)` pair. Both share the same
+    /// UUID so the cleanup guard can wipe both the per-workspace dir and the
+    /// global resurfaced ledger entries with one identifier.
+    fn test_ids() -> (String, String) {
+        let uuid = uuid::Uuid::new_v4().simple().to_string();
+        (format!("wks_test_{uuid}"), format!("cap_test_{uuid}"))
+    }
+
+    /// Drop-guard that removes a test workspace's data directory and best-effort
+    /// removes any global-ledger entries that mention the given capsule-id
+    /// prefix. Use `let _cleanup = WorkspaceCleanup::new(...);` at the top of
+    /// any test that may cause `resurfaced::record` to be called.
+    struct WorkspaceCleanup {
+        ws: String,
+        capsule_prefix: String,
+    }
+    impl WorkspaceCleanup {
+        fn new(ws: &str, capsule_prefix: &str) -> Self {
+            Self {
+                ws: ws.to_string(),
+                capsule_prefix: capsule_prefix.to_string(),
+            }
+        }
+    }
+    impl Drop for WorkspaceCleanup {
+        fn drop(&mut self) {
+            let dir = crate::workspace::unlost_workspace_dir(&self.ws);
+            let _ = std::fs::remove_dir_all(dir);
+            // Best-effort: strip lines from the global resurfaced ledger that
+            // mention our test capsule prefix so the file doesn't grow with
+            // every test run.
+            let global = crate::resurfaced::global_resurfaced_path();
+            if let Ok(content) = std::fs::read_to_string(&global) {
+                let kept: String = content
+                    .lines()
+                    .filter(|l| !l.contains(&self.capsule_prefix))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+                let _ = std::fs::write(&global, kept);
+            }
+        }
+    }
+
+    #[test]
+    fn recurrence_scores_high_for_close_match() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        // distance 0.10 => similarity 0.90, structural=1.0 (decision+rationale)
+        let cand = make_candidate(&prefix, "a", 0.10, "use opaque markdown", "no curation");
+        let now = 1_730_000_000_000;
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("how should context resurface"),
+            None,
+            &[],
+            &[cand],
+            Some("ses_now"),
+            now,
+        );
+        assert!(upd.channels.recurrence_signal > 0.85);
+        assert!(upd.recurrence_match.is_some());
+        let m = upd.recurrence_match.unwrap();
+        assert!(m.capsule_id.ends_with("-a"));
+        // Standalone fires when no other basin is firing.
+        assert_eq!(upd.cause, "resurfacing");
+        let note = upd.note.expect("expected a SYSTEM NOTE");
+        assert!(note.contains("prior thread"));
+        assert!(note.contains("opaque markdown"));
+        assert!(note.contains("claude+jsonl"));
+    }
+
+    #[test]
+    fn recurrence_rejects_below_threshold() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        // distance 0.5 => similarity 0.5, below 0.78 threshold
+        let cand = make_candidate(&prefix, "b", 0.5, "unrelated decision", "unrelated rationale");
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("query"),
+            None,
+            &[],
+            &[cand],
+            Some("ses"),
+            1_730_000_000_000,
+        );
+        assert_eq!(upd.channels.recurrence_signal, 0.0);
+        assert!(upd.recurrence_match.is_none());
+        assert!(upd.note.is_none());
+    }
+
+    #[test]
+    fn recurrence_skips_capsules_in_recent_window() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        let in_recent = make_candidate(&prefix, "recent", 0.05, "fresh decision", "fresh rationale");
+        let in_recent_hit = in_recent.clone();
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("query"),
+            None,
+            std::slice::from_ref(&in_recent_hit),
+            &[in_recent],
+            Some("ses"),
+            1_730_000_000_000,
+        );
+        // The capsule appears in recent history, so it's filtered before scoring.
+        assert_eq!(upd.channels.recurrence_signal, 0.0);
+        assert!(upd.recurrence_match.is_none());
+    }
+
+    #[test]
+    fn recurrence_skips_git_and_changelog_sources() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        let mut git_cand = make_candidate(&prefix, "git", 0.05, "merge feature", "ship");
+        git_cand.meta.source = "git".to_string();
+        let mut cl_cand = make_candidate(&prefix, "cl", 0.05, "release 1.0", "");
+        cl_cand.meta.source = "changelog".to_string();
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("query"),
+            None,
+            &[],
+            &[git_cand, cl_cand],
+            Some("ses"),
+            1_730_000_000_000,
+        );
+        assert_eq!(upd.channels.recurrence_signal, 0.0);
+        assert!(upd.recurrence_match.is_none());
+    }
+
+    #[test]
+    fn standalone_fires_once_per_session() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        let cand = make_candidate(&prefix, "s1", 0.08, "decision", "rationale");
+        let now = 1_730_000_000_000;
+        let upd1 = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q1"),
+            None,
+            &[],
+            std::slice::from_ref(&cand),
+            Some("ses-1"),
+            now,
+        );
+        assert_eq!(upd1.cause, "resurfacing");
+        assert!(upd1.note.is_some());
+        // Second turn in the same session with a different (still strong) match
+        // must NOT fire standalone again.
+        let cand2 = make_candidate(&prefix, "s2", 0.05, "decision2", "rationale2");
+        let upd2 = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q2"),
+            None,
+            &[],
+            std::slice::from_ref(&cand2),
+            Some("ses-1"),
+            now + 60_000,
+        );
+        assert_ne!(upd2.cause, "resurfacing");
+        assert!(upd2.note.is_none());
+
+        // A different session may fire again.
+        let cand3 = make_candidate(&prefix, "s3", 0.05, "decision3", "rationale3");
+        let upd3 = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q3"),
+            None,
+            &[],
+            std::slice::from_ref(&cand3),
+            Some("ses-2"),
+            now + 120_000,
+        );
+        assert_eq!(upd3.cause, "resurfacing");
+        assert!(upd3.note.is_some());
+    }
+
+    #[test]
+    fn structural_weight_halves_score_when_rationale_missing() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        // distance 0.10 => similarity 0.90, but no rationale => weight 0.5 => score 0.45
+        let cand = make_candidate(&prefix, "thin", 0.10, "decision only", "");
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q"),
+            None,
+            &[],
+            std::slice::from_ref(&cand),
+            Some("ses"),
+            1_730_000_000_000,
+        );
+        // Score is below the firing threshold, so no note despite high similarity.
+        assert!(upd.channels.recurrence_signal < REC_FIRE_THRESHOLD);
+        assert!(upd.note.is_none());
+    }
+
+    #[test]
+    fn dormancy_tiebreaks_equal_score_to_older_capsule() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        let newer = {
+            let mut h = make_candidate(&prefix, "newer", 0.10, "same dec", "same rat");
+            h.ts_ms = 1_720_000_000_000;
+            h
+        };
+        let older = {
+            let mut h = make_candidate(&prefix, "older", 0.10, "same dec", "same rat");
+            h.ts_ms = 1_650_000_000_000;
+            h
+        };
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q"),
+            None,
+            &[],
+            &[newer, older],
+            Some("ses"),
+            1_730_000_000_000,
+        );
+        let m = upd.recurrence_match.expect("expected a match");
+        assert!(m.capsule_id.ends_with("-older"));
+    }
+
+    #[test]
+    fn cross_workspace_match_tags_origin_and_renders_in_note() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        // Synthesise a candidate that was retrieved from a *different*
+        // workspace (`origin_workspace_id` set to a peer id).
+        let peer_ws = format!("wks_peer_{}", uuid::Uuid::new_v4().simple());
+        let mut cand = make_candidate(&prefix, "peer", 0.08, "shared concern", "rationale");
+        cand.origin_workspace_id = Some(peer_ws.clone());
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("question that echoes elsewhere"),
+            None,
+            &[],
+            std::slice::from_ref(&cand),
+            Some("ses-now"),
+            1_730_000_000_000,
+        );
+        let m = upd.recurrence_match.expect("expected a match");
+        assert_eq!(m.origin_workspace_id.as_deref(), Some(peer_ws.as_str()));
+        let note = upd.note.expect("expected a SYSTEM NOTE");
+        // No registry entry exists for `peer_ws`, so the renderer falls back
+        // to the raw id — but the " in " clause must still appear.
+        assert!(
+            note.contains(" in "),
+            "note should include 'in <project>' clause; got: {note}"
+        );
+        assert!(note.contains(&peer_ws));
+    }
+
+    #[test]
+    fn same_workspace_match_omits_origin_clause() {
+        let mut c = TrajectoryController::default();
+        let (ws, prefix) = test_ids();
+        let _cleanup = WorkspaceCleanup::new(&ws, &prefix);
+        // origin_workspace_id == current workspace → no " in <project>" clause.
+        let mut cand = make_candidate(&prefix, "local", 0.08, "local decision", "local rationale");
+        cand.origin_workspace_id = Some(ws.clone());
+        let upd = c.update_with_candidates(
+            &ws,
+            &empty_capsule("q"),
+            None,
+            &[],
+            std::slice::from_ref(&cand),
+            Some("ses-now"),
+            1_730_000_000_000,
+        );
+        let m = upd.recurrence_match.expect("expected a match");
+        // origin_workspace_id is dropped because it equals the current ws.
+        assert!(m.origin_workspace_id.is_none());
+        let note = upd.note.expect("expected a SYSTEM NOTE");
+        assert!(
+            !note.contains(" in "),
+            "note should NOT include 'in <project>' clause; got: {note}"
+        );
     }
 }
