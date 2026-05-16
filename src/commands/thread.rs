@@ -50,7 +50,7 @@ pub async fn run(
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
         );
         pb.enable_steady_tick(Duration::from_millis(80));
-        pb.set_message("Mapping the thread...");
+        pb.set_message("pulling on the thread...");
         Some(pb)
     } else {
         None
@@ -95,6 +95,25 @@ pub async fn run(
 
     let view = ThreadView::from_hits(&hits, &ws);
 
+    let llm_spinner = if !no_llm {
+        if let Some(target) = crate::narrative::spinner_draw_target(output) {
+            let pb = ProgressBar::new_spinner();
+            pb.set_draw_target(target);
+            pb.set_style(
+                ProgressStyle::with_template("{spinner:.cyan} {msg:.dim}")
+                    .unwrap()
+                    .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+            );
+            pb.enable_steady_tick(Duration::from_millis(80));
+            pb.set_message("reading between the lines...");
+            Some(pb)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let (narrative, narrative_warning) = if no_llm {
         (None, None)
     } else {
@@ -112,6 +131,10 @@ pub async fn run(
             }
         }
     };
+
+    if let Some(ref sp) = llm_spinner {
+        sp.finish_and_clear();
+    }
 
     let rendered = if timeline {
         render_timeline(&query, narrative.as_deref(), narrative_warning.as_deref(), &view, output)
@@ -346,17 +369,7 @@ fn render_trail(
         let is_most_recent = ci == 0;
         let is_origin = ci == cluster_count - 1;
 
-        // Section label
         let date_str = fmt_day_label(cluster.earliest_ts);
-        let section_label = if is_most_recent && is_origin {
-            format!("{}", date_str)
-        } else if is_most_recent {
-            format!("Current shape · {}", date_str)
-        } else if is_origin {
-            format!("Origin · {}", date_str)
-        } else {
-            format!("Earlier · {}", date_str)
-        };
 
         // Gap from previous (newer) cluster
         if ci > 0 {
@@ -365,24 +378,43 @@ fn render_trail(
             if gap_ms >= DORMANCY_THRESHOLD_MS {
                 let label = gap_label(gap_ms);
                 if is_ansi(output) {
-                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n", label));
+                    out.push_str(&format!("\n\x1b[2m        ~ {}\x1b[0m\n", label));
                 } else {
-                    out.push_str(&format!("\n        {}\n", label));
+                    out.push_str(&format!("\n        ~ {}\n", label));
                 }
             }
         }
 
         out.push('\n');
         if is_ansi(output) {
-            out.push_str(&format!("\x1b[1;97m{}\x1b[0m", section_label));
+            // Section keyword in cyan, date in bold white
+            let keyword = if is_most_recent && is_origin {
+                String::new()
+            } else if is_most_recent {
+                "\x1b[36mCurrent shape\x1b[0m · ".to_string()
+            } else if is_origin {
+                "\x1b[36mOrigin\x1b[0m · ".to_string()
+            } else {
+                "\x1b[2mEarlier\x1b[0m · ".to_string()
+            };
+            out.push_str(&format!("{}\x1b[1;97m{}\x1b[0m", keyword, date_str));
         } else {
+            let section_label = if is_most_recent && is_origin {
+                date_str.clone()
+            } else if is_most_recent {
+                format!("Current shape · {}", date_str)
+            } else if is_origin {
+                format!("Origin · {}", date_str)
+            } else {
+                format!("Earlier · {}", date_str)
+            };
             out.push_str(&section_label);
         }
 
-        // Provenance for the cluster — dim, on the same line
+        // Provenance — dim cyan
         if !cluster.provenance.is_empty() {
             if is_ansi(output) {
-                out.push_str(&format!("  \x1b[2m{}\x1b[0m", cluster.provenance));
+                out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
             } else {
                 out.push_str(&format!("  {}", cluster.provenance));
             }
@@ -425,9 +457,9 @@ fn render_timeline(
             if gap_ms >= DORMANCY_THRESHOLD_MS {
                 let label = gap_label(gap_ms);
                 if is_ansi(output) {
-                    out.push_str(&format!("\n\x1b[2m        {}\x1b[0m\n", label));
+                    out.push_str(&format!("\n\x1b[2m        ~ {}\x1b[0m\n", label));
                 } else {
-                    out.push_str(&format!("\n        {}\n", label));
+                    out.push_str(&format!("\n        ~ {}\n", label));
                 }
             }
         }
@@ -437,7 +469,7 @@ fn render_timeline(
         if is_ansi(output) {
             out.push_str(&format!("\x1b[1;97m{}\x1b[0m", date_str));
             if !cluster.provenance.is_empty() {
-                out.push_str(&format!("  \x1b[2m{}\x1b[0m", cluster.provenance));
+                out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
             }
         } else {
             out.push_str(&date_str);
@@ -528,7 +560,7 @@ fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat
     }
     for link in &cluster.source_links {
         if is_ansi(output) {
-            out.push_str(&format!("  \x1b[2m{}\x1b[0m\n", link));
+            out.push_str(&format!("  \x1b[2;36m{}\x1b[0m\n", link));
         } else {
             out.push_str(&format!("  {}\n", link));
         }
@@ -536,14 +568,14 @@ fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat
 }
 
 fn render_note(out: &mut String, note: &DisplayNote, index: usize, output: OutputFormat) {
-    // Decision — the primary signal
+    // Decision — the primary signal, cyan tint
     if is_ansi(output) {
         push_wrapped_ansi(
             out,
-            &format!("\n  \x1b[2m{:>2}\x1b[0m  ", index),
-            "",
-            "      ",
-            "",
+            &format!("\n  \x1b[2m{:>2}\x1b[0m  \x1b[36m", index),
+            "\x1b[0m",
+            "      \x1b[36m",
+            "\x1b[0m",
             &note.decision,
             WRAP_WIDTH - 6,
         );
@@ -574,7 +606,7 @@ fn render_note(out: &mut String, note: &DisplayNote, index: usize, output: Outpu
         }
     }
 
-    // Failure mode
+    // Failure mode — yellow
     if let Some(ref fm) = note.failure_mode {
         if is_ansi(output) {
             out.push_str(&format!("\n      \x1b[33m▲ {}\x1b[0m", fm));
@@ -583,25 +615,25 @@ fn render_note(out: &mut String, note: &DisplayNote, index: usize, output: Outpu
         }
     }
 
-    // Symbols
+    // Symbols — dim green
     if !note.symbols.is_empty() {
         let sym_str = note.symbols.join("  ");
         if is_ansi(output) {
-            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", sym_str));
+            out.push_str(&format!("\n      \x1b[2;32m{}\x1b[0m", sym_str));
         } else {
             out.push_str(&format!("\n      {}", sym_str));
         }
     }
 
-    // Echoes
+    // Echoes — dim italic
     if note.echoes > 0 {
         let line = if note.echoes == 1 {
-            "same idea appears once more"
+            "same idea appears once more".to_string()
         } else {
-            &format!("same idea appears {} more times", note.echoes)
+            format!("same idea appears {} more times", note.echoes)
         };
         if is_ansi(output) {
-            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", line));
+            out.push_str(&format!("\n      \x1b[2;3m{}\x1b[0m", line));
         } else {
             out.push_str(&format!("\n      {}", line));
         }
