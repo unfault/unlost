@@ -327,17 +327,31 @@ impl ThreadView {
                     if text.is_empty() || text.len() < 20 {
                         continue;
                     }
-                    // Skip low-signal placeholder decisions.
-                    let lower = text.to_ascii_lowercase();
-                    if matches!(
-                        lower.as_str(),
-                        "proceed" | "defer" | "pause" | "continue"
-                            | "no_action_required" | "accepted/implemented"
-                            | "awaiting_commit_instruction" | "awaiting_user_instruction"
-                    ) {
+                    if is_placeholder_decision(text) {
                         continue;
                     }
-                    // Skip decisions that look like status markers (single word, no spaces).
+                    // Skip low-signal neighbor patterns.
+                    let lower = text.to_ascii_lowercase();
+                    if lower.starts_with("no action")
+                        || lower.starts_with("no actionable")
+                        || lower.starts_with("no specific")
+                        || lower.starts_with("user simply")
+                        || lower.starts_with("user rejects")
+                        || lower.starts_with("user disputes")
+                        || lower.starts_with("user is unsure")
+                        || lower.starts_with("acknowledge")
+                        || lower.contains("conversation ended")
+                        || lower.contains("conversation effectively")
+                        || lower.contains("no further request")
+                        || lower.contains("end interaction")
+                        || lower.contains("close interaction")
+                        || lower.contains("awaiting context")
+                        || lower.starts_with("none;")
+                        || lower.starts_with("none.")
+                    {
+                        continue;
+                    }
+                    // Skip single-word non-space decisions under 30 chars.
                     if !text.contains(' ') && text.len() < 30 {
                         continue;
                     }
@@ -428,6 +442,9 @@ fn fold_similar(hits: &[&crate::CapsuleHit]) -> Vec<DisplayNote> {
     let mut notes: Vec<DisplayNote> = Vec::new();
     for hit in hits {
         let text = note_text(hit);
+        if is_placeholder_decision(&text) {
+            continue;
+        }
         if let Some(existing) = notes.iter_mut().find(|n| similar_notes(&text, &n.decision)) {
             existing.echoes += 1;
         } else {
@@ -751,27 +768,35 @@ fn render_source_links(out: &mut String, cluster: &Cluster, output: OutputFormat
     }
 }
 
-/// Compact one-liner for trail view: just the decision, hard-truncated.
+/// Compact note for trail view: decision wrapped to ~2 lines, no rationale.
 fn render_note_compact(out: &mut String, note: &DisplayNote, output: OutputFormat) {
-    let text = truncate(&note.decision, 72);
+    let text = truncate(&note.decision, 148);
     let echo_suffix = if note.echoes > 0 {
-        if note.echoes == 1 { " (+1)" } else { &format!(" (+{})", note.echoes) }
-    } else {
-        ""
-    };
-    let fm_prefix = if note.failure_mode.is_some() { "▲ " } else { "" };
-
-    if is_ansi(output) {
-        let fm_color = if note.failure_mode.is_some() { "\x1b[33m" } else { "" };
-        let fm_reset = if note.failure_mode.is_some() { "\x1b[0;36m" } else { "" };
-        out.push_str(&format!(
-            "    \x1b[36m{fm_color}{fm_prefix}{fm_reset}{text}\x1b[0m",
-        ));
-        if !echo_suffix.is_empty() {
-            out.push_str(&format!("\x1b[2;3m{echo_suffix}\x1b[0m"));
+        if note.echoes == 1 {
+            " (+1)".to_string()
+        } else {
+            format!(" (+{})", note.echoes)
         }
     } else {
-        out.push_str(&format!("    {fm_prefix}{text}{echo_suffix}"));
+        String::new()
+    };
+    let fm_prefix = if note.failure_mode.is_some() { "▲ " } else { "" };
+    let full = format!("{fm_prefix}{text}{echo_suffix}");
+
+    if is_ansi(output) {
+        let fm_color = if note.failure_mode.is_some() { "\x1b[33m▲ \x1b[0;36m" } else { "" };
+        let display = format!("{fm_color}{}", truncate(&note.decision, 148));
+        push_wrapped_ansi(
+            out,
+            "    \x1b[36m",
+            "\x1b[0m",
+            "    \x1b[36m",
+            "\x1b[0m",
+            &format!("{display}{echo_suffix}"),
+            WRAP_WIDTH - 4,
+        );
+    } else {
+        push_wrapped_plain(out, "    ", "    ", &full, WRAP_WIDTH - 4);
     }
     out.push('\n');
 }
@@ -1022,7 +1047,36 @@ fn note_text(hit: &crate::CapsuleHit) -> String {
     } else {
         decision.to_string()
     };
-    truncate(&humanize_note_text(&text), 140)
+    humanize_note_text(&text)
+}
+
+/// Returns true if a decision looks like a machine-generated placeholder
+/// that carries no real signal.
+fn is_placeholder_decision(s: &str) -> bool {
+    let lower = s.trim().to_ascii_lowercase();
+    let placeholders = [
+        "proceed",
+        "defer",
+        "pause",
+        "continue",
+        "no_action_required",
+        "accepted/implemented",
+        "awaiting_commit_instruction",
+        "awaiting_user_instruction",
+        "proceed_with_planned_action",
+        "awaiting context to determine next action",
+        "no specific task",
+    ];
+    for p in placeholders {
+        if lower == p || lower.starts_with(p) {
+            return true;
+        }
+    }
+    // Single word with underscores = likely a status marker
+    if !lower.contains(' ') && lower.contains('_') {
+        return true;
+    }
+    false
 }
 
 fn span_suffix(days: i64) -> String {
