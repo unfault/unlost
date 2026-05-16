@@ -809,29 +809,25 @@ pub(crate) async fn llm_thread_narrative(
     context.push_str(&view.to_llm_context());
 
     let preamble = format!(
-        r#"Write the note I would want to find later after searching my own memory for "{topic}".
+        r#"A colleague skimmed my notes about "{topic}" and I asked: "so what's the deal with this?"
 
-Below is a pre-analyzed thread: clusters of notes grouped by time, with gaps and echoes already identified. Your job is to interpret the structure, not restate the content.
+Below are the notes, already clustered by time with gaps and echoes marked. Say the useful thing I can't see by scanning the notes myself.
 
-Important: the source may say "User" because capsules are extracted from chat logs. Treat that as "me". Never write "the user" or "User" in the answer.
+Source data says "User" — that's me. Never write "the user" or "User".
 
-Output exactly three short lines:
+Answer in exactly 2-3 sentences, like you're talking to me. Plain language. No metaphors, no poetry, no jargon. If you'd be embarrassed saying it out loud to a colleague, don't write it.
 
-Line 1 — The throughline: what this thread is really about, in one plain sentence. Not what the notes say; what they reveal about what I was working through.
+Sentence 1: What's the one concrete thing I keep trying to get right here? Name the actual problem or goal, not an abstraction of it.
 
-Line 2 — Why it recurred: what made me keep returning to this. Was I protecting something? Learning by repetition? Circling because I hadn't committed?
+Sentence 2: What changed between the oldest and newest notes? Be specific — name the shift. If there's a gap of weeks, say whether it looks like I dropped it or came back with a different angle.
 
-Line 3 — What the oldest notes change: how reading the origin cluster alongside the latest one shifts the meaning. If there was a long gap, say what the gap tells you.
+Sentence 3 (optional): One practical thing this pattern suggests I should watch out for or lean into.
 
-Rules:
-- Use simple words. If a sentence needs re-reading, rewrite it shorter.
-- Do not restate decisions from the notes. If a sentence paraphrases a note, delete it.
-- Do not tell me what I did; tell me what it means.
-- No "first/then/finally" recap. No "this thread shows".
-- No "still open", "unresolved", "remains unclear".
-- Use "I" naturally.
-- Anchor with at most 1-2 backticked tokens, only as evidence.
-- Each line max 35 words. Total max 100 words."#,
+Hard rules:
+- No words like "throughline", "visceral", "worldview", "scope jump", "consolidation", "incubation". Write like a normal person.
+- Do not restate what any note says. If I can find your sentence in the notes, it's useless.
+- Do not be encouraging or affirming. Just be accurate.
+- Max 80 words total."#,
     );
 
     Ok(
