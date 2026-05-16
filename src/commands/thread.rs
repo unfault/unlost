@@ -25,13 +25,6 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let query = topic.join(" ");
     let query = query.trim().to_string();
-    if query.is_empty() {
-        println!("Usage: unlost thread <topic>");
-        println!("  Examples:");
-        println!("    unlost thread \"passive resurfacing of memory\"");
-        println!("    unlost thread \"local-first storage decisions\" --since 6m");
-        return Ok(());
-    }
 
     let since_ms = match since {
         Some(ref s) => crate::util::parse_time_filter(s)?,
@@ -40,6 +33,11 @@ pub async fn run(
 
     let cwd = std::env::current_dir()?;
     let ws = crate::workspace::get_or_create_workspace_paths(&cwd)?;
+
+    // No topic = discovery mode: show emergent themes from recent capsules.
+    if query.is_empty() {
+        return run_themes(&ws, since_ms, output).await;
+    }
 
     let spinner = if let Some(target) = crate::narrative::spinner_draw_target(output) {
         let pb = ProgressBar::new_spinner();
@@ -1504,4 +1502,534 @@ fn humanize_note_text(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+// ── Themes (discovery mode) ─────────────────────────────────────────────────
+//
+// When `unlost thread` is run without a topic, surface the implicit structure
+// of what's been on the user's mind: recurring decision motifs across recent
+// capsules. No LLM, no folder structure — themes emerge from token overlap.
+
+const THEMES_DEFAULT_SINCE_MS: i64 = 180 * 24 * 60 * 60 * 1000; // 6 months
+const THEMES_SCAN_LIMIT: usize = 1500;
+
+/// A discovered theme: a recurring set of concepts that appears across multiple
+/// capsules, with a representative label and timing info.
+struct Theme {
+    /// Distinct word stems that define this theme (used for the label).
+    tokens: BTreeSet<String>,
+    /// Capsules belonging to this theme.
+    members: Vec<ThemeMember>,
+    /// Span in days from earliest to latest member.
+    span_days: i64,
+    /// Latest timestamp in the theme.
+    latest_ts: i64,
+    /// Earliest timestamp in the theme.
+    earliest_ts: i64,
+}
+
+struct ThemeMember {
+    decision: String,
+    ts_ms: i64,
+    project: Option<String>,
+}
+
+async fn run_themes(
+    ws: &crate::WorkspacePaths,
+    since_ms: Option<i64>,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    let spinner = if let Some(target) = crate::narrative::spinner_draw_target(output) {
+        let pb = ProgressBar::new_spinner();
+        pb.set_draw_target(target);
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.cyan} {msg:.dim}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        );
+        pb.enable_steady_tick(Duration::from_millis(80));
+        pb.set_message("looking for what's been on your mind...");
+        Some(pb)
+    } else {
+        None
+    };
+
+    let since = since_ms.unwrap_or_else(|| crate::workspace::now_ms() - THEMES_DEFAULT_SINCE_MS);
+
+    let hits = match crate::storage::scan_capsules_lancedb(
+        ws,
+        THEMES_SCAN_LIMIT,
+        None,
+        None,
+        None,
+        Some(since),
+        None,
+    )
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            if let Some(sp) = spinner {
+                sp.finish_and_clear();
+            }
+            eprintln!("unlost: could not scan capsules: {e}");
+            return Ok(());
+        }
+    };
+
+    if let Some(sp) = spinner {
+        sp.finish_and_clear();
+    }
+
+    let themes = compute_themes(&hits);
+
+    let rendered = render_themes(&themes, since, output);
+    print!("{rendered}");
+    Ok(())
+}
+
+/// Cluster capsules by token-overlap on their decision text, producing themes.
+/// Greedy single-pass: each capsule joins the first existing theme it overlaps
+/// with above the threshold, otherwise starts a new theme.
+fn compute_themes(hits: &[crate::CapsuleHit]) -> Vec<Theme> {
+    let mut themes: Vec<Theme> = Vec::new();
+    let mut total_processed = 0usize;
+
+    for hit in hits {
+        let text = hit.capsule.decision.trim();
+        if text.is_empty() || is_placeholder_decision(text) {
+            continue;
+        }
+        let lower = text.to_ascii_lowercase();
+        if lower.starts_with("no action")
+            || lower.starts_with("no actionable")
+            || lower.starts_with("acknowledge")
+            || lower.starts_with("acknowledged")
+            || lower.starts_with("user acknowledg")
+            || lower.starts_with("agent acknowledg")
+            || lower.contains("conversation ended")
+            || lower.contains("end interaction")
+            || lower.contains("close interaction")
+            || lower.contains("awaiting context")
+            || lower.starts_with("none;")
+            || lower.starts_with("none.")
+            || lower.starts_with("user disputes")
+            || lower.starts_with("user rejects")
+            || lower.starts_with("user is unsure")
+            || lower.starts_with("user simply")
+        {
+            continue;
+        }
+        // Skip git/changelog — they're facts, not thoughts.
+        if matches!(hit.meta.source.as_str(), "git" | "changelog" | "init") {
+            continue;
+        }
+        let tokens = theme_tokens(text);
+        if tokens.len() < 2 {
+            continue;
+        }
+        total_processed += 1;
+
+        let project = hit
+            .origin_workspace_id
+            .as_deref()
+            .and_then(crate::workspace::workspace_label_by_id);
+
+        let member = ThemeMember {
+            decision: text.to_string(),
+            ts_ms: hit.ts_ms,
+            project,
+        };
+
+        // Find best matching theme (highest overlap above threshold).
+        let mut best: Option<(usize, f32)> = None;
+        for (i, theme) in themes.iter().enumerate() {
+            let inter = tokens.intersection(&theme.tokens).count() as f32;
+            let smaller = (tokens.len().min(theme.tokens.len())) as f32;
+            let overlap = inter / smaller;
+            if overlap >= 0.45 {
+                if best.map(|(_, s)| overlap > s).unwrap_or(true) {
+                    best = Some((i, overlap));
+                }
+            }
+        }
+
+        if let Some((idx, _)) = best {
+            // Merge into existing theme. Keep theme's defining tokens intersection-ish
+            // so they remain tight, but add high-frequency newcomers.
+            for t in &tokens {
+                themes[idx].tokens.insert(t.clone());
+            }
+            themes[idx].earliest_ts = themes[idx].earliest_ts.min(member.ts_ms);
+            themes[idx].latest_ts = themes[idx].latest_ts.max(member.ts_ms);
+            themes[idx].members.push(member);
+        } else {
+            themes.push(Theme {
+                tokens,
+                earliest_ts: member.ts_ms,
+                latest_ts: member.ts_ms,
+                span_days: 0,
+                members: vec![member],
+            });
+        }
+    }
+
+    let _ = total_processed;
+
+    // Finalize span_days and filter weak themes.
+    // A real theme should have ≥3 members and at least 2 distinct days of activity
+    // (otherwise it's just one session with multiple turns on the same topic).
+    themes.retain(|t| {
+        if t.members.len() < 3 {
+            return false;
+        }
+        let day = |ts: i64| ts / (24 * 60 * 60 * 1000);
+        let distinct_days: BTreeSet<i64> = t.members.iter().map(|m| day(m.ts_ms)).collect();
+        distinct_days.len() >= 2
+    });
+    for t in &mut themes {
+        t.span_days = ((t.latest_ts - t.earliest_ts) / (24 * 60 * 60 * 1000)).max(0);
+    }
+
+    // Rank by composite score: recurrence + span + recency.
+    let now = crate::workspace::now_ms();
+    themes.sort_by(|a, b| {
+        let sa = theme_score(a, now);
+        let sb = theme_score(b, now);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    themes.truncate(10);
+    themes
+}
+
+fn theme_score(t: &Theme, now_ms: i64) -> f32 {
+    // Recurrence: how many times this theme appeared (saturates via ln).
+    let recurrence = (t.members.len() as f32).ln_1p();
+    // Span: themes that lived across many days are inherently meaningful.
+    let span = ((t.span_days as f32 + 1.0).ln() * 1.0).min(5.0);
+    // Recency: gentle decay, so a 6-month-old long-running theme still surfaces.
+    let age_days = ((now_ms - t.latest_ts).max(0) / (24 * 60 * 60 * 1000)) as f32;
+    let recency = (-age_days / 90.0).exp(); // half-life ~62 days
+    // Multi-project bonus: themes that span projects suggest cross-cutting concerns.
+    let projects: BTreeSet<&str> = t
+        .members
+        .iter()
+        .filter_map(|m| m.project.as_deref())
+        .collect();
+    let project_bonus = if projects.len() > 1 { 1.0 } else { 0.0 };
+    recurrence * 1.5 + span * 1.2 + recency * 0.8 + project_bonus
+}
+
+/// Extract significant word stems from a decision string, filtering stopwords.
+fn theme_tokens(s: &str) -> BTreeSet<String> {
+    const STOPWORDS: &[&str] = &[
+        // Common English filler
+        "this", "that", "with", "from", "into", "have", "will", "their", "them",
+        "they", "would", "could", "should", "about", "which", "where", "when",
+        "what", "while", "than", "then", "been", "being", "more", "most",
+        "some", "such", "only", "also", "very", "much", "many", "make", "made",
+        "over", "under", "after", "before", "between", "through", "during",
+        "without", "within", "across", "against", "among", "around",
+        // Generic words that appear in capsule machinery
+        "user", "users", "thing", "things", "stuff", "item", "items",
+        "want", "wants", "wanted", "wanting",
+        "need", "needs", "needed", "needing",
+        "consider", "considering", "considered",
+        "propose", "proposed", "proposing", "proposal",
+        "explore", "exploring", "explored", "exploration",
+        "investigate", "investigating", "investigated", "investigation",
+        "review", "reviewing", "reviewed",
+        "implement", "implementing", "implemented", "implementation",
+        "adopt", "adopting", "adopted",
+        "discuss", "discussing", "discussed",
+        "clarify", "clarifying", "clarified", "clarification",
+        "assess", "assessing", "assessed", "assessment",
+        "request", "requesting", "requested",
+        "suggest", "suggesting", "suggested", "suggestion",
+        "complete", "completed", "completing", "completion",
+        "focus", "focusing", "focused",
+        "ensure", "ensuring", "ensured",
+        "address", "addressing", "addressed",
+        // Generic structure/UX nouns
+        "section", "sections", "header", "headers", "label", "labels",
+        "output", "outputs", "input", "inputs", "value", "values",
+        "field", "fields", "option", "options", "default", "defaults",
+        "format", "formats", "structure", "structures",
+        "approach", "approaches", "decision", "decisions",
+        "agent", "agents", "system", "systems",
+        "feature", "features", "behavior", "behaviors",
+        "support", "supported", "supporting",
+        "current", "currently", "existing",
+        "general", "generic", "specific", "particular",
+        "additional", "different", "various", "multiple",
+        // Meta-evaluation tokens
+        "irrelevant", "relevant", "useful", "important",
+        "closest", "nearest", "similar",
+        "snapshot", "snapshots", "document", "documents", "documented",
+        "incorporate", "incorporated", "incorporating",
+        "artifact", "artifacts", "recorded", "recording",
+        // Acknowledgment / status noise
+        "acknowledge", "acknowledged", "acknowledging", "acknowledgment",
+        "affirm", "affirmed", "affirming", "affirmation", "affirmative",
+        "confirm", "confirmed", "confirming", "confirmation",
+        "prior", "previous", "previously", "earlier",
+        "requirement", "requirements", "request", "requests",
+        "expectation", "expectations", "available", "placeholder",
+        "outdated", "diagnostic", "diagnostics",
+        "detected", "detect", "detecting", "detection",
+        "metadata", "data", "info", "information",
+        "update", "updated", "updating", "change", "changes",
+        "next", "prepare", "preparation", "prepared", "preparing",
+        "inclusion", "filtering", "include", "included", "exclude", "excluded",
+        "codebase", "directory", "directories",
+        "consistently", "accordingly", "automatically", "explicitly",
+        "context", "contexts", "source", "sources",
+        "improvement", "improvements", "improve", "improving", "improved",
+        "statement", "statements", "subscription", "subscriptions",
+        "event", "events", "logging", "capturing", "capture",
+        "feasibility", "configuration", "configurations",
+        "provided", "providing", "provides",
+        "commit", "commits", "committed", "committing",
+        "dependencie", "dependencies", "dependency", "bump", "bumped",
+    ];
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter_map(|t| {
+            let t = t.trim().to_ascii_lowercase();
+            if t.len() < 4 || t.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            if STOPWORDS.contains(&t.as_str()) {
+                return None;
+            }
+            // Light stemming: drop trailing s for tokens >5 chars.
+            let stem = if t.len() > 5 && t.ends_with('s') && !t.ends_with("ss") {
+                t[..t.len() - 1].to_string()
+            } else {
+                t
+            };
+            Some(stem)
+        })
+        .collect()
+}
+
+/// Build a human-readable theme label from its defining tokens.
+/// Prefers technical/proper-noun tokens (mixed case, snake_case, kebab-case),
+/// then falls back to frequency-ranked common tokens.
+fn theme_label(theme: &Theme) -> String {
+    // Token freq + best original-case spelling for each token.
+    let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut original_case: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for m in &theme.members {
+        // Walk original text to preserve case.
+        for raw_word in m.decision.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+            let raw = raw_word.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let lower = raw.to_ascii_lowercase();
+            // Apply the same filter as theme_tokens.
+            let toks = theme_tokens(raw);
+            if toks.is_empty() {
+                continue;
+            }
+            let stem = toks.iter().next().unwrap().clone();
+            *freq.entry(stem.clone()).or_default() += 1;
+            // Keep the most "interesting" original case: prefer mixed case, then snake/kebab.
+            let cur = original_case.entry(stem).or_insert_with(|| raw.to_string());
+            if score_case(raw) > score_case(cur) {
+                *cur = raw.to_string();
+            }
+            let _ = lower;
+        }
+    }
+
+    // Score tokens: coverage + length + technical-look bonus.
+    let n = theme.members.len();
+    let mut scored: Vec<(String, f32)> = freq
+        .into_iter()
+        .filter(|(_, c)| *c >= 2)
+        .map(|(t, c)| {
+            let coverage = c as f32 / n as f32;
+            let length_bonus = (t.len() as f32).min(12.0) * 0.08;
+            let original = original_case.get(&t).cloned().unwrap_or_else(|| t.clone());
+            let tech_bonus = score_case(&original) as f32 * 0.5;
+            (t, coverage + length_bonus + tech_bonus)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let picked: Vec<String> = scored
+        .into_iter()
+        .take(3)
+        .map(|(t, _)| original_case.get(&t).cloned().unwrap_or(t))
+        .collect();
+    if picked.is_empty() {
+        theme
+            .members
+            .first()
+            .map(|m| truncate(&m.decision, 48))
+            .unwrap_or_default()
+    } else {
+        picked.join(" · ")
+    }
+}
+
+/// Score a word's "case interestingness": proper nouns and code identifiers win.
+fn score_case(s: &str) -> u8 {
+    let has_underscore = s.contains('_');
+    let has_dash = s.contains('-');
+    let has_upper = s.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
+    let mixed_case = has_upper && has_lower;
+    let starts_upper = s.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false);
+    let mut score: u8 = 0;
+    if has_underscore || has_dash {
+        score += 3;
+    }
+    if mixed_case && !starts_upper {
+        // camelCase
+        score += 3;
+    } else if starts_upper && has_lower {
+        // ProperCase
+        score += 2;
+    }
+    score
+}
+
+fn render_themes(themes: &[Theme], since_ms: i64, output: OutputFormat) -> String {
+    let mut out = String::new();
+
+    // Header — window phrased as "the last N months/weeks"
+    let now = crate::workspace::now_ms();
+    let window_phrase = window_phrase_from_since(since_ms, now);
+
+    if is_ansi(output) {
+        out.push_str("\x1b[1mwhat's been on your mind\x1b[0m\n");
+        out.push_str(&format!(
+            "\x1b[2m{} theme{} surfaced from the last {}\x1b[0m\n",
+            themes.len(),
+            if themes.len() == 1 { "" } else { "s" },
+            window_phrase,
+        ));
+    } else {
+        out.push_str("what's been on your mind\n");
+        out.push_str(&format!(
+            "{} theme{} surfaced from the last {}\n",
+            themes.len(),
+            if themes.len() == 1 { "" } else { "s" },
+            window_phrase,
+        ));
+    }
+
+    if themes.is_empty() {
+        out.push('\n');
+        if is_ansi(output) {
+            out.push_str("\x1b[2m  Nothing recurring yet. Try a longer window: `unlost thread --since 1y`\x1b[0m\n");
+        } else {
+            out.push_str("  Nothing recurring yet. Try a longer window: `unlost thread --since 1y`\n");
+        }
+        return out;
+    }
+
+    let now = crate::workspace::now_ms();
+
+    for (i, theme) in themes.iter().enumerate() {
+        out.push('\n');
+        let label = theme_label(theme);
+        let last_when = relative_when_from_now(theme.latest_ts, now);
+        let projects: BTreeSet<&str> = theme
+            .members
+            .iter()
+            .filter_map(|m| m.project.as_deref())
+            .collect();
+        let project_suffix = if projects.is_empty() {
+            String::new()
+        } else if projects.len() == 1 {
+            format!(" · {}", projects.iter().next().unwrap())
+        } else {
+            format!(" · {} projects", projects.len())
+        };
+
+        // Theme header line: rank + label + meta
+        if is_ansi(output) {
+            out.push_str(&format!(
+                "  \x1b[2m{:>2}.\x1b[0m  \x1b[1;36m{}\x1b[0m\n",
+                i + 1,
+                label,
+            ));
+            out.push_str(&format!(
+                "      \x1b[2m{} appearance{}{}  ·  last seen {}\x1b[0m\n",
+                theme.members.len(),
+                if theme.members.len() == 1 { "" } else { "s" },
+                project_suffix,
+                last_when,
+            ));
+        } else {
+            out.push_str(&format!("  {:>2}.  {}\n", i + 1, label));
+            out.push_str(&format!(
+                "      {} appearance{}{}  ·  last seen {}\n",
+                theme.members.len(),
+                if theme.members.len() == 1 { "" } else { "s" },
+                project_suffix,
+                last_when,
+            ));
+        }
+
+        // Suggested command — clickable-feel cyan
+        if is_ansi(output) {
+            out.push_str(&format!(
+                "      \x1b[2;36m→ unlost thread \"{}\"\x1b[0m\n",
+                label,
+            ));
+        } else {
+            out.push_str(&format!("      → unlost thread \"{}\"\n", label));
+        }
+    }
+
+    out.push('\n');
+    if is_ansi(output) {
+        out.push_str("\x1b[2;3m  Pick one and dive in, or widen the window: `unlost thread --since 1y`\x1b[0m\n");
+    } else {
+        out.push_str("  Pick one and dive in, or widen the window: `unlost thread --since 1y`\n");
+    }
+
+    out
+}
+
+fn window_phrase_from_since(since_ms: i64, now_ms: i64) -> String {
+    let days = ((now_ms - since_ms) / (24 * 60 * 60 * 1000)).max(1);
+    if days < 14 {
+        format!("{} days", days)
+    } else if days < 60 {
+        let weeks = (days / 7).max(2);
+        format!("{} weeks", weeks)
+    } else if days < 730 {
+        let months = (days as f32 / 30.0).round().max(2.0) as i64;
+        format!("{} months", months)
+    } else {
+        let years = (days as f32 / 365.0).round().max(2.0) as i64;
+        format!("{} years", years)
+    }
+}
+
+fn relative_when_from_now(ts_ms: i64, now_ms: i64) -> String {
+    let days = ((now_ms - ts_ms) / (24 * 60 * 60 * 1000)).max(0);
+    if days == 0 {
+        "today".to_string()
+    } else if days == 1 {
+        "yesterday".to_string()
+    } else if days < 7 {
+        format!("{} days ago", days)
+    } else if days < 30 {
+        let weeks = (days / 7).max(1);
+        format!("{} week{} ago", weeks, if weeks == 1 { "" } else { "s" })
+    } else if days < 90 {
+        let weeks = days / 7;
+        format!("{} weeks ago", weeks)
+    } else {
+        let months = (days / 30).max(3);
+        format!("{} months ago", months)
+    }
 }
