@@ -910,16 +910,26 @@ pub(crate) async fn llm_thread_narrative(
     let preamble = format!(
         r#"Write the note I would want to find later after searching my own memory for "{topic}".
 
-This is me-to-me, not a report. The timeline below is raw extraction; your job is to interpret what the story says about my journey. Tell me what I was really working through, how time changed the idea, and why the older notes matter to the current one. If a gap suggests I shelved the idea or returned after processing it, say that plainly, but only if the dates support it.
+The timeline is raw extraction. Do NOT summarize it. Analyze it. I am paying for the interpretation: what this thread means, why I kept returning to it, what belief or design instinct was forming underneath, and what the older notes change about how I should read the latest ones.
+
+Important: the source may say "User" because capsules are extracted from chat logs. Treat that as "me". Never write "the user" or "User" in the answer.
+
+Useful output answers at least two of these:
+- What was I actually trying to protect, sharpen, or avoid?
+- What changed in my stance over time?
+- Why did this topic matter enough to recur?
+- What is the non-obvious implication for the system now?
+- Did a gap suggest shelving, processing, or a long return?
 
 Rules:
-- Do not restate the extracted decisions. Explain the throughline behind them.
-- Put the strongest interpretation first. No preamble like "This thread shows".
-- No enumeration. No "first/then/finally" recap.
+- Start with the strongest "so what" claim, not chronology.
+- Do not restate extracted decisions. If a sentence merely paraphrases a note, delete it.
+- Do not tell me what I did; tell me what it means.
+- No "first/then/finally" recap. No "this thread shows".
 - No "still open", "unresolved", "remains unclear". This is not task tracking.
 - Use "I" naturally; this should feel like a note from me to future me.
-- Anchor with 1-2 backticked tokens from the notes.
-- One paragraph, 2-4 short sentences, max 95 words."#,
+- Anchor with 1-2 backticked tokens from the notes, but only as evidence.
+- One paragraph, 3-5 dense sentences, max 130 words."#,
     );
 
     Ok(
