@@ -1,9 +1,10 @@
 use crate::cli::OutputFormat;
 use chrono::TimeZone;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
-const SESSION_GAP_MS: i64 = 4 * 60 * 60 * 1000;
+const WRAP_WIDTH: usize = 80;
 const DORMANCY_THRESHOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 #[allow(clippy::too_many_arguments)]
@@ -86,26 +87,19 @@ pub async fn run(
 
     hits.sort_by_key(|h| h.ts_ms);
 
-    let rendered = render_thread_map(&hits, output, &ws);
-    print!("{rendered}");
-
-    if !no_llm {
-        if output == OutputFormat::Ansi && std::env::var_os("NO_COLOR").is_none() {
-            println!("\x1b[2m{}\x1b[0m", "─".repeat(72));
-        } else {
-            println!("{}", "─".repeat(72));
-        }
-
-        let narrative = crate::narrative::llm_thread_narrative(
+    let narrative = if no_llm {
+        None
+    } else {
+        Some(crate::narrative::llm_thread_narrative(
             llm_model.as_deref(),
             &query,
             &hits,
         )
-        .await?;
+        .await?)
+    };
 
-        let rendered = crate::narrative::render_narrative(output, &narrative);
-        println!("{rendered}");
-    }
+    let rendered = render_thread_map(&query, narrative.as_deref(), &hits, output, &ws);
+    print!("{rendered}");
 
     Ok(())
 }
@@ -115,14 +109,15 @@ fn is_ansi(output: OutputFormat) -> bool {
 }
 
 fn render_thread_map(
+    topic: &str,
+    narrative: Option<&str>,
     hits: &[crate::CapsuleHit],
     output: OutputFormat,
     _current_ws: &crate::WorkspacePaths,
 ) -> String {
     let mut out = String::new();
 
-    // Header line
-    let project_ids: std::collections::BTreeSet<&str> = hits
+    let project_ids: BTreeSet<&str> = hits
         .iter()
         .filter_map(|h| h.origin_workspace_id.as_deref())
         .collect();
@@ -133,61 +128,77 @@ fn render_thread_map(
         String::new()
     };
 
-    let earliest = fmt_date(hits.first().unwrap().ts_ms);
-    let latest = fmt_date(hits.last().unwrap().ts_ms);
+    let days = group_into_days(hits);
+    let display_note_count: usize = days
+        .iter()
+        .map(|day| display_notes_for_day(day).len())
+        .sum();
+    let earliest = fmt_range_date(hits.first().unwrap().ts_ms);
+    let latest = fmt_range_date(hits.last().unwrap().ts_ms);
+
+    render_title(&mut out, topic, output);
 
     if is_ansi(output) {
         out.push_str(&format!(
-            "\x1b[2m{} moment{}{} · {} → {}\x1b[0m\n\n",
+            "\x1b[2m{} moment{} · {} note{}{} · {} → {}\x1b[0m\n\n",
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
+            display_note_count,
+            if display_note_count == 1 { "" } else { "s" },
             project_label,
             earliest,
             latest,
         ));
     } else {
         out.push_str(&format!(
-            "{} moment{}{} · {} → {}\n\n",
+            "{} moment{} · {} note{}{} · {} → {}\n\n",
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
+            display_note_count,
+            if display_note_count == 1 { "" } else { "s" },
             project_label,
             earliest,
             latest,
         ));
     }
 
-    let sessions = group_into_sessions(hits);
+    if let Some(n) = narrative {
+        let rendered = crate::narrative::render_narrative(output, n);
+        for line in rendered.lines() {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
     let mut global_idx = 0usize;
 
-    for (si, session) in sessions.iter().enumerate() {
-        // Blank line + dormancy gap between sessions
-        if si > 0 {
-            let prev_last = sessions[si - 1].last().unwrap().ts_ms;
-            let curr_first = session.first().unwrap().ts_ms;
+    for (di, day) in days.iter().enumerate() {
+        if di > 0 {
+            let prev_last = days[di - 1].last().unwrap().ts_ms;
+            let curr_first = day.first().unwrap().ts_ms;
             let gap = curr_first - prev_last;
             if gap >= DORMANCY_THRESHOLD_MS {
                 let days = gap / (24 * 60 * 60 * 1000);
                 if is_ansi(output) {
-                    out.push_str(&format!("\x1b[2m  · · ·  {} days  · · ·\x1b[0m\n\n", days));
+                    out.push_str(&format!("\n\x1b[2m        {} days later\x1b[0m\n\n", days));
                 } else {
-                    out.push_str(&format!("  · · ·  {} days  · · ·\n\n", days));
+                    out.push_str(&format!("\n        {} days later\n\n", days));
                 }
             } else {
                 out.push('\n');
             }
         }
 
-        // Session date header
-        let first_hit = session.first().unwrap();
-        let date_str = fmt_date(first_hit.ts_ms);
+        let first_hit = day.first().unwrap();
+        let date_str = fmt_day_label(first_hit.ts_ms);
 
-        // Workspace label — only show when there's a single distinct project for this session
-        let ws_labels: std::collections::BTreeSet<String> = session
+        let ws_labels: BTreeSet<String> = day
             .iter()
             .filter_map(|h| h.origin_workspace_id.as_deref())
             .filter_map(|id| crate::workspace::workspace_label_by_id(id))
             .collect();
-        let ws_tag = if ws_labels.len() == 1 {
+        let ws_tag = if project_count > 1 && ws_labels.len() == 1 {
             let label = ws_labels.iter().next().unwrap();
             if !label.is_empty() {
                 Some(label.clone())
@@ -199,18 +210,14 @@ fn render_thread_map(
         };
 
         if is_ansi(output) {
-            // Bold white date, cyan project tag, dim trailing dashes
             let tag_part = match &ws_tag {
-                Some(t) => format!("  \x1b[0;36m{}\x1b[0m", t),
+                Some(t) => format!("  \x1b[2;36m{}\x1b[0m", t),
                 None => String::new(),
             };
-            let tag_visible_len = ws_tag.as_deref().map(|t| t.len() + 2).unwrap_or(0);
-            let dash_count = 52usize.saturating_sub(date_str.len() + tag_visible_len);
             out.push_str(&format!(
-                "\x1b[1;97m{}\x1b[0m{}\x1b[2m  {}\x1b[0m\n",
+                "\x1b[1;97m{}\x1b[0m{}\n",
                 date_str,
                 tag_part,
-                "─".repeat(dash_count),
             ));
         } else {
             let tag_part = match &ws_tag {
@@ -220,9 +227,9 @@ fn render_thread_map(
             out.push_str(&format!("{}{}\n", date_str, tag_part));
         }
 
-        for hit in session.iter() {
+        for note in display_notes_for_day(day) {
             global_idx += 1;
-            let entry = render_capsule_entry(hit, global_idx, output);
+            let entry = render_capsule_entry(note.hit, note.echoes, global_idx, output);
             out.push_str(&entry);
             out.push('\n');
         }
@@ -231,65 +238,113 @@ fn render_thread_map(
     out
 }
 
-fn group_into_sessions<'a>(hits: &'a [crate::CapsuleHit]) -> Vec<Vec<&'a crate::CapsuleHit>> {
-    let mut sessions: Vec<Vec<&crate::CapsuleHit>> = Vec::new();
+fn render_title(out: &mut String, topic: &str, output: OutputFormat) {
+    let topic = topic.trim();
+    if is_ansi(output) {
+        out.push_str("\x1b[1m");
+        out.push_str(topic);
+        out.push_str("\x1b[0m\n");
+    } else {
+        out.push_str(topic);
+        out.push('\n');
+    }
+}
+
+fn group_into_days<'a>(hits: &'a [crate::CapsuleHit]) -> Vec<Vec<&'a crate::CapsuleHit>> {
+    let mut days: Vec<Vec<&crate::CapsuleHit>> = Vec::new();
     let mut current: Vec<&crate::CapsuleHit> = Vec::new();
+    let mut current_day = String::new();
 
     for hit in hits {
+        let day = fmt_day_key(hit.ts_ms);
         if current.is_empty() {
+            current_day = day;
             current.push(hit);
             continue;
         }
-        let prev_ts = current.last().unwrap().ts_ms;
-        if hit.ts_ms - prev_ts <= SESSION_GAP_MS {
+        if day == current_day {
             current.push(hit);
         } else {
-            sessions.push(std::mem::take(&mut current));
+            days.push(std::mem::take(&mut current));
+            current_day = day;
             current.push(hit);
         }
     }
     if !current.is_empty() {
-        sessions.push(current);
+        days.push(current);
     }
-    sessions
+    days
 }
 
-fn render_capsule_entry(hit: &crate::CapsuleHit, index: usize, output: OutputFormat) -> String {
-    let cap = &hit.capsule;
-    let mut lines = Vec::new();
+struct DisplayNote<'a> {
+    hit: &'a crate::CapsuleHit,
+    echoes: usize,
+}
 
-    // ── Decision line — the primary signal, full width ──────────────────────
-    let decision = cap.decision.trim();
-    let decision_display = if decision.is_empty() {
-        // Fall back to intent if no decision was extracted
-        truncate(cap.intent.trim(), 120)
-    } else {
-        decision.to_string()
-    };
+fn display_notes_for_day<'a>(hits: &[&'a crate::CapsuleHit]) -> Vec<DisplayNote<'a>> {
+    let mut notes: Vec<DisplayNote<'a>> = Vec::new();
+    for hit in hits {
+        let decision = note_text(hit);
+        if let Some(existing) = notes
+            .iter_mut()
+            .find(|note| similar_notes(&decision, &note_text(note.hit)))
+        {
+            existing.echoes += 1;
+        } else {
+            notes.push(DisplayNote { hit, echoes: 0 });
+        }
+    }
+    notes
+}
+
+fn render_capsule_entry(
+    hit: &crate::CapsuleHit,
+    echoes: usize,
+    index: usize,
+    output: OutputFormat,
+) -> String {
+    let cap = &hit.capsule;
+    let mut out = String::new();
+
+    let decision_display = note_text(hit);
 
     if is_ansi(output) {
-        // Index dim, decision bold white
-        lines.push(format!(
-            "\n  \x1b[2m{:>2}\x1b[0m  \x1b[1m{}\x1b[0m",
-            index, decision_display
-        ));
+        push_wrapped_ansi(
+            &mut out,
+            &format!("\n  \x1b[2m{:>2}\x1b[0m  \x1b[1m", index),
+            "\x1b[0m",
+            "      \x1b[1m",
+            "\x1b[0m",
+            &decision_display,
+            WRAP_WIDTH - 6,
+        );
     } else {
-        lines.push(format!("\n  {:>2}  {}", index, decision_display));
+        push_wrapped_plain(
+            &mut out,
+            &format!("\n  {:>2}  ", index),
+            "      ",
+            &decision_display,
+            WRAP_WIDTH - 6,
+        );
     }
 
-    // ── Support lines — all dim, no labels, compact ──────────────────────────
-
-    // Rationale: first sentence, max 80 chars, no "Rationale:" prefix
     if !cap.rationale.trim().is_empty() {
-        let rationale = truncate(&first_sentence(cap.rationale.trim()), 100);
+        let rationale = truncate(&humanize_rationale(&first_sentence(cap.rationale.trim())), 112);
         if is_ansi(output) {
-            lines.push(format!("      \x1b[2m{}\x1b[0m", rationale));
+            push_wrapped_ansi(
+                &mut out,
+                "\n      \x1b[2m",
+                "\x1b[0m",
+                "      \x1b[2m",
+                "\x1b[0m",
+                &rationale,
+                WRAP_WIDTH - 6,
+            );
         } else {
-            lines.push(format!("      {}", rationale));
+            push_wrapped_plain(&mut out, "\n      ", "      ", &rationale, WRAP_WIDTH - 6);
         }
     }
 
-    // Failure mode — amber warning glyph, stays visible
     if cap.failure_mode != crate::types::FailureMode::None {
         let fm = match cap.failure_mode {
             crate::types::FailureMode::None => "",
@@ -302,33 +357,156 @@ fn render_capsule_entry(hit: &crate::CapsuleHit, index: usize, output: OutputFor
         };
         if !fm.is_empty() {
             if is_ansi(output) {
-                lines.push(format!("      \x1b[33m▲ {}\x1b[0m", fm));
+                out.push_str(&format!("\n      \x1b[33m▲ {}\x1b[0m", fm));
             } else {
-                lines.push(format!("      ▲ {}", fm));
+                out.push_str(&format!("\n      ▲ {}", fm));
             }
         }
     }
 
-    // Symbols — dim, no prefix glyph
     if !cap.symbols.is_empty() {
         let syms: Vec<&str> = cap.symbols.iter().map(|s| s.as_str()).take(4).collect();
         let sym_str = syms.join("  ");
         if is_ansi(output) {
-            lines.push(format!("      \x1b[2m{}\x1b[0m", sym_str));
+            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", sym_str));
         } else {
-            lines.push(format!("      {}", sym_str));
+            out.push_str(&format!("\n      {}", sym_str));
         }
     }
 
-    lines.join("\n")
+    if echoes > 0 {
+        let line = if echoes == 1 {
+            "same idea appears once more".to_string()
+        } else {
+            format!("same idea appears {} more times", echoes)
+        };
+        if is_ansi(output) {
+            out.push_str(&format!("\n      \x1b[2m{}\x1b[0m", line));
+        } else {
+            out.push_str(&format!("\n      {}", line));
+        }
+    }
+
+    out
 }
 
-fn fmt_date(ts_ms: i64) -> String {
+fn note_text(hit: &crate::CapsuleHit) -> String {
+    let decision = hit.capsule.decision.trim();
+    if decision.is_empty() {
+        truncate(hit.capsule.intent.trim(), 160)
+    } else {
+        decision.to_string()
+    }
+}
+
+fn fmt_range_date(ts_ms: i64) -> String {
     chrono::Utc
         .timestamp_millis_opt(ts_ms)
         .single()
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| ts_ms.to_string())
+}
+
+fn fmt_day_key(ts_ms: i64) -> String {
+    chrono::Utc
+        .timestamp_millis_opt(ts_ms)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| ts_ms.to_string())
+}
+
+fn fmt_day_label(ts_ms: i64) -> String {
+    chrono::Utc
+        .timestamp_millis_opt(ts_ms)
+        .single()
+        .map(|dt| dt.format("%b %d").to_string())
+        .unwrap_or_else(|| ts_ms.to_string())
+}
+
+fn push_wrapped_plain(out: &mut String, first_prefix: &str, cont_prefix: &str, text: &str, width: usize) {
+    let lines = wrap_words(text, width);
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 {
+            out.push_str(first_prefix);
+        } else {
+            out.push('\n');
+            out.push_str(cont_prefix);
+        }
+        out.push_str(line);
+    }
+}
+
+fn push_wrapped_ansi(
+    out: &mut String,
+    first_prefix: &str,
+    first_suffix: &str,
+    cont_prefix: &str,
+    cont_suffix: &str,
+    text: &str,
+    width: usize,
+) {
+    let lines = wrap_words(text, width);
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 {
+            out.push_str(first_prefix);
+            out.push_str(line);
+            out.push_str(first_suffix);
+        } else {
+            out.push('\n');
+            out.push_str(cont_prefix);
+            out.push_str(line);
+            out.push_str(cont_suffix);
+        }
+    }
+}
+
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            lines.push(current);
+            current = word.to_string();
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn similar_notes(a: &str, b: &str) -> bool {
+    let a_tokens = note_tokens(a);
+    let b_tokens = note_tokens(b);
+    if a_tokens.is_empty() || b_tokens.is_empty() {
+        return false;
+    }
+    let intersection = a_tokens.intersection(&b_tokens).count() as f32;
+    let union = a_tokens.union(&b_tokens).count() as f32;
+    (intersection / union) >= 0.48
+}
+
+fn note_tokens(s: &str) -> BTreeSet<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|t| t.len() >= 4)
+        .collect()
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -357,4 +535,33 @@ fn first_sentence(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+fn humanize_rationale(s: &str) -> String {
+    let s = s.trim();
+    let replacements = [
+        ("User wants ", "Wanted "),
+        ("User wanted ", "Wanted "),
+        ("User needs ", "Needed "),
+        ("User needed ", "Needed "),
+        ("User agrees ", "Agreed "),
+        ("User agreed ", "Agreed "),
+        ("User highlighted ", "Flagged "),
+        ("User asked ", "Asked "),
+        ("The conversation focuses on understanding how ", "Wanted to understand how "),
+        ("The conversation focused on understanding how ", "Wanted to understand how "),
+        ("The conversation focuses on ", "Looked at "),
+        ("The conversation focused on ", "Looked at "),
+    ];
+    for (from, to) in replacements {
+        if let Some(rest) = s.strip_prefix(from) {
+            return polish_rationale(format!("{to}{rest}"));
+        }
+    }
+    polish_rationale(s.to_string())
+}
+
+fn polish_rationale(s: String) -> String {
+    s.replace(" but wants ", " but wanted ")
+        .replace("Needed code-level", "Needed a code-level")
 }

@@ -893,15 +893,17 @@ pub(crate) async fn llm_thread_narrative(
     }
 
     let preamble = format!(
-        r#"Describe the intellectual arc of "{topic}" across these {n} moments ({earliest} → {latest}).
+        r#"Write the note I would want to find later after searching my own memory for "{topic}".
 
-The reader already sees the timeline. Your job is a single short paragraph — 2-4 sentences — that captures how the *framing* of this topic shifted. Not what happened each time; how the thinking moved overall. Where did it start, what was the pivot, where did it land?
+This is me-to-me, not a report. It should feel like a short note I might have written after rereading my own working notes across these {n} moments ({earliest} → {latest}). Capture the thread of thought: what I kept circling, what changed in the framing, and what it became by the latest note.
 
 Rules:
-- No enumeration. No "first", "then", "finally" recaps.
-- No "still open", "unresolved", "remains unclear". This is not a status report.
-- Anchor each claim to 1-2 backticked tokens from the decisions. Be specific; vague arcs are useless.
-- Conversational, first person. Max 60 words."#,
+- Put the throughline first. No preamble like "Initially" or "This thread shows".
+- No enumeration. No "first/then/finally" recap.
+- No "still open", "unresolved", "remains unclear". This is not task tracking.
+- Use "I" naturally, but don't overdo it.
+- Anchor with 1-2 backticked tokens from the notes.
+- One paragraph, 2-3 short sentences, max 70 words."#,
         n = hits.len(),
     );
 
