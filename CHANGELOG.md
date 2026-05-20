@@ -5,7 +5,6 @@
 ### Changed
 
 - **`docs/index.html`**: Updated landing page to cover 0.15.0 and 0.16.0 changes: added `note+local://` to the Source Pointer Registry; enriched `unlost thread` command entry with LLM synthesis, timeline rendering details, and flag examples; enriched `unlost note` entry with `--global` flag and source pointer footer behaviour; added Claude Cowork to the "Any agent. One shared memory." hero row and the Agent Integration install block.
-
 ## [0.16.0] - 2026-05-20
 
 ### Added
