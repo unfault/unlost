@@ -92,7 +92,7 @@ fn flush_job_dedupe_key(job: &FlushJob) -> String {
     )
 }
 
-fn append_capsule_jsonl(
+pub(crate) fn append_capsule_jsonl(
     path: &std::path::Path,
     ts_ms: i64,
     conn_id: u64,

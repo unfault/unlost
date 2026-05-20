@@ -328,6 +328,19 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Command::Note {
+            text,
+            source,
+            global,
+            stdin,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::commands::note::run(
+                text, source, global, stdin, embed_model, embed_cache_dir,
+            )
+            .await?;
+        }
         Command::Model { command } => {
             unlost::commands::model::run(command).await?;
         }

@@ -659,7 +659,6 @@ fn render_anchor_header(
     let date_str = fmt_day_label(cluster.earliest_ts);
 
     if is_ansi(output) {
-        // Role keyword in cyan, then "—" date, then dim "when_phrase"
         if !role.is_empty() {
             out.push_str(&format!("\x1b[36m{}\x1b[0m  ", role));
         }
@@ -667,8 +666,17 @@ fn render_anchor_header(
         if !when_phrase.is_empty() {
             out.push_str(&format!("  \x1b[2m({})\x1b[0m", when_phrase));
         }
+        out.push('\n');
         if !cluster.provenance.is_empty() {
-            out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
+            push_wrapped_ansi(
+                out,
+                "  \x1b[2;36m",
+                "\x1b[0m",
+                "  \x1b[2;36m",
+                "\x1b[0m",
+                &cluster.provenance,
+                WRAP_WIDTH - 2,
+            );
         }
     } else {
         if !role.is_empty() {
@@ -678,8 +686,15 @@ fn render_anchor_header(
         if !when_phrase.is_empty() {
             out.push_str(&format!("  ({})", when_phrase));
         }
+        out.push('\n');
         if !cluster.provenance.is_empty() {
-            out.push_str(&format!("  {}", cluster.provenance));
+            push_wrapped_plain(
+                out,
+                "  ",
+                "  ",
+                &cluster.provenance,
+                WRAP_WIDTH - 2,
+            );
         }
     }
     out.push('\n');
@@ -827,13 +842,29 @@ fn render_timeline(
         out.push('\n');
         if is_ansi(output) {
             out.push_str(&format!("\x1b[1;97m{}\x1b[0m", date_str));
+            out.push('\n');
             if !cluster.provenance.is_empty() {
-                out.push_str(&format!("  \x1b[2;36m{}\x1b[0m", cluster.provenance));
+                push_wrapped_ansi(
+                    &mut out,
+                    "  \x1b[2;36m",
+                    "\x1b[0m",
+                    "  \x1b[2;36m",
+                    "\x1b[0m",
+                    &cluster.provenance,
+                    WRAP_WIDTH - 2,
+                );
             }
         } else {
             out.push_str(&date_str);
+            out.push('\n');
             if !cluster.provenance.is_empty() {
-                out.push_str(&format!("  {}", cluster.provenance));
+                push_wrapped_plain(
+                    &mut out,
+                    "  ",
+                    "  ",
+                    &cluster.provenance,
+                    WRAP_WIDTH - 2,
+                );
             }
         }
         out.push('\n');

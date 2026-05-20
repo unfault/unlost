@@ -43,6 +43,7 @@ unlost {version}
 {usage-heading} {usage}
 
 Memory:
+  note        Capture a manual note (terminal, stdin, any thought)
   query       Semantic search across recorded capsules
   trace       Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
   recall      Recall the story so far (proactive overview)
@@ -614,6 +615,32 @@ pub enum Command {
         /// Max LLM-generated capsules
         #[arg(long, default_value_t = 12)]
         llm_max_capsules: usize,
+    },
+
+    /// Capture a manual note into your memory (terminal, stdin, any thought).
+    Note {
+        /// The note text. Pass multiple words as separate arguments, or use --stdin.
+        text: Vec<String>,
+
+        /// Optional source label (e.g. "meeting", "idea", "reading").
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Force the global workspace even when inside a project directory.
+        #[arg(long, default_value_t = false)]
+        global: bool,
+
+        /// Read the note text from stdin instead of positional args.
+        #[arg(long, default_value_t = false)]
+        stdin: bool,
+
+        /// Embedding model (fastembed). Default: Xenova/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
     },
 
     /// Manage local models (download, etc.)

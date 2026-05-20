@@ -144,6 +144,19 @@ pub fn resolve_source_label(pointer: &str) -> Option<String> {
                 Some(format!("CHANGELOG {version}"))
             }
         }
+        "note+local" => {
+            let ts = fragment.unwrap_or("");
+            if ts.is_empty() {
+                Some("manual note".to_string())
+            } else {
+                // ts is epoch ms — render as date.
+                let secs = ts.parse::<i64>().ok().map(|ms| ms / 1000).unwrap_or(0);
+                let label = chrono::DateTime::from_timestamp(secs, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| ts.to_string());
+                Some(format!("manual note ({label})"))
+            }
+        }
         // Unknown scheme: pass through verbatim so we never silently drop info.
         _ => Some(pointer.to_string()),
     }
