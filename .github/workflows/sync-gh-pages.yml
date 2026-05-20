@@ -27,14 +27,16 @@ jobs:
           git worktree add gh-pages-wt gh-pages
 
           install -m 0755 docs/install.sh gh-pages-wt/install.sh
+          install -m 0644 docs/index.html gh-pages-wt/index.html
+          cp -r docs/public/. gh-pages-wt/public/
 
           if [ -z "$(git -C gh-pages-wt status --porcelain)" ]; then
             echo "No changes to commit."
             exit 0
           fi
 
-          git -C gh-pages-wt add install.sh
-          git -C gh-pages-wt -c user.name='github-actions[bot]' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'docs: sync install.sh'
+          git -C gh-pages-wt add install.sh index.html public/
+          git -C gh-pages-wt -c user.name='github-actions[bot]' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'docs: sync install.sh and index.html'
           git -C gh-pages-wt push origin gh-pages
 
       - name: Cleanup worktree
