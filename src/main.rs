@@ -381,6 +381,12 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 unlost::companion::shims::copilot::run(embed_model, embed_cache_dir).await?;
             }
+            ShimCommand::Cowork {
+                embed_model,
+                embed_cache_dir,
+            } => {
+                unlost::companion::shims::cowork::run(embed_model, embed_cache_dir).await?;
+            }
             ShimCommand::Replay { command } => {
                 handle_replay(command).await?;
             }
@@ -491,6 +497,39 @@ async fn handle_replay(command: ReplayCommand) -> anyhow::Result<()> {
                 embed_model,
                 embed_cache_dir,
                 git_grounding,
+            )
+            .await?;
+        }
+        ReplayCommand::Cowork {
+            path,
+            transcript_path,
+            session_id,
+            from_start,
+            dedupe,
+            no_extraction,
+            full_extraction,
+            clear,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            let mode = if no_extraction {
+                unlost::types::ExtractionMode::None
+            } else if full_extraction {
+                unlost::types::ExtractionMode::Full
+            } else {
+                unlost::types::ExtractionMode::Hybrid
+            };
+
+            unlost::companion::shims::cowork::replay(
+                path,
+                transcript_path,
+                session_id,
+                from_start,
+                dedupe,
+                clear,
+                mode,
+                embed_model,
+                embed_cache_dir,
             )
             .await?;
         }

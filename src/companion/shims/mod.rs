@@ -4,5 +4,6 @@
 
 pub mod claude;
 pub mod copilot;
+pub mod cowork;
 pub mod opencode;
 pub mod opencode_stdio;

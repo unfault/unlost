@@ -151,6 +151,10 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
             configure_copilot(&path)?;
         }
 
+        AgentCommand::Cowork { path, global } => {
+            configure_cowork(&path, global)?;
+        }
+
         AgentCommand::Mcp {
             target,
             path,
@@ -258,6 +262,102 @@ fn configure_claude(path: &str, global: bool) -> anyhow::Result<()> {
     println!("configured ({scope}): {}", cfg_path.display());
 
     write_claude_walkthrough_skill(&cfg_path)?;
+    Ok(())
+}
+
+/// Write the unlost plugin package for Claude Cowork.
+///
+/// Cowork uses a plugin directory (not a settings JSON like Claude Code).
+/// The plugin is written to:
+///   global:      ~/.config/claude/plugins/unlost/
+///   per-project: <project>/.claude/plugins/unlost/
+///
+/// The user loads it via Customize → Plugins → install from file in the Cowork UI.
+fn configure_cowork(path: &str, global: bool) -> anyhow::Result<()> {
+    let plugin_dir = if global {
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
+            .map_err(|_| anyhow::anyhow!("could not determine home directory"))?;
+        home.join(".config").join("claude").join("plugins").join("unlost")
+    } else {
+        let root =
+            crate::workspace::git_toplevel(std::path::Path::new(path)).unwrap_or_else(|| {
+                crate::workspace::canonicalize_dir(std::path::Path::new(path))
+                    .unwrap_or_else(|_| std::path::PathBuf::from(path))
+            });
+        let root = crate::workspace::canonicalize_dir(&root)?;
+        root.join(".claude").join("plugins").join("unlost")
+    };
+
+    std::fs::create_dir_all(plugin_dir.join("hooks"))?;
+
+    // plugin.json — manifest
+    let plugin_json = serde_json::json!({
+        "name": "unlost",
+        "version": "1.0.0",
+        "description": "Unlost memory for Claude Cowork: friction detection and automatic session recording.",
+        "author": "unfault"
+    });
+    std::fs::write(
+        plugin_dir.join("plugin.json"),
+        serde_json::to_string_pretty(&plugin_json)?,
+    )?;
+
+    // hooks/hooks.json — UserPromptSubmit (friction) + Stop (record)
+    let hooks_json = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "unlost shim cowork",
+                            "timeout": 10
+                        }
+                    ]
+                }
+            ],
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "unlost shim cowork",
+                            "async": true,
+                            "timeout": 60
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+    std::fs::write(
+        plugin_dir.join("hooks").join("hooks.json"),
+        serde_json::to_string_pretty(&hooks_json)?,
+    )?;
+
+    // .mcp.json — registers unlost MCP server as a connector
+    let mcp_json = serde_json::json!({
+        "mcpServers": {
+            "unlost": {
+                "type": "stdio",
+                "command": "unlost",
+                "args": ["mcp", "serve", "--allow-writes"]
+            }
+        }
+    });
+    std::fs::write(
+        plugin_dir.join(".mcp.json"),
+        serde_json::to_string_pretty(&mcp_json)?,
+    )?;
+
+    let scope = if global { "global" } else { "project" };
+    println!("configured ({scope}): {}", plugin_dir.display());
+    println!();
+    println!("Next: open Cowork → Customize → Plugins → install from file");
+    println!("      and select: {}", plugin_dir.display());
+
     Ok(())
 }
 
