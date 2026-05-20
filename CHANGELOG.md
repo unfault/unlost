@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-20
+
 ### Added
 
 - **Claude Cowork integration**: New `unlost shim cowork` hook shim, `unlost shim replay cowork` backfill command, `unlost config agent cowork` installer, and `agents/cowork/` plugin package. Cowork shares Claude Code's hook wire format and JSONL transcript schema, so the implementation reuses the same parsing pipeline. Installing the plugin gives Cowork friction detection (`UserPromptSubmit`) and automatic session recording (`Stop`), plus the unlost MCP connector for in-session memory queries.
