@@ -10,6 +10,7 @@ pub mod inspect;
 pub mod interventions;
 pub mod metrics;
 pub mod model;
+pub mod note;
 pub mod pr_comment;
 pub mod query;
 pub mod recall;

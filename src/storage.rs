@@ -180,12 +180,18 @@ pub(crate) async fn ensure_capsules_table(db: &Connection) -> anyhow::Result<lan
                 add_str("source_pointer", &mut exprs);
 
                 if !exprs.is_empty() {
-                    let _ = t
+                    if let Err(e) = t
                         .add_columns(
                             lancedb::table::NewColumnTransform::SqlExpressions(exprs),
                             None,
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(
+                            "schema evolution failed ({}); run `unlost reindex` to rebuild",
+                            e
+                        );
+                    }
                 }
             }
 
@@ -2625,11 +2631,15 @@ pub(crate) async fn insert_capsule_row(
     .context("failed to build insert batch")?;
 
     let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-    table
-        .add(batches)
-        .execute()
-        .await
-        .context("lancedb insert failed")?;
+    if let Err(e) = table.add(batches).execute().await {
+        let msg = format!("{e:#}");
+        if msg.contains("Append with different schema") {
+            anyhow::bail!(
+                "table schema mismatch — run `unlost reindex` to rebuild the index\n\n  {e}"
+            );
+        }
+        anyhow::bail!("lancedb insert failed: {e}");
+    }
     Ok(())
 }
 
