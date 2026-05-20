@@ -766,6 +766,17 @@ pub enum ShimCommand {
         embed_cache_dir: Option<String>,
     },
 
+    /// Run the Claude Cowork hooks shim (reads hook JSON from stdin)
+    Cowork {
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
     /// Replay/backfill agent transcripts into unlost
     Replay {
         #[command(subcommand)]
@@ -876,6 +887,49 @@ pub enum ReplayCommand {
         #[arg(long, default_value_t = false)]
         git_grounding: bool,
     },
+
+    /// Replay a Claude Cowork transcript file into the current workspace
+    Cowork {
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Cowork transcript .jsonl file or directory path
+        #[arg(long)]
+        transcript_path: String,
+
+        /// Session id (defaults to transcript filename stem)
+        #[arg(long)]
+        session_id: Option<String>,
+
+        /// Force replay from beginning
+        #[arg(long, default_value_t = true)]
+        from_start: bool,
+
+        /// Skip turns already replayed (best-effort)
+        #[arg(long, default_value_t = true)]
+        dedupe: bool,
+
+        /// Disable LLM extraction (fast, zero cost)
+        #[arg(long, default_value_t = false)]
+        no_extraction: bool,
+
+        /// Enable full LLM extraction for every turn (slow, expensive)
+        #[arg(long, default_value_t = false)]
+        full_extraction: bool,
+
+        /// Clear existing replay state before starting
+        #[arg(long, default_value_t = false)]
+        clear: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -927,6 +981,17 @@ pub enum AgentCommand {
         /// Workspace path (defaults to current directory; uses git toplevel)
         #[arg(long, default_value = ".")]
         path: String,
+    },
+
+    /// Configure Claude Cowork to use unlost (writes plugin package)
+    Cowork {
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Write plugin to global plugin dir (~/.config/claude/plugins/) instead of per-project
+        #[arg(long)]
+        global: bool,
     },
 
     /// Configure any MCP-aware agent to use unlost via the MCP server

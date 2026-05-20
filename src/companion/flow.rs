@@ -32,6 +32,7 @@ pub(crate) enum AgentKind {
     OpenCode,
     Claude,
     Copilot,
+    Cowork,
 }
 
 impl AgentKind {
@@ -41,6 +42,7 @@ impl AgentKind {
             AgentKind::OpenCode => "opencode",
             AgentKind::Claude => "claude",
             AgentKind::Copilot => "copilot",
+            AgentKind::Cowork => "cowork",
         }
     }
 }

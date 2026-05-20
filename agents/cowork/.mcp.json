@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "unlost": {
+      "type": "stdio",
+      "command": "unlost",
+      "args": ["mcp", "serve", "--allow-writes"]
+    }
+  }
+}

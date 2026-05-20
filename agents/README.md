@@ -13,3 +13,7 @@ Claude hooks integration. Configures `UserPromptSubmit` and `Stop` hooks that in
 ### OpenCode (`agents/opencode/`)
 
 OpenCode plugin integration. Configures `opencode.json` to load the unlost plugin, which runs `unlost shim opencode` over stdio.
+
+### Cowork (`agents/cowork/`)
+
+Claude Cowork plugin integration. A plugin package (hooks + MCP connector) installed via the Cowork plugin UI. Uses `UserPromptSubmit` and `Stop` hooks — the same transcript format as Claude Code — so the implementation shares the same parsing pipeline.
