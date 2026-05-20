@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`docs/index.html`**: Updated landing page to cover 0.15.0 and 0.16.0 changes: added `note+local://` to the Source Pointer Registry; enriched `unlost thread` command entry with LLM synthesis, timeline rendering details, and flag examples; enriched `unlost note` entry with `--global` flag and source pointer footer behaviour; added Claude Cowork to the "Any agent. One shared memory." hero row and the Agent Integration install block.
+
+## [0.16.0] - 2026-05-20
+
 ### Added
 
 - **Claude Cowork integration**: New `unlost shim cowork` hook shim, `unlost shim replay cowork` backfill command, `unlost config agent cowork` installer, and `agents/cowork/` plugin package. Cowork shares Claude Code's hook wire format and JSONL transcript schema, so the implementation reuses the same parsing pipeline. Installing the plugin gives Cowork friction detection (`UserPromptSubmit`) and automatic session recording (`Stop`), plus the unlost MCP connector for in-session memory queries.
