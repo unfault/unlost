@@ -2406,7 +2406,7 @@ pub(crate) async fn insert_capsule_row(
     head_sha: Option<&str>,
     // git SHA of the commit that landed during this turn, if detected. Sparse.
     commit_sha: Option<&str>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     tracing::info!(
         conn_id,
         exchange_seq,
@@ -2640,7 +2640,7 @@ pub(crate) async fn insert_capsule_row(
         }
         anyhow::bail!("lancedb insert failed: {e}");
     }
-    Ok(())
+    Ok(id)
 }
 
 /// A pre-assembled row ready for batch insertion.

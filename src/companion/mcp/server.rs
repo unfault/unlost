@@ -582,7 +582,7 @@ impl UnlostMcpServer {
             .await?;
         let _ = crate::storage::ensure_capsules_table(&db).await?;
 
-        crate::storage::insert_capsule_row(
+        let id = crate::storage::insert_capsule_row(
             &db,
             &embedder,
             0,
@@ -610,14 +610,8 @@ impl UnlostMcpServer {
             None,
         );
 
-        // Return a stable reference that the agent can use to recall this note.
-        // The internal UUID is not exposed by insert_capsule_row; use the
-        // source_pointer URI as an opaque id for citation purposes.
-        let note_ref = meta.source_pointer.clone()
-            .unwrap_or_else(|| format!("note+mcp://{ts_ms}"));
-
         Ok(NoteOutput {
-            id: note_ref,
+            id,
             persisted_at: ts_to_rfc3339(ts_ms),
         })
     }
