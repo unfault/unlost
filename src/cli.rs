@@ -699,6 +699,13 @@ pub enum Command {
         path: String,
     },
 
+    /// Start the MCP (Model Context Protocol) server over stdio
+    #[command(name = "mcp")]
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+
     /// Create or list workspace checkpoints (pre-synthesized session story segments)
     Checkpoint {
         /// List recent checkpoints instead of creating a new one
@@ -921,6 +928,25 @@ pub enum AgentCommand {
         #[arg(long, default_value = ".")]
         path: String,
     },
+
+    /// Configure any MCP-aware agent to use unlost via the MCP server
+    Mcp {
+        /// Target agent: claude | opencode | copilot | generic
+        #[arg(long, default_value = "generic")]
+        target: String,
+
+        /// Workspace path (defaults to current directory; uses git toplevel)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Install globally (in user-level config) instead of per-project
+        #[arg(long, default_value_t = false)]
+        global: bool,
+
+        /// Enable write tools (unlost_note). Disabled by default.
+        #[arg(long, default_value_t = false)]
+        allow_writes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -986,6 +1012,32 @@ pub enum LlmCommand {
 
     /// Remove LLM configuration
     Remove,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    /// Run the MCP server over stdio (for use as an MCP host tool)
+    Serve {
+        /// Allow write tools (unlost_note). Disabled by default.
+        #[arg(long, default_value_t = false)]
+        allow_writes: bool,
+
+        /// Disable cross-workspace lookups (unlost_thread will only query current workspace).
+        #[arg(long, default_value_t = false)]
+        no_cross_workspace: bool,
+
+        /// Workspace path (defaults to current directory → git toplevel).
+        #[arg(long, default_value = ".")]
+        workspace: String,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

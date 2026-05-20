@@ -84,6 +84,15 @@ unlost config agent copilot --path .
 ```
 This writes `.github/hooks/unlost.json` and installs a Copilot skill at `.github/copilot/skills/unlost/`.
 
+**Any MCP-aware agent** (Claude Code, OpenCode, Copilot, or any host that supports MCP):
+```bash
+unlost config agent mcp --target claude    # Claude Code
+unlost config agent mcp --target opencode  # OpenCode
+unlost config agent mcp --target copilot  # GitHub Copilot
+unlost config agent mcp --target generic  # print snippet for manual paste
+```
+This starts `unlost mcp serve` as an MCP stdio server, exposing 7 task-shaped tools: `unlost_recall`, `unlost_trace_decision`, `unlost_challenge`, `unlost_thread`, `unlost_orient`, `unlost_note`, `unlost_capsule_get`. All read tools run on the no-LLM fast path. See [`agents/mcp/README.md`](agents/mcp/README.md) for details.
+
 ### 2. (Optional) Configure extraction LLM
 By default, unlost uses whatever LLM your agent is configured with. You can
 override this for better results (e.g., using a smaller/faster model for

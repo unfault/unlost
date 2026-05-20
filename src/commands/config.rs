@@ -1,4 +1,5 @@
 use crate::cli::{AgentCommand, ConfigCommand, LlmCommand};
+
 use crate::config::LlmConfig;
 
 fn ensure_object(v: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
@@ -148,6 +149,15 @@ fn handle_agent_command(cmd: AgentCommand) -> anyhow::Result<()> {
 
         AgentCommand::Copilot { path } => {
             configure_copilot(&path)?;
+        }
+
+        AgentCommand::Mcp {
+            target,
+            path,
+            global,
+            allow_writes,
+        } => {
+            configure_mcp(&target, &path, global, allow_writes)?;
         }
     }
     Ok(())
@@ -770,6 +780,187 @@ fn write_copilot_skill(project_root: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&skills_dir)?;
     std::fs::write(&skill_path, COPILOT_SKILL_CONTENT)?;
     println!("skill: {}", skill_path.display());
+    Ok(())
+}
+
+fn configure_mcp(target: &str, path: &str, global: bool, allow_writes: bool) -> anyhow::Result<()> {
+    let writes_flag = if allow_writes { " --allow-writes" } else { "" };
+    let serve_cmd = format!("unlost mcp serve{writes_flag}");
+
+    match target {
+        "opencode" => {
+            let cfg_path = if global {
+                opencode_global_config_path()?
+            } else {
+                let root = crate::workspace::git_toplevel(std::path::Path::new(path))
+                    .unwrap_or_else(|| {
+                        crate::workspace::canonicalize_dir(std::path::Path::new(path))
+                            .unwrap_or_else(|_| std::path::PathBuf::from(path))
+                    });
+                let root = crate::workspace::canonicalize_dir(&root)?;
+                root.join("opencode.json")
+            };
+
+            if let Some(parent) = cfg_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut json = match std::fs::read_to_string(&cfg_path) {
+                Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            let obj = ensure_object(&mut json);
+            let mcp = obj
+                .entry("mcp")
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            let mcp_obj = ensure_object(mcp);
+            let mut cmd_args = vec!["unlost", "mcp", "serve"];
+            if allow_writes {
+                cmd_args.push("--allow-writes");
+            }
+            mcp_obj.insert(
+                "unlost".to_string(),
+                serde_json::json!({
+                    "type": "local",
+                    "command": cmd_args
+                }),
+            );
+
+            let rendered = serde_json::to_string_pretty(&json)?;
+            std::fs::write(&cfg_path, rendered)?;
+            let scope = if global { "global" } else { "project" };
+            println!("configured ({scope}): {}", cfg_path.display());
+        }
+
+        "claude" => {
+            let cfg_path = if global {
+                let home = std::env::var("HOME")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|_| std::env::var("USERPROFILE").map(std::path::PathBuf::from))
+                    .map_err(|_| anyhow::anyhow!("could not determine home directory"))?;
+                home.join(".claude.json")
+            } else {
+                let root =
+                    crate::workspace::git_toplevel(std::path::Path::new(path)).unwrap_or_else(|| {
+                        crate::workspace::canonicalize_dir(std::path::Path::new(path))
+                            .unwrap_or_else(|_| std::path::PathBuf::from(path))
+                    });
+                let root = crate::workspace::canonicalize_dir(&root)?;
+                root.join(".claude").join("settings.local.json")
+            };
+
+            if let Some(parent) = cfg_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut json = match std::fs::read_to_string(&cfg_path) {
+                Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            let obj = ensure_object(&mut json);
+            let mcp = obj
+                .entry("mcpServers")
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            let mcp_obj = ensure_object(mcp);
+            let mut args = vec!["mcp", "serve"];
+            if allow_writes {
+                args.push("--allow-writes");
+            }
+            mcp_obj.insert(
+                "unlost".to_string(),
+                serde_json::json!({
+                    "command": "unlost",
+                    "args": args
+                }),
+            );
+
+            let rendered = serde_json::to_string_pretty(&json)?;
+            std::fs::write(&cfg_path, rendered)?;
+            let scope = if global { "global" } else { "project" };
+            println!("configured ({scope}): {}", cfg_path.display());
+        }
+
+        "copilot" => {
+            // Copilot MCP: .copilot/mcp.json in the workspace root
+            let root = crate::workspace::git_toplevel(std::path::Path::new(path)).unwrap_or_else(|| {
+                crate::workspace::canonicalize_dir(std::path::Path::new(path))
+                    .unwrap_or_else(|_| std::path::PathBuf::from(path))
+            });
+            let root = crate::workspace::canonicalize_dir(&root)?;
+            let mcp_dir = root.join(".copilot");
+            std::fs::create_dir_all(&mcp_dir)?;
+            let mcp_path = mcp_dir.join("mcp.json");
+
+            let mut json = match std::fs::read_to_string(&mcp_path) {
+                Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            let obj = ensure_object(&mut json);
+            let servers = obj
+                .entry("servers")
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            let servers_obj = ensure_object(servers);
+            let mut args = vec!["mcp", "serve"];
+            if allow_writes {
+                args.push("--allow-writes");
+            }
+            servers_obj.insert(
+                "unlost".to_string(),
+                serde_json::json!({
+                    "command": "unlost",
+                    "args": args
+                }),
+            );
+
+            let rendered = serde_json::to_string_pretty(&json)?;
+            std::fs::write(&mcp_path, rendered)?;
+            println!("configured (project): {}", mcp_path.display());
+        }
+
+        _ => {
+            // Generic: print the snippet to stdout
+            println!("# Add to your MCP host's config:");
+            println!();
+            println!("## Claude Code (~/.claude.json or .claude/settings.local.json):");
+            println!();
+            println!(r#"  "mcpServers": {{"#);
+            println!(r#"    "unlost": {{"#);
+            println!(r#"      "command": "unlost","#);
+            let args_str = if allow_writes {
+                r#"      "args": ["mcp", "serve", "--allow-writes"]"#
+            } else {
+                r#"      "args": ["mcp", "serve"]"#
+            };
+            println!("{args_str}");
+            println!(r#"    }}"#);
+            println!(r#"  }}"#);
+            println!();
+            println!("## OpenCode (opencode.json or ~/.config/opencode/opencode.json):");
+            println!();
+            println!(r#"  "mcp": {{"#);
+            println!(r#"    "unlost": {{"#);
+            println!(r#"      "type": "local","#);
+            println!(r#"      "command": {serve_cmd:?}"#);
+            println!(r#"    }}"#);
+            println!(r#"  }}"#);
+        }
+    }
+
     Ok(())
 }
 

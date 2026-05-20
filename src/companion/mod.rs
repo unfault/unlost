@@ -16,4 +16,5 @@
 //!   - (future) `codex`: OpenAI Codex integration.
 
 pub mod flow;
+pub mod mcp;
 pub mod shims;

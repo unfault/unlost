@@ -26,6 +26,7 @@ pub mod workspace;
 #[cfg(test)]
 pub mod test_support;
 
+pub use crate::constants::DEFAULT_EMBED_MODEL;
 pub use crate::llm::llm_extract;
 pub use crate::types::IntentCapsule;
 pub use crate::types::{

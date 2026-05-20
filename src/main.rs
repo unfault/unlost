@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use clap::{CommandFactory, Parser};
-use unlost::cli::{Cli, Command, OutputFormat, ReplayCommand, ShimCommand};
+use unlost::cli::{Cli, Command, McpCommand, OutputFormat, ReplayCommand, ShimCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,6 +28,8 @@ async fn main() -> anyhow::Result<()> {
         &cli.command,
         Some(Command::Shim { .. }) | Some(Command::Replay { .. })
     );
+    // MCP server uses file-only logging (stdout is the protocol channel).
+    let is_mcp = matches!(&cli.command, Some(Command::Mcp { .. }));
     let default_level = if is_shim { "info" } else { "warn" };
     let log_level = cli
         .log
@@ -45,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Keep the guard alive for the duration of main()
-    let _log_guard = if is_shim {
+    let _log_guard = if is_shim || is_mcp {
         Some(unlost::logging::init_logging_file_only(filter))
     } else if is_long_running {
         Some(unlost::logging::init_logging(filter))
@@ -386,6 +388,24 @@ async fn main() -> anyhow::Result<()> {
         Command::Where { path } => {
             unlost::commands::where_cmd::run(path)?;
         }
+        Command::Mcp { command } => match command {
+            McpCommand::Serve {
+                allow_writes,
+                no_cross_workspace,
+                workspace,
+                embed_model,
+                embed_cache_dir,
+            } => {
+                unlost::commands::mcp::run(
+                    allow_writes,
+                    no_cross_workspace,
+                    workspace,
+                    embed_model,
+                    embed_cache_dir,
+                )
+                .await?;
+            }
+        },
         Command::Checkpoint {
             list,
             session_id,

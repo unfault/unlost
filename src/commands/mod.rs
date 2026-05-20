@@ -1,5 +1,6 @@
 pub mod brief;
 pub mod challenge;
+pub mod mcp;
 pub mod checkpoint;
 pub mod clear;
 pub mod config;
