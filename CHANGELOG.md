@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-20
+
 ### Added
 
 - **MCP server (`unlost mcp serve`)**: New Model Context Protocol stdio server exposing 7 task-shaped tools for agents: `unlost_recall` (workspace memory lookup), `unlost_trace_decision` (causal chain), `unlost_challenge` (pressure-test a proposal), `unlost_thread` (cross-workspace topic history), `unlost_orient` (recent touches + drift signal), `unlost_capsule_get` (fetch capsule by id), and `unlost_note` (write a decision, opt-in). All read tools run on the no-LLM fast path targeting < 250ms per call. Write tools are gated behind `--allow-writes` (default off). Wired via `unlost config agent mcp --target <claude|opencode|copilot|generic>`. Uses `rmcp` 1.7.0 for MCP protocol compliance. See `agents/mcp/README.md`.
@@ -30,6 +32,7 @@
 ### Fixed
 
 - **Silent schema evolution failure**: `ensure_capsules_table` now logs a warning when `add_columns` fails instead of swallowing the error. Schema-mismatch insert errors in `insert_capsule_row` produce an actionable message pointing to `unlost reindex`.
+- **`unlost_note` capsule id**: `insert_capsule_row` now returns the UUID it generates, so `unlost_note` returns the real capsule id. Previously it returned the source-pointer URI, which is not the `id` column — making the returned id unusable with `unlost_capsule_get`.
 
 ## [0.13.1] - 2026-03-03
 

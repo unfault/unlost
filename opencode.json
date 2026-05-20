@@ -1,5 +1,16 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "unlost": {
+      "command": [
+        "/home/sylvain/dev/apps/unlost",
+        "mcp",
+        "serve",
+        "--allow-writes"
+      ],
+      "type": "local"
+    }
+  },
   "plugin": [
     "@unfault/unlost-opencode"
   ]

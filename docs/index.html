@@ -501,7 +501,7 @@
             Hook unlost into your agent. This installs the Unlost agent skill and configures the necessary hooks.
           </p>
           <pre><code># Claude Code - one command, works everywhere
-unlost config agent claudecode --global
+unlost config agent claude --global
 
 # OpenCode - opt-in per repository
 cd your-project
@@ -509,7 +509,10 @@ unlost config agent opencode --path .
 
 # GitHub Copilot CLI - opt-in per repository
 cd your-project
-unlost config agent copilot --path .</code></pre>
+unlost config agent copilot --path .
+
+# Any MCP-aware agent (Claude Code, OpenCode, Copilot, or any MCP host)
+unlost config agent mcp --target claude   # or opencode / copilot / generic</code></pre>
         </div>
 
         <div>
@@ -595,6 +598,16 @@ unlost trace "why is the timeout 30s?"</code></pre>
           <pre><code>unlost explore "should we keep lancedb or move to sqlite+fts?"</code></pre>
         </div>
 
+        <div id="thread">
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost thread</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Re-walk a trail of thought: how a topic evolved across all your projects over time. Shows where an idea appeared, how it changed, and what the long gaps between visits mean.</p>
+          <pre><code>unlost thread "embedding model performance"
+unlost thread "retry logic" --since 6m</code></pre>
+        </div>
+
         <!-- Reflect -->
         <div id="reflect">
           <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
@@ -677,6 +690,27 @@ unlost reflect --mode coach --session ses_3a79</code></pre>
           </div>
           <p class="text-midnight-violet-950/60 mb-4">Manage configuration (LLM provider, agent integrations, etc.).</p>
           <pre><code>unlost config</code></pre>
+        </div>
+
+        <div id="note">
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost note</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Capture a manual note into workspace memory — a thought, a meeting decision, a constraint discovered outside the agent session. Fully queryable alongside recorded sessions.</p>
+          <pre><code>unlost note "decided to keep lancedb — sqlite FTS doesn't support ANN"
+echo "meeting notes..." | unlost note --stdin --source meeting</code></pre>
+        </div>
+
+        <div id="mcp">
+          <div class="flex flex-col sm:flex-row sm:justify-between sm:items-baseline mb-3 gap-2">
+            <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost mcp serve</h3>
+            <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#00a483]/10 text-[#00a483] w-fit">Agent API</span>
+          </div>
+          <p class="text-midnight-violet-950/60 mb-4">Start an MCP (Model Context Protocol) stdio server giving agents structured, direct access to workspace memory — no LLM narration, no ANSI prose. Seven tools: <code>unlost_recall</code>, <code>unlost_trace_decision</code>, <code>unlost_challenge</code>, <code>unlost_thread</code>, <code>unlost_orient</code>, <code>unlost_capsule_get</code>, and <code>unlost_note</code>. All read tools run on the no-LLM fast path. Write tools opt-in.</p>
+          <pre><code>unlost mcp serve
+unlost mcp serve --allow-writes</code></pre>
+          <small class="text-midnight-violet-950/60 block mt-2 text-sm">Wire automatically with <code>unlost config agent mcp --target &lt;claude|opencode|copilot|generic&gt;</code>.</small>
         </div>
       </div>
     </div>
