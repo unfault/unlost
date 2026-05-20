@@ -161,6 +161,10 @@
           <img src="public/claude-3.svg" alt="Claude Code" class="h-full object-contain opacity-90">
         </div>
 
+        <div class="flex items-center justify-center h-10 text-midnight-violet-950/70 font-['Lexend'] font-medium text-sm tracking-tight">
+          Claude Cowork
+        </div>
+
         <div class="flex items-center justify-center h-10">
           <img src="public/opencode-wordmark-simple-light.svg" alt="OpenCode" class="h-full object-contain opacity-90">
         </div>
@@ -503,6 +507,10 @@
           <pre><code># Claude Code - one command, works everywhere
 unlost config agent claude --global
 
+# Claude Cowork - per-project or global
+unlost config agent cowork --path .
+unlost config agent cowork --global
+
 # OpenCode - opt-in per repository
 cd your-project
 unlost config agent opencode --path .
@@ -511,7 +519,7 @@ unlost config agent opencode --path .
 cd your-project
 unlost config agent copilot --path .
 
-# Any MCP-aware agent (Claude Code, OpenCode, Copilot, or any MCP host)
+# Any MCP-aware agent (Claude Code, OpenCode, Copilot, Cowork, or any MCP host)
 unlost config agent mcp --target claude   # or opencode / copilot / generic</code></pre>
         </div>
 
@@ -603,9 +611,11 @@ unlost trace "why is the timeout 30s?"</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost thread</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Re-walk a trail of thought: how a topic evolved across all your projects over time. Shows where an idea appeared, how it changed, and what the long gaps between visits mean.</p>
+          <p class="text-midnight-violet-950/60 mb-4">Map when a topic was explored over time, across all registered projects. Results open with an LLM synthesis of the journey — what the topic meant, why it recurred, and what older notes change about the current reading — followed by a day-grouped, recent-first timeline with arc duration in the header and backward-in-time gap markers. Cross-workspace by default; falls back to extracted notes and a dim configuration hint if no LLM is configured.</p>
           <pre><code>unlost thread "embedding model performance"
-unlost thread "retry logic" --since 6m</code></pre>
+unlost thread "retry logic" --since 6m
+unlost thread "auth strategy" --no-llm --limit 20
+unlost thread "timeout" --output plain</code></pre>
         </div>
 
         <!-- Reflect -->
@@ -697,9 +707,10 @@ unlost reflect --mode coach --session ses_3a79</code></pre>
             <h3 class="text-base sm:text-lg font-semibold text-fiery-terracotta">unlost note</h3>
             <span class="px-3 py-1 text-xs font-medium rounded-full bg-[#bd51ea]/10 text-[#bd51ea] w-fit">Memory</span>
           </div>
-          <p class="text-midnight-violet-950/60 mb-4">Capture a manual note into workspace memory — a thought, a meeting decision, a constraint discovered outside the agent session. Fully queryable alongside recorded sessions.</p>
+          <p class="text-midnight-violet-950/60 mb-4">Capture a manual note into workspace memory — a thought, a meeting decision, a constraint discovered outside the agent session. Fully queryable alongside recorded sessions. If no project is detected in the current directory, the note lands in a global workspace; <code>--global</code> forces this regardless. Each note gets a <code class="text-xs">note+local://</code> source pointer, so it shows up with a <em>manual note (YYYY-MM-DD)</em> footer in <code>trace</code> and <code>thread</code> results.</p>
           <pre><code>unlost note "decided to keep lancedb — sqlite FTS doesn't support ANN"
-echo "meeting notes..." | unlost note --stdin --source meeting</code></pre>
+echo "meeting notes..." | unlost note --stdin --source meeting
+unlost note "cross-cutting constraint" --global</code></pre>
         </div>
 
         <div id="mcp">
@@ -897,8 +908,9 @@ unlost mcp serve --allow-writes</code></pre>
                 <code class="text-xs">claude+jsonl://</code> (line-precise to transcript),
                 <code class="text-xs">opencode+message://</code> (session + message ID),
                 <code class="text-xs">copilot+events://</code> (byte-offset into events log),
-                <code class="text-xs">git+commit://</code> (pinned to SHA), or
-                <code class="text-xs">changelog+version://</code> (pinned to version string).
+                <code class="text-xs">git+commit://</code> (pinned to SHA),
+                <code class="text-xs">changelog+version://</code> (pinned to version string), or
+                <code class="text-xs">note+local://</code> (timestamp-pinned to a manual note, renders as <em>manual note (YYYY-MM-DD)</em> in query footers).
                 A <code>resolve_source_label</code> helper renders these as human-readable footers in every query command.
               </p>
             </div>
