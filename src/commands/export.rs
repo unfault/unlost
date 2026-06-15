@@ -255,10 +255,15 @@ pub async fn run(
     let mut project_symbol_counts: HashMap<String, usize> = HashMap::new();
 
     // Collect: project → symbol → [&ExportCapsule]
+    // Only attribute a capsule to a symbol if it appears in the first 3 positions
+    // of the symbol list. Position encodes LLM-assigned relevance: hub files like
+    // src/main.rs appear at position 10+ on capsules that aren't about them at all.
+    const MAX_SYMBOL_POSITION: usize = 3;
     let mut by_project_symbol: BTreeMap<String, BTreeMap<String, Vec<&ExportCapsule>>> =
         BTreeMap::new();
     for cap in &substantive {
-        for sym in &cap.capsule.symbols {
+        for (pos, sym) in cap.capsule.symbols.iter().enumerate() {
+            if pos >= MAX_SYMBOL_POSITION { break; }
             if should_skip_symbol(sym) { continue; }
             by_project_symbol
                 .entry(cap.project.clone())
