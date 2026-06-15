@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -9,11 +8,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::export::{
     capsule_filename, capsule_to_markdown, category_narrative_prompt, category_readme_static,
-    category_readme_with_narrative, index_md, map_category_fallback, ts_ms_to_iso, CategoryStat,
-    ExportCapsule, TAXONOMY,
+    category_readme_with_narrative, decisions_md, index_md, is_substantive,
+    is_worth_categorising, map_category_fallback, project_name_from_root, symbol_page,
+    symbol_page_filename, ts_ms_to_iso, CategoryStat, ExportCapsule, ProjectStat, TAXONOMY,
 };
 
-// ─── local JSONL deserialization types (mirrors reindex.rs) ─────────────────
+// ─── JSONL deserialization ────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct JsonCapsule {
@@ -22,7 +22,6 @@ struct JsonCapsule {
     ts_ms: i64,
     #[serde(default)]
     conn_id: Option<u64>,
-    /// Stored as null in manual notes and some legacy records.
     #[serde(default)]
     agent_session_id: Option<String>,
     source: String,
@@ -65,7 +64,102 @@ fn parse_failure_mode(s: Option<&str>) -> crate::types::FailureMode {
     }
 }
 
-// ─── command entry point ─────────────────────────────────────────────────────
+// ─── Minimum symbol-page threshold ───────────────────────────────────────────
+
+/// Only create a symbol page if a file appears in at least this many
+/// substantive capsules. Keeps noise symbols (e.g. lock files) out.
+const MIN_CAPSULES_FOR_SYMBOL_PAGE: usize = 3;
+
+/// Skip symbol pages for these patterns — they're infrastructure, not knowledge.
+const SYMBOL_PAGE_SKIPLIST: &[&str] = &[
+    "Cargo.lock", "package-lock.json", "yarn.lock",
+    "go.sum", "poetry.lock", ".gitignore", ".env",
+];
+
+/// Returns true if a symbol string is worth a dedicated knowledge page.
+///
+/// Accepted:
+/// - File paths: contain `/` or have a recognised source-file extension
+/// - Qualified identifiers: `Module::function`, `package.Class`
+///
+/// Rejected:
+/// - Plain English words / phrases
+/// - Single tokens without extension that look like prose
+/// - Very short strings
+/// - Environment variable assignments (`KEY=value`)
+fn should_skip_symbol(sym: &str) -> bool {
+    // Explicit skiplist (lock files etc.)
+    let basename = sym.rsplit('/').next().unwrap_or(sym);
+    if SYMBOL_PAGE_SKIPLIST.contains(&basename) {
+        return true;
+    }
+
+    // Too short to be meaningful
+    if sym.len() < 4 {
+        return true;
+    }
+
+    // Contains spaces → prose, not a symbol
+    if sym.contains(' ') {
+        return true;
+    }
+
+    // Starts with non-alphanumeric that signals non-path content
+    // (CLI flags, Rust attributes, CSS tokens, glob patterns, env vars, quoted strings)
+    let first = sym.chars().next().unwrap_or(' ');
+    if matches!(first, '-' | '#' | '$' | '*' | '%' | '"' | '\'' | '`' | '@' | '!') {
+        return true;
+    }
+
+    // Contains `=` → env var assignment, not a symbol
+    if sym.contains('=') {
+        return true;
+    }
+
+    // Rust attribute syntax
+    if sym.starts_with("#[") {
+        return true;
+    }
+
+    // Looks like a file path (has slash) → keep
+    if sym.contains('/') {
+        return false;
+    }
+
+    // Has a recognised source-file extension → keep
+    const SOURCE_EXTS: &[&str] = &[
+        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".kt",
+        ".swift", ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".cs", ".toml",
+        ".json", ".yaml", ".yml", ".md", ".html", ".css", ".sh", ".sql",
+    ];
+    if SOURCE_EXTS.iter().any(|ext| sym.ends_with(ext)) {
+        return false;
+    }
+
+    // Qualified identifier with `::` or `.` separator (e.g. `TrajectoryController`, `Module::fn`) → keep
+    if sym.contains("::") || (sym.contains('.') && !sym.starts_with('.')) {
+        return false;
+    }
+
+    // CamelCase identifier (at least one uppercase after a lowercase) → keep
+    let chars: Vec<char> = sym.chars().collect();
+    let has_camel = chars.windows(2).any(|w| w[0].is_lowercase() && w[1].is_uppercase());
+    if has_camel {
+        return false;
+    }
+
+    // snake_case identifier (has underscore, all word chars) → keep if ≥8 chars
+    if sym.contains('_') && sym.len() >= 8
+        && sym.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        return false;
+    }
+
+    // Everything else: plain word, number, abbrev → skip
+    true
+}
+
+// ─── Command entry point ─────────────────────────────────────────────────────
 
 pub async fn run(
     dir: Option<String>,
@@ -74,187 +168,290 @@ pub async fn run(
     force: bool,
     llm_model: Option<String>,
 ) -> anyhow::Result<()> {
-    // 1. Resolve workspace
-    let ws = crate::workspace::get_or_create_workspace_paths(Path::new(&path))?;
-
-    // 2. Resolve export directory: CLI flag > config default > error
+    // 1. Resolve export directory
     let export_dir: PathBuf = if let Some(d) = dir {
         expand_tilde(&d)
     } else {
         let cfg = crate::workspace::load_workspace_config();
         match cfg.export_dir {
             Some(d) => expand_tilde(&d),
-            None => {
-                anyhow::bail!(
-                    "No export directory specified.\n\
-                     Use --dir <path>, or set a default with:\n\
-                     \n  unlost config export-dir ~/notes/unlost\n"
-                );
-            }
+            None => anyhow::bail!(
+                "No export directory specified.\n\
+                 Use --dir <path>, or set a default with:\n\
+                 \n  unlost config export-dir ~/notes/unlost\n"
+            ),
         }
     };
 
-    // 3. Read capsules from JSONL
-    let jsonl_path = &ws.capsules_jsonl;
-    if !jsonl_path.exists() {
-        println!("No capsules.jsonl found at {}", jsonl_path.display());
-        println!("Nothing to export.");
-        return Ok(());
-    }
+    // 2. Collect capsules from all registered workspaces
+    //    (falls back to current workspace only if config has no registered workspaces)
+    let workspace_data = collect_all_workspaces(&path).await?;
 
-    let capsules = load_capsules(jsonl_path).await?;
-    if capsules.is_empty() {
+    if workspace_data.is_empty() {
         println!("No capsules found. Nothing to export.");
         return Ok(());
     }
 
-    // 4. Build category mapping: raw LLM category → taxonomy bucket
-    //    Collect distinct raw categories, then map them all at once.
-    let raw_categories: Vec<String> = {
-        let mut seen = std::collections::HashSet::new();
-        capsules
-            .iter()
-            .map(|c| c.capsule.category.clone())
-            .filter(|c| seen.insert(c.clone()))
-            .collect()
-    };
+    let total_raw: usize = workspace_data.iter().map(|(_, caps)| caps.len()).sum();
+    println!("Loaded {} capsules from {} workspace{}",
+        total_raw,
+        workspace_data.len(),
+        if workspace_data.len() == 1 { "" } else { "s" });
 
-    let category_map = build_category_map(&raw_categories, llm_model.as_deref()).await;
+    // 3. Map raw categories → taxonomy buckets (single batch per workspace)
+    //    Build the full flat list with project name and bucket assigned.
+    let mut all_capsules: Vec<ExportCapsule> = Vec::with_capacity(total_raw);
+    for (project, caps) in &workspace_data {
+        let raw_cats: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            caps.iter().map(|c| c.capsule.category.clone())
+                .filter(|c| seen.insert(c.clone()))
+                .collect()
+        };
+        let cat_map = build_category_map(&raw_cats, llm_model.as_deref()).await;
 
-    // 5. Group by resolved taxonomy bucket (chronological order preserved)
-    let mut by_category: BTreeMap<String, Vec<ExportCapsule>> = BTreeMap::new();
-    for cap in capsules {
-        let bucket = category_map
-            .get(&cap.capsule.category)
-            .cloned()
-            .unwrap_or_else(|| map_category_fallback(&cap.capsule.category).to_string());
-        by_category.entry(bucket).or_default().push(cap);
+        for mut cap in caps.clone() {
+            let bucket = cat_map.get(&cap.capsule.category)
+                .cloned()
+                .unwrap_or_else(|| map_category_fallback(&cap.capsule.category).to_string());
+            cap.project = project.clone();
+            // Store resolved bucket in the capsule category field for downstream use
+            cap.capsule.category = bucket;
+            all_capsules.push(cap);
+        }
     }
 
-    // 6. Create top-level export directory
+    // Sort globally by timestamp
+    all_capsules.sort_by_key(|c| c.ts_ms);
+
+    // 4. Partition into substantive / noise
+    let substantive: Vec<&ExportCapsule> = all_capsules.iter()
+        .filter(|c| is_substantive(c))
+        .collect();
+
+    println!("  {} substantive ({} filtered as noise)",
+        substantive.len(),
+        all_capsules.len() - substantive.len());
+
+    // 5. Create directory structure
     std::fs::create_dir_all(&export_dir)
-        .with_context(|| format!("failed to create export dir {}", export_dir.display()))?;
+        .with_context(|| format!("failed to create {}", export_dir.display()))?;
+    let categories_dir = export_dir.join("categories");
+    let symbols_dir = export_dir.join("symbols");
+    std::fs::create_dir_all(&categories_dir)?;
+    std::fs::create_dir_all(&symbols_dir)?;
 
-    let mut total_written = 0usize;
-    let mut total_skipped = 0usize;
-    let mut stats: Vec<CategoryStat> = Vec::new();
+    // 6. Write decisions.md (cross-project, all substantive)
+    {
+        let decisions_path = export_dir.join("decisions.md");
+        let content = decisions_md(&substantive);
+        std::fs::write(&decisions_path, content)?;
+        println!("  decisions.md ({} entries)", substantive.len());
+    }
 
-    // 6. For each category: create dir, write capsule files, write README
-    for (category, caps) in &by_category {
-        let cat_dir = export_dir.join(category);
-        std::fs::create_dir_all(&cat_dir)
-            .with_context(|| format!("failed to create category dir {}", cat_dir.display()))?;
+    // 7. Write symbol knowledge pages
+    //    Group substantive capsules by (project, symbol)
+    let mut sym_written = 0usize;
+    let mut project_symbol_counts: HashMap<String, usize> = HashMap::new();
 
-        // Compute all filenames up-front; deduplicate by appending counter on collision
-        let mut filenames: Vec<String> = Vec::with_capacity(caps.len());
-        let mut seen: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for cap in caps {
+    // Collect: project → symbol → [&ExportCapsule]
+    let mut by_project_symbol: BTreeMap<String, BTreeMap<String, Vec<&ExportCapsule>>> =
+        BTreeMap::new();
+    for cap in &substantive {
+        for sym in &cap.capsule.symbols {
+            if should_skip_symbol(sym) { continue; }
+            by_project_symbol
+                .entry(cap.project.clone())
+                .or_default()
+                .entry(sym.clone())
+                .or_default()
+                .push(cap);
+        }
+    }
+
+    for (project, symbols) in &by_project_symbol {
+        let proj_sym_dir = symbols_dir.join(project);
+        std::fs::create_dir_all(&proj_sym_dir)?;
+
+        for (sym, caps) in symbols {
+            if caps.len() < MIN_CAPSULES_FOR_SYMBOL_PAGE { continue; }
+
+            let filename = symbol_page_filename(sym);
+            let file_path = proj_sym_dir.join(&filename);
+
+            if file_path.exists() && !force { continue; }
+
+            let content = symbol_page(sym, project, caps);
+            std::fs::write(&file_path, content)
+                .with_context(|| format!("failed to write {}", file_path.display()))?;
+            sym_written += 1;
+            *project_symbol_counts.entry(project.clone()).or_insert(0) += 1;
+        }
+    }
+    println!("  symbols/ → {} pages across {} project{}",
+        sym_written,
+        project_symbol_counts.len(),
+        if project_symbol_counts.len() == 1 { "" } else { "s" });
+
+    // 8. Write category folders
+    //    Only include capsules that pass `is_worth_categorising`
+    let mut by_category: BTreeMap<String, Vec<&ExportCapsule>> = BTreeMap::new();
+    for cap in &substantive {
+        let bucket = &cap.capsule.category;
+        if is_worth_categorising(cap, bucket) {
+            by_category.entry(bucket.clone()).or_default().push(cap);
+        }
+    }
+
+    let mut cat_written = 0usize;
+    let mut cat_stats: Vec<CategoryStat> = Vec::new();
+
+    for (bucket, cats) in &by_category {
+        let cat_dir = categories_dir.join(bucket);
+        std::fs::create_dir_all(&cat_dir)?;
+
+        // Deduplicate filenames
+        let mut filenames: Vec<String> = Vec::with_capacity(cats.len());
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for cap in cats.iter() {
             let raw = capsule_filename(cap);
             let count = seen.entry(raw.clone()).or_insert(0);
             let fname = if *count == 0 {
                 raw.clone()
             } else {
-                // Insert counter before extension: foo.md → foo-2.md
                 let stem = raw.trim_end_matches(".md");
-                format!("{}-{}.md", stem, *count + 1)
+                format!("{stem}-{}.md", *count + 1)
             };
             *count += 1;
             filenames.push(fname);
         }
 
-        // Write individual capsule files (incremental by default)
-        for (cap, filename) in caps.iter().zip(filenames.iter()) {
+        for (cap, filename) in cats.iter().zip(filenames.iter()) {
             let file_path = cat_dir.join(filename);
-            if file_path.exists() && !force {
-                total_skipped += 1;
-                continue;
-            }
-            let content = capsule_to_markdown(cap);
-            std::fs::write(&file_path, content)
-                .with_context(|| format!("failed to write {}", file_path.display()))?;
-            total_written += 1;
+            if file_path.exists() && !force { continue; }
+            let content = capsule_to_markdown(cap, bucket);
+            std::fs::write(&file_path, content)?;
+            cat_written += 1;
         }
 
-        // Write README (always regenerated — it's a derived index)
-        let pairs: Vec<(&ExportCapsule, &str)> = caps
-            .iter()
+        // README
+        let pairs: Vec<(&ExportCapsule, &str)> = cats.iter()
+            .copied()
             .zip(filenames.iter().map(|s| s.as_str()))
             .collect();
 
-        let readme_content = if narrative {
-            let prompt = category_narrative_prompt(category, &caps.iter().collect::<Vec<_>>());
+        let readme = if narrative {
+            let prompt = category_narrative_prompt(bucket, &cats.iter().map(|c| *c).collect::<Vec<_>>());
             match generate_narrative(llm_model.as_deref(), &prompt).await {
-                Ok(narr) => category_readme_with_narrative(category, &pairs, &narr),
+                Ok(narr) => category_readme_with_narrative(bucket, &pairs, &narr),
                 Err(e) => {
-                    eprintln!(
-                        "warning: LLM narrative for category '{}' failed: {e}. Using static README.",
-                        category
-                    );
-                    category_readme_static(category, &pairs)
+                    eprintln!("warning: narrative for '{bucket}' failed: {e}");
+                    category_readme_static(bucket, &pairs)
                 }
             }
         } else {
-            category_readme_static(category, &pairs)
+            category_readme_static(bucket, &pairs)
         };
 
-        let readme_path = cat_dir.join("README.md");
-        std::fs::write(&readme_path, readme_content)
-            .with_context(|| format!("failed to write {}", readme_path.display()))?;
-
-        stats.push(CategoryStat {
-            category: category.clone(),
-            count: caps.len(),
-        });
+        std::fs::write(cat_dir.join("README.md"), readme)?;
+        cat_stats.push(CategoryStat { category: bucket.clone(), count: cats.len() });
     }
 
-    // 7. Write top-level INDEX.md (always regenerated)
-    let workspace_root = ws.root.to_string_lossy().to_string();
+    // Fill in zero-count categories so INDEX.md is complete
+    let all_buckets: Vec<&str> = TAXONOMY.iter().map(|(n, _)| *n).collect();
+    for bucket in &all_buckets {
+        if !cat_stats.iter().any(|s| s.category == *bucket) {
+            cat_stats.push(CategoryStat { category: bucket.to_string(), count: 0 });
+        }
+    }
+    cat_stats.sort_by(|a, b| b.count.cmp(&a.count));
+
+    println!("  categories/ → {} files across {} categories",
+        cat_written,
+        by_category.len());
+
+    // 9. Write INDEX.md
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+        .map(|d| d.as_millis() as i64).unwrap_or(0);
     let exported_at = ts_ms_to_iso(now_ms);
-    let index_content = index_md(&workspace_root, &exported_at, &stats);
-    let index_path = export_dir.join("INDEX.md");
-    std::fs::write(&index_path, index_content)
-        .with_context(|| format!("failed to write {}", index_path.display()))?;
 
-    // 8. Summary
-    let total_capsules: usize = by_category.values().map(|v| v.len()).sum();
-    println!(
-        "Exported {} capsule{} across {} categor{} to {}",
-        total_written,
-        if total_written == 1 { "" } else { "s" },
-        stats.len(),
-        if stats.len() == 1 { "y" } else { "ies" },
-        export_dir.display()
+    let failure_count = substantive.iter()
+        .filter(|c| c.capsule.failure_mode != crate::types::FailureMode::None)
+        .count();
+
+    let proj_stats: Vec<ProjectStat> = workspace_data.iter().map(|(proj, caps)| {
+        let sub = caps.iter()
+            .filter(|c| is_substantive(c))
+            .count();
+        let sym_pages = project_symbol_counts.get(proj).copied().unwrap_or(0);
+        ProjectStat {
+            project: proj.clone(),
+            total_capsules: caps.len(),
+            substantive_capsules: sub,
+            symbol_pages: sym_pages,
+        }
+    }).collect();
+
+    let index = index_md(
+        &exported_at,
+        &proj_stats,
+        &cat_stats,
+        substantive.len(),
+        failure_count,
+        sym_written,
     );
-    if total_skipped > 0 {
-        println!(
-            "  {} file{} already existed and were skipped (use --force to overwrite)",
-            total_skipped,
-            if total_skipped == 1 { "" } else { "s" }
-        );
-    }
-    let total_files = total_written + total_skipped;
-    println!(
-        "  Total: {} capsule file{}, {} categor{}, INDEX.md",
-        total_files,
-        if total_files == 1 { "" } else { "s" },
-        stats.len(),
-        if stats.len() == 1 { "y" } else { "ies" },
-    );
-    if total_capsules > 0 && !narrative {
-        println!("  Tip: run with --narrative to generate LLM-written category summaries");
+    std::fs::write(export_dir.join("INDEX.md"), index)?;
+
+    println!("\nExported to {}", export_dir.display());
+    if !narrative {
+        println!("  Tip: run with --narrative to add LLM-written category summaries");
     }
 
     Ok(())
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Workspace collection ─────────────────────────────────────────────────────
 
-async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> {
+/// Load capsules from all registered workspaces.
+/// Returns a list of (project_name, capsules) pairs.
+async fn collect_all_workspaces(
+    current_path: &str,
+) -> anyhow::Result<Vec<(String, Vec<ExportCapsule>)>> {
+    let cfg = crate::workspace::load_workspace_config();
+    let mut result: Vec<(String, Vec<ExportCapsule>)> = Vec::new();
+
+    if cfg.workspaces.is_empty() {
+        // Fallback: just the current workspace
+        let ws = crate::workspace::get_or_create_workspace_paths(Path::new(current_path))?;
+        let project = project_name_from_root(&ws.root.to_string_lossy());
+        if ws.capsules_jsonl.exists() {
+            let caps = load_capsules(&ws.capsules_jsonl, &project).await?;
+            result.push((project, caps));
+        }
+        return Ok(result);
+    }
+
+    for (_, info) in &cfg.workspaces {
+        let jsonl = PathBuf::from(&info.capsules_jsonl);
+        if !jsonl.exists() { continue; }
+
+        let project = project_name_from_root(&info.root);
+        match load_capsules(&jsonl, &project).await {
+            Ok(caps) if !caps.is_empty() => result.push((project, caps)),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("warning: skipping workspace {} ({}): {e}", info.id, info.root);
+            }
+        }
+    }
+
+    // Sort by project name for deterministic output
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
+async fn load_capsules(jsonl_path: &Path, project: &str) -> anyhow::Result<Vec<ExportCapsule>> {
     let file = File::open(jsonl_path).await?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
@@ -264,22 +461,14 @@ async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> 
     while let Some(line) = lines.next_line().await? {
         line_num += 1;
         let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+        if line.is_empty() { continue; }
+
         let raw: JsonCapsule = serde_json::from_str(line)
-            .with_context(|| format!("failed to parse capsules.jsonl line {line_num}"))?;
+            .with_context(|| format!("failed to parse {} line {line_num}", jsonl_path.display()))?;
 
-        // Derive a stable ID: use the stored one if present, otherwise synthesize from ts+conn
         let id = raw.id.clone().unwrap_or_else(|| {
-            format!(
-                "cap-{}-{}",
-                raw.ts_ms,
-                raw.conn_id.unwrap_or(0)
-            )
+            format!("cap-{}-{}", raw.ts_ms, raw.conn_id.unwrap_or(0))
         });
-
-        let failure_mode = parse_failure_mode(raw.capsule.failure_mode.as_deref());
 
         let cap = ExportCapsule {
             id,
@@ -288,6 +477,7 @@ async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> 
             head_sha: raw.head_sha,
             commit_sha: raw.commit_sha,
             source: raw.source,
+            project: project.to_string(),
             capsule: crate::types::IntentCapsule {
                 category: raw.capsule.category,
                 intent: raw.capsule.intent,
@@ -296,7 +486,7 @@ async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> 
                 next_steps: raw.capsule.next_steps,
                 symbols: raw.capsule.symbols,
                 user_symbols: raw.capsule.user_symbols,
-                failure_mode,
+                failure_mode: parse_failure_mode(raw.capsule.failure_mode.as_deref()),
                 failure_signals: raw.capsule.failure_signals,
                 extraction_mode: crate::types::ExtractionMode::None,
                 questions: raw.capsule.questions,
@@ -308,7 +498,84 @@ async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> 
     Ok(capsules)
 }
 
-/// Expand a leading `~` to the home directory.
+// ─── Category mapping ─────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Debug)]
+struct CategoryMapping {
+    /// Map from raw category string to canonical taxonomy bucket.
+    mapping: HashMap<String, String>,
+}
+
+async fn build_category_map(
+    raw_categories: &[String],
+    model_override: Option<&str>,
+) -> HashMap<String, String> {
+    if crate::llm::get_llm_config().is_none() {
+        return fallback_map(raw_categories);
+    }
+
+    let bucket_list = TAXONOMY.iter()
+        .map(|(name, desc)| format!("  - {name}: {desc}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    const CHUNK: usize = 200;
+    let mut result: HashMap<String, String> = HashMap::new();
+
+    for chunk in raw_categories.chunks(CHUNK) {
+        let items = chunk.iter()
+            .map(|c| format!("  - {c:?}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "Map each raw category string to exactly one canonical bucket.\n\
+             Return a JSON object with a `mapping` key.\n\
+             Use only the bucket names listed — nothing else. Use `other` as fallback.\n\
+             \nBuckets:\n{bucket_list}\n\nRaw categories:\n{items}"
+        );
+
+        match crate::llm::llm_extract::<CategoryMapping>(
+            model_override,
+            "You are a precise classifier. Respond only with the requested JSON.",
+            &prompt,
+        ).await {
+            Ok(mapped) => {
+                let valid: std::collections::HashSet<&str> =
+                    TAXONOMY.iter().map(|(n, _)| *n).collect();
+                for (raw, bucket) in mapped.mapping {
+                    if valid.contains(bucket.as_str()) {
+                        result.insert(raw, bucket);
+                    } else {
+                        result.insert(raw.clone(), map_category_fallback(&raw).to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("category mapping failed: {e}; using keyword fallback");
+                for raw in chunk {
+                    result.insert(raw.clone(), map_category_fallback(raw).to_string());
+                }
+            }
+        }
+    }
+
+    for raw in raw_categories {
+        result.entry(raw.clone())
+            .or_insert_with(|| map_category_fallback(raw).to_string());
+    }
+
+    result
+}
+
+fn fallback_map(raw_categories: &[String]) -> HashMap<String, String> {
+    raw_categories.iter()
+        .map(|raw| (raw.clone(), map_category_fallback(raw).to_string()))
+        .collect()
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
@@ -322,119 +589,12 @@ fn expand_tilde(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Call the configured LLM with a free-text prompt and return the narrative string.
-async fn generate_narrative(
-    model_override: Option<&str>,
-    prompt: &str,
-) -> anyhow::Result<String> {
+async fn generate_narrative(model_override: Option<&str>, prompt: &str) -> anyhow::Result<String> {
     let result = crate::llm::llm_extract::<crate::types::QueryNarrativeOutput>(
         model_override,
         "You are a technical writer summarising software development decisions for a knowledge base. \
          Output only the requested narrative text in the `narrative` field.",
         prompt,
-    )
-    .await?;
+    ).await?;
     Ok(result.narrative)
-}
-
-// ─── taxonomy mapping ─────────────────────────────────────────────────────────
-
-/// Structured output from the LLM category-mapping call.
-#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Debug)]
-struct CategoryMapping {
-    /// Map from raw category string to canonical taxonomy bucket.
-    mapping: HashMap<String, String>,
-}
-
-/// Build a `raw → bucket` map for all distinct raw categories.
-///
-/// If an LLM is configured, sends a single batch request to classify all
-/// categories at once. Falls back to keyword-based heuristics on any error
-/// or when no LLM is available.
-async fn build_category_map(
-    raw_categories: &[String],
-    model_override: Option<&str>,
-) -> HashMap<String, String> {
-    // If no LLM configured, go straight to fallback — no noise.
-    if crate::llm::get_llm_config().is_none() {
-        return fallback_map(raw_categories);
-    }
-
-    let bucket_list = TAXONOMY
-        .iter()
-        .map(|(name, desc)| format!("  - {name}: {desc}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Split into chunks of 200 to stay within context limits
-    const CHUNK: usize = 200;
-    let mut result: HashMap<String, String> = HashMap::new();
-
-    for chunk in raw_categories.chunks(CHUNK) {
-        let items = chunk
-            .iter()
-            .map(|c| format!("  - {c:?}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let prompt = format!(
-            "Map each of the following raw category strings to exactly one of the canonical buckets below.\n\
-             Return a JSON object with a `mapping` key whose value is an object mapping each raw string to its bucket.\n\
-             Every input string must appear as a key. Use only the bucket names listed — nothing else.\n\
-             If a string clearly doesn't fit any bucket, use `other`.\n\
-             \n\
-             Canonical buckets:\n{bucket_list}\n\
-             \n\
-             Raw categories to classify:\n{items}"
-        );
-
-        match crate::llm::llm_extract::<CategoryMapping>(
-            model_override,
-            "You are a precise classifier. Respond only with the requested JSON.",
-            &prompt,
-        )
-        .await
-        {
-            Ok(mapped) => {
-                // Validate each returned bucket name; fall back per-entry if invalid
-                let valid: std::collections::HashSet<&str> =
-                    TAXONOMY.iter().map(|(n, _)| *n).collect();
-                for (raw, bucket) in mapped.mapping {
-                    if valid.contains(bucket.as_str()) {
-                        result.insert(raw, bucket);
-                    } else {
-                        // LLM returned an invalid bucket name — use keyword fallback
-                        let fb = map_category_fallback(&raw).to_string();
-                        result.insert(raw, fb);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("category mapping LLM call failed: {e}; using keyword fallback for this chunk");
-                for raw in chunk {
-                    result.insert(
-                        raw.clone(),
-                        map_category_fallback(raw).to_string(),
-                    );
-                }
-            }
-        }
-    }
-
-    // Fill in any that the LLM missed
-    for raw in raw_categories {
-        result
-            .entry(raw.clone())
-            .or_insert_with(|| map_category_fallback(raw).to_string());
-    }
-
-    result
-}
-
-/// Pure keyword-based fallback — no LLM required.
-fn fallback_map(raw_categories: &[String]) -> HashMap<String, String> {
-    raw_categories
-        .iter()
-        .map(|raw| (raw.clone(), map_category_fallback(raw).to_string()))
-        .collect()
 }
