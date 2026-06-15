@@ -7,11 +7,15 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::export::{
-    capsule_filename, capsule_to_markdown, category_narrative_prompt, category_readme_static,
-    category_readme_with_narrative, decisions_md, index_md, is_substantive,
-    is_worth_categorising, map_category_fallback, project_name_from_root, symbol_page,
-    symbol_page_filename, ts_ms_to_iso, CategoryStat, ExportCapsule, ProjectStat, TAXONOMY,
+    category_narrative_prompt, category_readme_static, category_readme_with_narrative,
+    decisions_md, index_md, is_substantive, map_category_fallback, project_name_from_root,
+    symbol_page, symbol_page_filename, ts_ms_to_iso, CategoryStat, ExportCapsule, ProjectStat,
+    TAXONOMY,
 };
+
+/// Categories that are filtered noise and don't deserve their own folder.
+/// Substantive decisions in these buckets still appear in decisions.md.
+const SKIP_CATEGORIES: &[&str] = &["meta", "other"];
 
 // ─── JSONL deserialization ────────────────────────────────────────────────────
 
@@ -68,7 +72,10 @@ fn parse_failure_mode(s: Option<&str>) -> crate::types::FailureMode {
 
 /// Only create a symbol page if a file appears in at least this many
 /// substantive capsules. Keeps noise symbols (e.g. lock files) out.
-const MIN_CAPSULES_FOR_SYMBOL_PAGE: usize = 3;
+/// A symbol must appear in at least this many substantive capsules (at top-3
+/// position) to earn a knowledge page. Lower values explode the file count
+/// with marginal symbols; higher values lose useful smaller files.
+const MIN_CAPSULES_FOR_SYMBOL_PAGE: usize = 8;
 
 /// Skip symbol pages for these patterns — they're infrastructure, not knowledge.
 const SYMBOL_PAGE_SKIPLIST: &[&str] = &[
@@ -76,87 +83,56 @@ const SYMBOL_PAGE_SKIPLIST: &[&str] = &[
     "go.sum", "poetry.lock", ".gitignore", ".env",
 ];
 
-/// Returns true if a symbol string is worth a dedicated knowledge page.
-///
-/// Accepted:
-/// - File paths: contain `/` or have a recognised source-file extension
-/// - Qualified identifiers: `Module::function`, `package.Class`
-///
-/// Rejected:
-/// - Plain English words / phrases
-/// - Single tokens without extension that look like prose
-/// - Very short strings
-/// - Environment variable assignments (`KEY=value`)
-fn should_skip_symbol(sym: &str) -> bool {
-    // Explicit skiplist (lock files etc.)
-    let basename = sym.rsplit('/').next().unwrap_or(sym);
-    if SYMBOL_PAGE_SKIPLIST.contains(&basename) {
-        return true;
-    }
+/// Cheap structural checks: discard things that obviously can't be a path
+/// or a code identifier (prose, flags, attributes, env vars, quoted strings,
+/// runtime IDs). Returns `true` to **skip**.
+fn is_structural_noise(sym: &str) -> bool {
+    if sym.len() < 4 { return true; }
+    if sym.contains(' ') { return true; }
 
-    // Too short to be meaningful
-    if sym.len() < 4 {
-        return true;
-    }
-
-    // Contains spaces → prose, not a symbol
-    if sym.contains(' ') {
-        return true;
-    }
-
-    // Starts with non-alphanumeric that signals non-path content
-    // (CLI flags, Rust attributes, CSS tokens, glob patterns, env vars, quoted strings)
+    // Starts with a non-alphanumeric that signals CLI flag / attribute / token.
     let first = sym.chars().next().unwrap_or(' ');
     if matches!(first, '-' | '#' | '$' | '*' | '%' | '"' | '\'' | '`' | '@' | '!') {
         return true;
     }
 
-    // Contains `=` → env var assignment, not a symbol
-    if sym.contains('=') {
+    if sym.contains('=') { return true; }   // env-var assignment
+    if sym.starts_with("#[") { return true; } // rust attribute
+    if sym.contains('\\') { return true; }   // Windows path or escape — almost always machine state
+
+    // Runtime tokens that look like identifiers but aren't knowledge anchors.
+    // Workspace IDs (wks_*), session IDs (ses_*), connection IDs etc. are
+    // generated at runtime and have no semantic meaning to a human reader.
+    if sym.starts_with("wks_") || sym.starts_with("ses_") || sym.starts_with("conn_") {
         return true;
     }
 
-    // Rust attribute syntax
-    if sym.starts_with("#[") {
-        return true;
-    }
+    // Explicit lock-file blocklist (basename only).
+    let basename = sym.rsplit('/').next().unwrap_or(sym);
+    if SYMBOL_PAGE_SKIPLIST.contains(&basename) { return true; }
 
-    // Looks like a file path (has slash) → keep
-    if sym.contains('/') {
-        return false;
-    }
+    false
+}
 
-    // Has a recognised source-file extension → keep
-    const SOURCE_EXTS: &[&str] = &[
-        ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".kt",
-        ".swift", ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".cs", ".toml",
-        ".json", ".yaml", ".yml", ".md", ".html", ".css", ".sh", ".sql",
-    ];
-    if SOURCE_EXTS.iter().any(|ext| sym.ends_with(ext)) {
-        return false;
-    }
+/// For non-path symbols (no `/`), is this string a plausible code identifier?
+/// Accepts qualified names (`Foo::bar`, `pkg.Class`), CamelCase types,
+/// snake_case identifiers ≥ 8 chars. Rejects plain English words.
+fn is_identifier_like(sym: &str) -> bool {
+    if sym.contains("::") { return true; }
+    if sym.contains('.') && !sym.starts_with('.') { return true; }
 
-    // Qualified identifier with `::` or `.` separator (e.g. `TrajectoryController`, `Module::fn`) → keep
-    if sym.contains("::") || (sym.contains('.') && !sym.starts_with('.')) {
-        return false;
-    }
-
-    // CamelCase identifier (at least one uppercase after a lowercase) → keep
     let chars: Vec<char> = sym.chars().collect();
     let has_camel = chars.windows(2).any(|w| w[0].is_lowercase() && w[1].is_uppercase());
-    if has_camel {
-        return false;
-    }
+    if has_camel { return true; }
 
-    // snake_case identifier (has underscore, all word chars) → keep if ≥8 chars
-    if sym.contains('_') && sym.len() >= 8
+    if sym.contains('_')
+        && sym.len() >= 8
         && sym.chars().all(|c| c.is_alphanumeric() || c == '_')
     {
-        return false;
+        return true;
     }
 
-    // Everything else: plain word, number, abbrev → skip
-    true
+    false
 }
 
 // ─── Command entry point ─────────────────────────────────────────────────────
@@ -192,30 +168,40 @@ pub async fn run(
         return Ok(());
     }
 
-    let total_raw: usize = workspace_data.iter().map(|(_, caps)| caps.len()).sum();
+    let total_raw: usize = workspace_data.iter().map(|w| w.capsules.len()).sum();
     println!("Loaded {} capsules from {} workspace{}",
         total_raw,
         workspace_data.len(),
         if workspace_data.len() == 1 { "" } else { "s" });
 
+    // Build per-project git-tracked-file set once. Used to filter LLM-extracted
+    // symbols: a path is a knowledge anchor only if git tracks it. This is
+    // self-tuning to whatever the user's `.gitignore` excludes — no hardcoded
+    // build-artefact lists, no per-toolchain assumptions.
+    let mut tracked_by_project: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for w in &workspace_data {
+        if let Some(root) = &w.root {
+            tracked_by_project.insert(w.project.clone(), tracked_files(root));
+        }
+    }
+
     // 3. Map raw categories → taxonomy buckets (single batch per workspace)
     //    Build the full flat list with project name and bucket assigned.
     let mut all_capsules: Vec<ExportCapsule> = Vec::with_capacity(total_raw);
-    for (project, caps) in &workspace_data {
+    for w in &workspace_data {
         let raw_cats: Vec<String> = {
             let mut seen = std::collections::HashSet::new();
-            caps.iter().map(|c| c.capsule.category.clone())
+            w.capsules.iter().map(|c| c.capsule.category.clone())
                 .filter(|c| seen.insert(c.clone()))
                 .collect()
         };
         let cat_map = build_category_map(&raw_cats, llm_model.as_deref()).await;
 
-        for mut cap in caps.clone() {
+        for mut cap in w.capsules.clone() {
             let bucket = cat_map.get(&cap.capsule.category)
                 .cloned()
                 .unwrap_or_else(|| map_category_fallback(&cap.capsule.category).to_string());
-            cap.project = project.clone();
-            // Store resolved bucket in the capsule category field for downstream use
+            cap.project = w.project.clone();
             cap.capsule.category = bucket;
             all_capsules.push(cap);
         }
@@ -259,16 +245,44 @@ pub async fn run(
     // of the symbol list. Position encodes LLM-assigned relevance: hub files like
     // src/main.rs appear at position 10+ on capsules that aren't about them at all.
     const MAX_SYMBOL_POSITION: usize = 3;
+    // Look up workspace root for each project (None for un-rooted workspaces).
+    let project_roots: HashMap<&str, &Path> = workspace_data.iter()
+        .filter_map(|w| w.root.as_deref().map(|r| (w.project.as_str(), r)))
+        .collect();
+
     let mut by_project_symbol: BTreeMap<String, BTreeMap<String, Vec<&ExportCapsule>>> =
         BTreeMap::new();
     for cap in &substantive {
         for (pos, sym) in cap.capsule.symbols.iter().enumerate() {
             if pos >= MAX_SYMBOL_POSITION { break; }
-            if should_skip_symbol(sym) { continue; }
+            if is_structural_noise(sym) { continue; }
+
+            // A symbol is path-shaped if it contains a separator OR ends in a
+            // file extension. Both must resolve to a git-tracked file under
+            // the project root to earn a page; canonicalised key avoids
+            // duplicate pages when the same file appears as relative and
+            // absolute paths in different capsules.
+            let looks_like_path = sym.contains('/') || has_file_extension(sym);
+            let canonical: String = if looks_like_path {
+                match (project_roots.get(cap.project.as_str()),
+                       tracked_by_project.get(cap.project.as_str()))
+                {
+                    (Some(root), Some(tracked)) => match canonical_tracked_path(sym, root, tracked) {
+                        Some(c) => c,
+                        None => continue, // not tracked → drop
+                    },
+                    _ => continue, // can't validate → drop
+                }
+            } else if is_identifier_like(sym) {
+                sym.clone()
+            } else {
+                continue;
+            };
+
             by_project_symbol
                 .entry(cap.project.clone())
                 .or_default()
-                .entry(sym.clone())
+                .entry(canonical)
                 .or_default()
                 .push(cap);
         }
@@ -298,82 +312,54 @@ pub async fn run(
         project_symbol_counts.len(),
         if project_symbol_counts.len() == 1 { "" } else { "s" });
 
-    // 8. Write category folders
-    //    Only include capsules that pass `is_worth_categorising`
+    // 8. Write category READMEs (one file per category — no per-capsule files).
+    //    Skip noise buckets (meta, other) entirely. Substantive failure-mode
+    //    capsules from those buckets still appear in decisions.md.
     let mut by_category: BTreeMap<String, Vec<&ExportCapsule>> = BTreeMap::new();
     for cap in &substantive {
         let bucket = &cap.capsule.category;
-        if is_worth_categorising(cap, bucket) {
-            by_category.entry(bucket.clone()).or_default().push(cap);
-        }
+        if SKIP_CATEGORIES.contains(&bucket.as_str()) { continue; }
+        by_category.entry(bucket.clone()).or_default().push(cap);
     }
 
-    let mut cat_written = 0usize;
     let mut cat_stats: Vec<CategoryStat> = Vec::new();
 
     for (bucket, cats) in &by_category {
         let cat_dir = categories_dir.join(bucket);
         std::fs::create_dir_all(&cat_dir)?;
 
-        // Deduplicate filenames
-        let mut filenames: Vec<String> = Vec::with_capacity(cats.len());
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        for cap in cats.iter() {
-            let raw = capsule_filename(cap);
-            let count = seen.entry(raw.clone()).or_insert(0);
-            let fname = if *count == 0 {
-                raw.clone()
-            } else {
-                let stem = raw.trim_end_matches(".md");
-                format!("{stem}-{}.md", *count + 1)
-            };
-            *count += 1;
-            filenames.push(fname);
-        }
-
-        for (cap, filename) in cats.iter().zip(filenames.iter()) {
-            let file_path = cat_dir.join(filename);
-            if file_path.exists() && !force { continue; }
-            let content = capsule_to_markdown(cap, bucket);
-            std::fs::write(&file_path, content)?;
-            cat_written += 1;
-        }
-
-        // README
-        let pairs: Vec<(&ExportCapsule, &str)> = cats.iter()
-            .copied()
-            .zip(filenames.iter().map(|s| s.as_str()))
-            .collect();
+        // Sort newest-first within the README
+        let mut sorted = cats.clone();
+        sorted.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
 
         let readme = if narrative {
-            let prompt = category_narrative_prompt(bucket, &cats.iter().map(|c| *c).collect::<Vec<_>>());
+            let cats_for_prompt: Vec<&ExportCapsule> = sorted.iter().copied().collect();
+            let prompt = category_narrative_prompt(bucket, &cats_for_prompt);
             match generate_narrative(llm_model.as_deref(), &prompt).await {
-                Ok(narr) => category_readme_with_narrative(bucket, &pairs, &narr),
+                Ok(narr) => category_readme_with_narrative(bucket, &sorted, &narr),
                 Err(e) => {
                     eprintln!("warning: narrative for '{bucket}' failed: {e}");
-                    category_readme_static(bucket, &pairs)
+                    category_readme_static(bucket, &sorted)
                 }
             }
         } else {
-            category_readme_static(bucket, &pairs)
+            category_readme_static(bucket, &sorted)
         };
 
         std::fs::write(cat_dir.join("README.md"), readme)?;
         cat_stats.push(CategoryStat { category: bucket.clone(), count: cats.len() });
     }
 
-    // Fill in zero-count categories so INDEX.md is complete
-    let all_buckets: Vec<&str> = TAXONOMY.iter().map(|(n, _)| *n).collect();
-    for bucket in &all_buckets {
+    // Fill in zero-count buckets (excluding skipped) so INDEX.md is complete
+    for (bucket, _) in TAXONOMY {
+        if SKIP_CATEGORIES.contains(bucket) { continue; }
         if !cat_stats.iter().any(|s| s.category == *bucket) {
             cat_stats.push(CategoryStat { category: bucket.to_string(), count: 0 });
         }
     }
     cat_stats.sort_by(|a, b| b.count.cmp(&a.count));
 
-    println!("  categories/ → {} files across {} categories",
-        cat_written,
-        by_category.len());
+    println!("  categories/ → {} READMEs", by_category.len());
 
     // 9. Write INDEX.md
     let now_ms = std::time::SystemTime::now()
@@ -385,14 +371,14 @@ pub async fn run(
         .filter(|c| c.capsule.failure_mode != crate::types::FailureMode::None)
         .count();
 
-    let proj_stats: Vec<ProjectStat> = workspace_data.iter().map(|(proj, caps)| {
-        let sub = caps.iter()
+    let proj_stats: Vec<ProjectStat> = workspace_data.iter().map(|w| {
+        let sub = w.capsules.iter()
             .filter(|c| is_substantive(c))
             .count();
-        let sym_pages = project_symbol_counts.get(proj).copied().unwrap_or(0);
+        let sym_pages = project_symbol_counts.get(&w.project).copied().unwrap_or(0);
         ProjectStat {
-            project: proj.clone(),
-            total_capsules: caps.len(),
+            project: w.project.clone(),
+            total_capsules: w.capsules.len(),
             substantive_capsules: sub,
             symbol_pages: sym_pages,
         }
@@ -418,21 +404,26 @@ pub async fn run(
 
 // ─── Workspace collection ─────────────────────────────────────────────────────
 
+/// One row of workspace data needed for export: the human project name,
+/// the workspace root on disk (for git tracked-file lookup), and the loaded
+/// capsules. The root is `None` when we couldn't recover it (rare path).
+struct WorkspaceData {
+    project: String,
+    root: Option<PathBuf>,
+    capsules: Vec<ExportCapsule>,
+}
+
 /// Load capsules from all registered workspaces.
-/// Returns a list of (project_name, capsules) pairs.
-async fn collect_all_workspaces(
-    current_path: &str,
-) -> anyhow::Result<Vec<(String, Vec<ExportCapsule>)>> {
+async fn collect_all_workspaces(current_path: &str) -> anyhow::Result<Vec<WorkspaceData>> {
     let cfg = crate::workspace::load_workspace_config();
-    let mut result: Vec<(String, Vec<ExportCapsule>)> = Vec::new();
+    let mut result: Vec<WorkspaceData> = Vec::new();
 
     if cfg.workspaces.is_empty() {
-        // Fallback: just the current workspace
         let ws = crate::workspace::get_or_create_workspace_paths(Path::new(current_path))?;
         let project = project_name_from_root(&ws.root.to_string_lossy());
         if ws.capsules_jsonl.exists() {
             let caps = load_capsules(&ws.capsules_jsonl, &project).await?;
-            result.push((project, caps));
+            result.push(WorkspaceData { project, root: Some(ws.root.clone()), capsules: caps });
         }
         return Ok(result);
     }
@@ -442,8 +433,11 @@ async fn collect_all_workspaces(
         if !jsonl.exists() { continue; }
 
         let project = project_name_from_root(&info.root);
+        let root = Some(PathBuf::from(&info.root));
         match load_capsules(&jsonl, &project).await {
-            Ok(caps) if !caps.is_empty() => result.push((project, caps)),
+            Ok(caps) if !caps.is_empty() => {
+                result.push(WorkspaceData { project, root, capsules: caps });
+            }
             Ok(_) => {}
             Err(e) => {
                 eprintln!("warning: skipping workspace {} ({}): {e}", info.id, info.root);
@@ -451,9 +445,67 @@ async fn collect_all_workspaces(
         }
     }
 
-    // Sort by project name for deterministic output
-    result.sort_by(|a, b| a.0.cmp(&b.0));
+    result.sort_by(|a, b| a.project.cmp(&b.project));
     Ok(result)
+}
+
+/// Return the set of files tracked by git in `root`, as relative paths.
+/// Returns an empty set if `root` is not a git repo or git is unavailable.
+fn tracked_files(root: &Path) -> std::collections::HashSet<String> {
+    use std::process::Command;
+    let output = Command::new("git")
+        .args(["-C"])
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output();
+    let Ok(output) = output else { return Default::default() };
+    if !output.status.success() {
+        return Default::default();
+    }
+    output
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Returns true if the symbol looks like it has a file extension
+/// (e.g. `metrics.jsonl`, `CHANGELOG.md`, `Cargo.toml`).
+/// Used to detect bare-filename "path-shaped" symbols that contain no `/`.
+fn has_file_extension(sym: &str) -> bool {
+    if let Some(dot_pos) = sym.rfind('.') {
+        // Skip dotfiles like `.gitignore` (no real extension).
+        if dot_pos == 0 { return false; }
+        let ext = &sym[dot_pos + 1..];
+        // Extension must be 1–6 alphanumeric chars.
+        !ext.is_empty()
+            && ext.len() <= 6
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    } else {
+        false
+    }
+}
+
+/// Resolve `sym` to a canonical, git-tracked relative path under `root`,
+/// or `None` if it isn't tracked. Handles absolute paths (stripped against
+/// root) and relative paths (used as-is). Also collapses leading `./`.
+fn canonical_tracked_path(
+    sym: &str,
+    root: &Path,
+    tracked: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let rel: String = if sym.starts_with('/') {
+        Path::new(sym).strip_prefix(root).ok()?.to_string_lossy().to_string()
+    } else {
+        sym.strip_prefix("./").unwrap_or(sym).to_string()
+    };
+    if tracked.contains(&rel) {
+        Some(rel)
+    } else {
+        None
+    }
 }
 
 async fn load_capsules(jsonl_path: &Path, project: &str) -> anyhow::Result<Vec<ExportCapsule>> {

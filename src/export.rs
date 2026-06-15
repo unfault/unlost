@@ -137,11 +137,6 @@ pub fn map_category_fallback(raw: &str) -> &'static str {
 // Signal filtering
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Low-signal categories that produce mostly noise when exported individually.
-/// Capsules in these buckets are still included in `decisions.md` if they have
-/// a failure mode or a substantive decision, but skipped from category folders.
-const NOISE_CATEGORIES: &[&str] = &["meta", "other"];
-
 /// Minimum decision length (chars) to be considered substantive.
 const MIN_DECISION_LEN: usize = 25;
 /// Minimum rationale length (chars) to be considered substantive.
@@ -158,16 +153,6 @@ pub fn is_substantive(cap: &ExportCapsule) -> bool {
     let has_content = d.len() >= MIN_DECISION_LEN && r.len() >= MIN_RATIONALE_LEN;
     let has_failure = cap.capsule.failure_mode != FailureMode::None;
     has_content || has_failure
-}
-
-/// Returns true if a capsule should appear in the category folder tree.
-/// More restrictive than `is_substantive` — also filters noise categories.
-pub fn is_worth_categorising(cap: &ExportCapsule, bucket: &str) -> bool {
-    if NOISE_CATEGORIES.contains(&bucket) {
-        // Only keep failure-mode capsules from noise categories
-        return cap.capsule.failure_mode != FailureMode::None;
-    }
-    is_substantive(cap)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,13 +216,6 @@ pub fn slugify(s: &str) -> String {
         slug = "capsule".to_string();
     }
     slug
-}
-
-/// Build the filename for a capsule: `<YYYY-MM-DD>-<intent-slug>.md`
-pub fn capsule_filename(cap: &ExportCapsule) -> String {
-    let date = ts_ms_to_date(cap.ts_ms);
-    let slug = slugify(&cap.capsule.intent);
-    format!("{date}-{slug}.md")
 }
 
 /// Build the filename for a symbol knowledge page: `<symbol-slug>.md`
@@ -325,87 +303,6 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Individual capsule file  (categories/<bucket>/<date>-<slug>.md)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Render a full markdown file for a single capsule, including YAML front-matter.
-pub fn capsule_to_markdown(cap: &ExportCapsule, bucket: &str) -> String {
-    let mut out = String::new();
-
-    out.push_str("---\n");
-    let _ = writeln!(out, "id: \"{}\"", cap.id);
-    let _ = writeln!(out, "date: \"{}\"", ts_ms_to_iso(cap.ts_ms));
-    let _ = writeln!(out, "project: \"{}\"", escape_yaml(&cap.project));
-    let _ = writeln!(out, "category: \"{}\"", escape_yaml(bucket));
-
-    if !cap.capsule.symbols.is_empty() {
-        out.push_str("symbols:\n");
-        for sym in &cap.capsule.symbols {
-            let _ = writeln!(out, "  - \"{}\"", escape_yaml(sym));
-        }
-    } else {
-        out.push_str("symbols: []\n");
-    }
-
-    let fm = failure_mode_str(&cap.capsule.failure_mode);
-    let _ = writeln!(out, "failure_mode: \"{fm}\"");
-    let _ = writeln!(out, "tags:\n  - \"{}\"\n  - \"{}\"",
-        escape_yaml(bucket), escape_yaml(&cap.project));
-
-    if let Some(ref sha) = cap.commit_sha {
-        let _ = writeln!(out, "commit_sha: \"{}\"", sha);
-    }
-    if let Some(ref sid) = cap.agent_session_id {
-        let _ = writeln!(out, "session_id: \"{}\"", escape_yaml(sid));
-    }
-    out.push_str("---\n\n");
-
-    let _ = writeln!(out, "# {}\n", cap.capsule.intent);
-    let _ = writeln!(out, "> `{}` · {} · {}\n",
-        cap.project,
-        ts_ms_to_date(cap.ts_ms),
-        bucket);
-
-    if cap.capsule.decision.trim().len() >= MIN_DECISION_LEN {
-        out.push_str("## Decision\n\n");
-        let _ = writeln!(out, "{}\n", cap.capsule.decision.trim());
-    }
-
-    if cap.capsule.rationale.trim().len() >= MIN_RATIONALE_LEN {
-        out.push_str("## Rationale\n\n");
-        let _ = writeln!(out, "{}\n", cap.capsule.rationale.trim());
-    }
-
-    if !cap.capsule.next_steps.is_empty() {
-        out.push_str("## Next Steps\n\n");
-        for step in &cap.capsule.next_steps {
-            let _ = writeln!(out, "- [ ] {}", step);
-        }
-        out.push('\n');
-    }
-
-    if !cap.capsule.symbols.is_empty() {
-        out.push_str("## Symbols\n\n");
-        for sym in &cap.capsule.symbols {
-            let _ = writeln!(out, "- `{}`", sym);
-        }
-        out.push('\n');
-    }
-
-    if cap.capsule.failure_mode != FailureMode::None {
-        out.push_str("## Failure Signal\n\n");
-        let _ = writeln!(out, "**{}**\n", failure_mode_emoji(&cap.capsule.failure_mode));
-        if let Some(ref sig) = cap.capsule.failure_signals {
-            if !sig.trim().is_empty() {
-                let _ = writeln!(out, "{}\n", sig.trim());
-            }
-        }
-    }
-
-    out
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Symbol knowledge page  (symbols/<project>/<symbol-slug>.md)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -434,40 +331,59 @@ pub fn symbol_page(symbol: &str, project: &str, caps: &[&ExportCapsule]) -> Stri
 
     // Header
     let _ = writeln!(out, "# `{symbol}`\n");
-    let _ = writeln!(out, "> **Project**: `{project}` · **{} decision{}** · {} → {}\n",
+    let _ = writeln!(out, "> `{project}` · {} decision{} · {} → {}",
         caps.len(),
         if caps.len() == 1 { "" } else { "s" },
         ts_ms_to_date(first),
         ts_ms_to_date(last));
-
     if failure_count > 0 {
-        let _ = writeln!(out, "> ⚠️ {failure_count} failure signal{} recorded on this file.\n",
+        let _ = writeln!(out, "> ⚠️ {failure_count} failure signal{} on this file\n",
             if failure_count == 1 { "" } else { "s" });
+    } else {
+        out.push('\n');
     }
 
-    out.push_str("---\n\n");
+    // Sort newest-first so the top of the page is the most relevant view.
+    let mut sorted: Vec<&&ExportCapsule> = caps.iter().collect();
+    sorted.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
 
-    // Decision log — each capsule as a compact entry
-    for cap in caps {
+    // Quick-scan: outstanding next-steps from the most recent 5 capsules.
+    let pending: Vec<String> = sorted.iter()
+        .take(5)
+        .flat_map(|c| c.capsule.next_steps.iter().cloned())
+        .take(8)
+        .collect();
+    if !pending.is_empty() {
+        out.push_str("## Outstanding\n\n");
+        for step in &pending {
+            let _ = writeln!(out, "- [ ] {step}");
+        }
+        out.push('\n');
+    }
+
+    out.push_str("## Decisions\n\n");
+
+    for cap in sorted {
         let fm = &cap.capsule.failure_mode;
         let date = ts_ms_to_date(cap.ts_ms);
 
-        // Section anchor: date + slug of intent
-        let slug = slugify(&cap.capsule.intent);
-        let _ = writeln!(out, "## {date} — {}\n", truncate_str(&cap.capsule.intent, 80));
+        let fm_badge = if *fm != FailureMode::None {
+            format!(" · {}", failure_mode_emoji(fm))
+        } else {
+            String::new()
+        };
 
-        if *fm != FailureMode::None {
-            let _ = writeln!(out, "> {}\n", failure_mode_emoji(fm));
-        }
+        let _ = writeln!(out, "### {date}{fm_badge}\n");
+        let _ = writeln!(out, "_{}_\n", truncate_str(cap.capsule.intent.trim(), 100));
 
         let d = cap.capsule.decision.trim();
         let r = cap.capsule.rationale.trim();
 
         if !d.is_empty() {
-            let _ = writeln!(out, "**Decision**: {d}\n");
+            let _ = writeln!(out, "{d}\n");
         }
         if !r.is_empty() {
-            let _ = writeln!(out, "**Rationale**: {r}\n");
+            let _ = writeln!(out, "> {}\n", r.replace('\n', "\n> "));
         }
 
         if let Some(ref sig) = cap.capsule.failure_signals {
@@ -476,37 +392,25 @@ pub fn symbol_page(symbol: &str, project: &str, caps: &[&ExportCapsule]) -> Stri
             }
         }
 
-        if !cap.capsule.next_steps.is_empty() {
-            for step in &cap.capsule.next_steps {
-                let _ = writeln!(out, "- [ ] {}", step);
-            }
-            out.push('\n');
-        }
-
-        // Tiny metadata footer per entry
-        let _ = writeln!(out, "_id: `{}` · category: `{}`_\n", &cap.id[..cap.id.len().min(16)], cap.capsule.category);
-
-        // Obsidian wikilinks to other symbols in the same capsule
+        // Wikilinks to other symbols touched in the same capsule
         let other_syms: Vec<&String> = cap.capsule.symbols.iter()
+            .take(MAX_PRIMARY_POSITION)
             .filter(|s| s.as_str() != symbol)
-            .take(5)
             .collect();
         if !other_syms.is_empty() {
             let links = other_syms.iter()
                 .map(|s| format!("[[{}]]", symbol_page_filename(s).trim_end_matches(".md")))
                 .collect::<Vec<_>>()
                 .join("  ");
-            let _ = writeln!(out, "_Also touched: {links}_\n");
+            let _ = writeln!(out, "_↳ {links}_\n");
         }
-
-        // Use slug variable to avoid dead_code warning
-        let _ = slug;
-
-        out.push_str("---\n\n");
     }
 
     out
 }
+
+/// Symbol position ≤ this is treated as primary focus of the capsule.
+pub const MAX_PRIMARY_POSITION: usize = 3;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // decisions.md  (root-level curated decision log)
@@ -597,61 +501,66 @@ pub fn decisions_md(caps: &[&ExportCapsule]) -> String {
 // Category README  (categories/<bucket>/README.md)
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn category_readme_static(category: &str, caps: &[(&ExportCapsule, &str)]) -> String {
+pub fn category_readme_static(category: &str, caps: &[&ExportCapsule]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {} ({} {})\n",
         category, caps.len(),
-        if caps.len() == 1 { "capsule" } else { "capsules" });
+        if caps.len() == 1 { "decision" } else { "decisions" });
 
     if caps.is_empty() {
-        out.push_str("_No substantive capsules in this category._\n");
+        out.push_str("_No substantive decisions in this category._\n");
         return out;
     }
 
     // Group by project for readability
-    let mut by_project: std::collections::BTreeMap<&str, Vec<(&ExportCapsule, &str)>> =
+    let mut by_project: std::collections::BTreeMap<&str, Vec<&&ExportCapsule>> =
         std::collections::BTreeMap::new();
-    for (cap, fname) in caps {
-        by_project.entry(cap.project.as_str()).or_default().push((cap, fname));
+    for cap in caps {
+        by_project.entry(cap.project.as_str()).or_default().push(cap);
     }
 
     for (proj, entries) in &by_project {
         let _ = writeln!(out, "## {proj} ({})\n", entries.len());
-        out.push_str("| Date | Decision | Failure |\n");
-        out.push_str("|------|----------|---------|\n");
-        for (cap, filename) in entries {
+        out.push_str("| Date | Decision | Symbol | Failure |\n");
+        out.push_str("|------|----------|--------|---------|\n");
+        for cap in entries {
             let date = ts_ms_to_date(cap.ts_ms);
             let decision = truncate_str(cap.capsule.decision.trim(), 70);
+            // Link to the primary symbol's knowledge page if available
+            let primary = cap.capsule.symbols.first()
+                .map(|s| {
+                    let fname = symbol_page_filename(s);
+                    format!("[{}](../../symbols/{}/{})",
+                        truncate_str(s, 30), proj, fname)
+                })
+                .unwrap_or_default();
             let fm = if cap.capsule.failure_mode != FailureMode::None {
                 failure_mode_emoji(&cap.capsule.failure_mode).to_string()
             } else {
                 String::new()
             };
-            let _ = writeln!(out, "| {date} | [{}]({filename}) | {fm} |", decision);
+            let _ = writeln!(out, "| {date} | {decision} | {primary} | {fm} |");
         }
         out.push('\n');
     }
 
-    out.push_str("> _Run `unlost export --narrative` to generate LLM-written summaries._\n");
     out
 }
 
 pub fn category_readme_with_narrative(
     category: &str,
-    caps: &[(&ExportCapsule, &str)],
+    caps: &[&ExportCapsule],
     narrative: &str,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {} ({} {})\n",
         category, caps.len(),
-        if caps.len() == 1 { "capsule" } else { "capsules" });
+        if caps.len() == 1 { "decision" } else { "decisions" });
 
     out.push_str("## Summary\n\n");
     let _ = writeln!(out, "{}\n", narrative.trim());
 
-    // Reuse static table
     let static_part = category_readme_static(category, caps);
-    // Skip the header line (first line) of the static version
     let after_header = static_part.lines().skip(1).collect::<Vec<_>>().join("\n");
     out.push_str(&after_header);
     out
@@ -789,14 +698,6 @@ mod tests {
     }
 
     #[test]
-    fn test_capsule_filename() {
-        let cap = make_test_capsule();
-        let name = capsule_filename(&cap);
-        assert!(name.starts_with("2026-"), "filename should start with year: {name}");
-        assert!(name.ends_with(".md"), "filename should end with .md: {name}");
-    }
-
-    #[test]
     fn test_is_substantive() {
         let mut cap = make_test_capsule();
         assert!(is_substantive(&cap));
@@ -820,18 +721,6 @@ mod tests {
     fn test_symbol_page_filename() {
         assert_eq!(symbol_page_filename("src/storage.rs"), "src-storage-rs.md");
         assert_eq!(symbol_page_filename("CHANGELOG.md"), "changelog-md.md");
-    }
-
-    #[test]
-    fn test_capsule_to_markdown_contains_frontmatter() {
-        let cap = make_test_capsule();
-        let md = capsule_to_markdown(&cap, "debugging");
-        assert!(md.starts_with("---\n"));
-        assert!(md.contains("project:"));
-        assert!(md.contains("category:"));
-        assert!(md.contains("failure_mode:"));
-        assert!(md.contains("## Decision"));
-        assert!(md.contains("## Rationale"));
     }
 
     #[test]
