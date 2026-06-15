@@ -347,7 +347,7 @@ async fn main() -> anyhow::Result<()> {
             unlost::commands::model::run(command).await?;
         }
         Command::Config { command } => {
-            unlost::commands::config::run(command)?;
+            unlost::commands::config::run(command).await?;
         }
         Command::Clear { path, yes } => {
             unlost::commands::clear::run(path, yes)?;

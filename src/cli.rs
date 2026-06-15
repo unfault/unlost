@@ -1033,9 +1033,14 @@ pub enum LlmCommand {
 
     /// Configure Anthropic as LLM provider
     Anthropic {
-        /// Anthropic API key
+        /// Anthropic API key (mutually exclusive with --sso)
         #[arg(long, env = "ANTHROPIC_API_KEY")]
-        api_key: String,
+        api_key: Option<String>,
+
+        /// Log in via browser OAuth PKCE and generate a permanent API key
+        /// (mutually exclusive with --api-key)
+        #[arg(long, default_value_t = false)]
+        sso: bool,
 
         /// Default model to use
         #[arg(long, default_value = "claude-3-5-sonnet-20241022")]
