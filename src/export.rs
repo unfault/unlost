@@ -6,6 +6,138 @@ use std::fmt::Write as FmtWrite;
 
 use crate::types::{FailureMode, IntentCapsule};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Fixed taxonomy
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The canonical set of export categories.
+/// LLM-extracted free-text categories are mapped onto these buckets.
+pub const TAXONOMY: &[(&str, &str)] = &[
+    ("architecture",  "System design, data models, high-level decisions, ADRs"),
+    ("debugging",     "Bug investigation, root-cause analysis, crash fixes"),
+    ("devops",        "CI/CD, deployment, infrastructure, build systems"),
+    ("documentation", "Docs writing, README, changelog, comments"),
+    ("feature",       "New feature design or implementation"),
+    ("meta",          "Check-ins, greetings, continuations, session bookkeeping"),
+    ("notes",         "Manual notes, ideas, observations, ad-hoc thoughts"),
+    ("performance",   "Profiling, optimisation, latency, throughput"),
+    ("planning",      "Roadmap, sprint planning, scoping, project management"),
+    ("refactoring",   "Code clean-up, restructuring, renaming, no behaviour change"),
+    ("release",       "Versioning, publishing, changelog prep, tagging"),
+    ("review",        "Code review, feedback, discussion of existing code"),
+    ("testing",       "Unit tests, integration tests, test coverage, assertions"),
+    ("ux",            "UI, CLI output, formatting, user-facing behaviour"),
+    ("other",         "Anything that doesn't fit the above buckets"),
+];
+
+/// Return the taxonomy bucket name for display (folder name = first element).
+pub fn taxonomy_names() -> Vec<&'static str> {
+    TAXONOMY.iter().map(|(name, _)| *name).collect()
+}
+
+/// Fast deterministic fallback: map a raw category string to the nearest
+/// taxonomy bucket using keyword matching. Used when no LLM is configured
+/// or when `--no-llm` is passed.
+pub fn map_category_fallback(raw: &str) -> &'static str {
+    let s = raw.to_lowercase();
+    let s = s.trim();
+
+    // Exact match on taxonomy names first
+    for (name, _) in TAXONOMY {
+        if s == *name {
+            return name;
+        }
+    }
+
+    // Keyword matching
+    if s.contains("debug") || s.contains("bug") || s.contains("fix") || s.contains("crash")
+        || s.contains("error") || s.contains("issue") || s.contains("investig")
+        || s.contains("troubleshoot") || s.contains("diagnos") || s.contains("root cause")
+    {
+        return "debugging";
+    }
+    if s.contains("architect") || s.contains("design") || s.contains("adr")
+        || s.contains("schema") || s.contains("model") || s.contains("structure")
+        || s.contains("system")
+    {
+        return "architecture";
+    }
+    if s.contains("refactor") || s.contains("clean") || s.contains("restructur")
+        || s.contains("rename") || s.contains("reorg") || s.contains("maintenance")
+        || s.contains("maintenan")
+    {
+        return "refactoring";
+    }
+    if s.contains("test") || s.contains("coverage") || s.contains("assert")
+        || s.contains("spec") || s.contains("unit test") || s.contains("integration test")
+    {
+        return "testing";
+    }
+    if s.contains("doc") || s.contains("readme") || s.contains("changelog")
+        || s.contains("comment") || s.contains("write-up") || s.contains("writeup")
+    {
+        return "documentation";
+    }
+    if s.contains("feature") || s.contains("implement") || s.contains("develop")
+        || s.contains("add ") || s.contains("new ")
+    {
+        return "feature";
+    }
+    if s.contains("release") || s.contains("publish") || s.contains("version")
+        || s.contains("tag") || s.contains("deploy") && s.contains("release")
+        || s.contains("version_control") || s.contains("version control")
+        || s.contains("semver") || s.contains("bump")
+    {
+        return "release";
+    }
+    if s.contains("deploy") || s.contains("ci") || s.contains("cd")
+        || s.contains("build") || s.contains("infra") || s.contains("pipeline")
+        || s.contains("devops") || s.contains("docker") || s.contains("k8s")
+        || s.contains("github action")
+    {
+        return "devops";
+    }
+    if s.contains("perf") || s.contains("optim") || s.contains("latency")
+        || s.contains("throughput") || s.contains("speed") || s.contains("slow")
+        || s.contains("memory") || s.contains("cpu")
+    {
+        return "performance";
+    }
+    if s.contains("plan") || s.contains("roadmap") || s.contains("sprint")
+        || s.contains("scope") || s.contains("project") || s.contains("milestone")
+        || s.contains("management") || s.contains("priorit")
+    {
+        return "planning";
+    }
+    if s.contains("review") || s.contains("feedback") || s.contains("code quality")
+        || s.contains("pr ") || s.contains("pull request") || s.contains("critique")
+    {
+        return "review";
+    }
+    if s.contains("ux") || s.contains("ui") || s.contains("cli")
+        || s.contains("format") || s.contains("output") || s.contains("display")
+        || s.contains("user interface") || s.contains("user experience")
+        || s.contains("styling")
+    {
+        return "ux";
+    }
+    if s.contains("note") || s.contains("idea") || s.contains("thought")
+        || s.contains("observation") || s.contains("memo")
+    {
+        return "notes";
+    }
+    if s.contains("check") || s.contains("ack") || s.contains("confirm")
+        || s.contains("greeting") || s.contains("continuation") || s.contains("meta")
+        || s.contains("replay") || s.contains("unknown") || s.contains("conversation")
+        || s.contains("chat") || s.contains("check-in") || s.contains("checkin")
+        || s.contains("status")
+    {
+        return "meta";
+    }
+
+    "other"
+}
+
 /// Lightweight capsule row read from `capsules.jsonl`.
 /// Only the fields we actually render are populated.
 #[derive(Debug, Clone)]

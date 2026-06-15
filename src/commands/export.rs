@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -8,7 +9,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::export::{
     capsule_filename, capsule_to_markdown, category_narrative_prompt, category_readme_static,
-    category_readme_with_narrative, index_md, ts_ms_to_iso, CategoryStat, ExportCapsule,
+    category_readme_with_narrative, index_md, map_category_fallback, ts_ms_to_iso, CategoryStat,
+    ExportCapsule, TAXONOMY,
 };
 
 // ─── local JSONL deserialization types (mirrors reindex.rs) ─────────────────
@@ -20,8 +22,9 @@ struct JsonCapsule {
     ts_ms: i64,
     #[serde(default)]
     conn_id: Option<u64>,
+    /// Stored as null in manual notes and some legacy records.
     #[serde(default)]
-    agent_session_id: String,
+    agent_session_id: Option<String>,
     source: String,
     #[serde(default)]
     head_sha: Option<String>,
@@ -105,16 +108,30 @@ pub async fn run(
         return Ok(());
     }
 
-    // 4. Group by category (preserving insertion/chronological order)
+    // 4. Build category mapping: raw LLM category → taxonomy bucket
+    //    Collect distinct raw categories, then map them all at once.
+    let raw_categories: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        capsules
+            .iter()
+            .map(|c| c.capsule.category.clone())
+            .filter(|c| seen.insert(c.clone()))
+            .collect()
+    };
+
+    let category_map = build_category_map(&raw_categories, llm_model.as_deref()).await;
+
+    // 5. Group by resolved taxonomy bucket (chronological order preserved)
     let mut by_category: BTreeMap<String, Vec<ExportCapsule>> = BTreeMap::new();
     for cap in capsules {
-        by_category
-            .entry(cap.capsule.category.clone())
-            .or_default()
-            .push(cap);
+        let bucket = category_map
+            .get(&cap.capsule.category)
+            .cloned()
+            .unwrap_or_else(|| map_category_fallback(&cap.capsule.category).to_string());
+        by_category.entry(bucket).or_default().push(cap);
     }
 
-    // 5. Create top-level export directory
+    // 6. Create top-level export directory
     std::fs::create_dir_all(&export_dir)
         .with_context(|| format!("failed to create export dir {}", export_dir.display()))?;
 
@@ -267,11 +284,7 @@ async fn load_capsules(jsonl_path: &Path) -> anyhow::Result<Vec<ExportCapsule>> 
         let cap = ExportCapsule {
             id,
             ts_ms: raw.ts_ms,
-            agent_session_id: if raw.agent_session_id.is_empty() {
-                None
-            } else {
-                Some(raw.agent_session_id)
-            },
+            agent_session_id: raw.agent_session_id.filter(|s| !s.is_empty()),
             head_sha: raw.head_sha,
             commit_sha: raw.commit_sha,
             source: raw.source,
@@ -322,4 +335,106 @@ async fn generate_narrative(
     )
     .await?;
     Ok(result.narrative)
+}
+
+// ─── taxonomy mapping ─────────────────────────────────────────────────────────
+
+/// Structured output from the LLM category-mapping call.
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Debug)]
+struct CategoryMapping {
+    /// Map from raw category string to canonical taxonomy bucket.
+    mapping: HashMap<String, String>,
+}
+
+/// Build a `raw → bucket` map for all distinct raw categories.
+///
+/// If an LLM is configured, sends a single batch request to classify all
+/// categories at once. Falls back to keyword-based heuristics on any error
+/// or when no LLM is available.
+async fn build_category_map(
+    raw_categories: &[String],
+    model_override: Option<&str>,
+) -> HashMap<String, String> {
+    // If no LLM configured, go straight to fallback — no noise.
+    if crate::llm::get_llm_config().is_none() {
+        return fallback_map(raw_categories);
+    }
+
+    let bucket_list = TAXONOMY
+        .iter()
+        .map(|(name, desc)| format!("  - {name}: {desc}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Split into chunks of 200 to stay within context limits
+    const CHUNK: usize = 200;
+    let mut result: HashMap<String, String> = HashMap::new();
+
+    for chunk in raw_categories.chunks(CHUNK) {
+        let items = chunk
+            .iter()
+            .map(|c| format!("  - {c:?}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "Map each of the following raw category strings to exactly one of the canonical buckets below.\n\
+             Return a JSON object with a `mapping` key whose value is an object mapping each raw string to its bucket.\n\
+             Every input string must appear as a key. Use only the bucket names listed — nothing else.\n\
+             If a string clearly doesn't fit any bucket, use `other`.\n\
+             \n\
+             Canonical buckets:\n{bucket_list}\n\
+             \n\
+             Raw categories to classify:\n{items}"
+        );
+
+        match crate::llm::llm_extract::<CategoryMapping>(
+            model_override,
+            "You are a precise classifier. Respond only with the requested JSON.",
+            &prompt,
+        )
+        .await
+        {
+            Ok(mapped) => {
+                // Validate each returned bucket name; fall back per-entry if invalid
+                let valid: std::collections::HashSet<&str> =
+                    TAXONOMY.iter().map(|(n, _)| *n).collect();
+                for (raw, bucket) in mapped.mapping {
+                    if valid.contains(bucket.as_str()) {
+                        result.insert(raw, bucket);
+                    } else {
+                        // LLM returned an invalid bucket name — use keyword fallback
+                        let fb = map_category_fallback(&raw).to_string();
+                        result.insert(raw, fb);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("category mapping LLM call failed: {e}; using keyword fallback for this chunk");
+                for raw in chunk {
+                    result.insert(
+                        raw.clone(),
+                        map_category_fallback(raw).to_string(),
+                    );
+                }
+            }
+        }
+    }
+
+    // Fill in any that the LLM missed
+    for raw in raw_categories {
+        result
+            .entry(raw.clone())
+            .or_insert_with(|| map_category_fallback(raw).to_string());
+    }
+
+    result
+}
+
+/// Pure keyword-based fallback — no LLM required.
+fn fallback_map(raw_categories: &[String]) -> HashMap<String, String> {
+    raw_categories
+        .iter()
+        .map(|raw| (raw.clone(), map_category_fallback(raw).to_string()))
+        .collect()
 }
