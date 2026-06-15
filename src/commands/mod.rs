@@ -6,6 +6,7 @@ pub mod checkpoint;
 pub mod clear;
 pub mod config;
 pub mod emotion;
+pub mod export;
 pub mod explore;
 pub mod init;
 pub mod inspect;

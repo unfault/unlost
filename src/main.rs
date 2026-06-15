@@ -420,6 +420,15 @@ async fn main() -> anyhow::Result<()> {
         } => {
             unlost::commands::checkpoint::run(list, session_id, since, llm_model).await?;
         }
+        Command::Export {
+            dir,
+            path,
+            narrative,
+            force,
+            llm_model,
+        } => {
+            unlost::commands::export::run(dir, path, narrative, force, llm_model).await?;
+        }
     }
 
     Ok(())

@@ -59,6 +59,7 @@ Workspace:
   init       Seed LanceDB from the current codebase (unfault-core graph)
   reindex    Rebuild LanceDB index from capsules.jsonl
   replay        Replay/backfill agent transcripts into unlost
+  export     Export capsules as markdown to a directory (second brain)
   clear      Delete all generated data for the current workspace
   where      Show where the workspace's files are stored
 
@@ -724,6 +725,30 @@ pub enum Command {
         #[arg(long)]
         llm_model: Option<String>,
     },
+
+    /// Export capsules as markdown to a directory (second-brain / Obsidian / Logseq)
+    Export {
+        /// Target directory for the export.
+        /// Overrides the default set via `unlost config export-dir`.
+        #[arg(long)]
+        dir: Option<String>,
+
+        /// Workspace path (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        path: String,
+
+        /// Generate LLM-written narrative summaries for each category README
+        #[arg(long, default_value_t = false)]
+        narrative: bool,
+
+        /// Re-export all capsules, overwriting existing files (default: skip existing)
+        #[arg(long, default_value_t = false)]
+        force: bool,
+
+        /// LLM model to use for narrative summaries (requires --narrative)
+        #[arg(long)]
+        llm_model: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -944,6 +969,13 @@ pub enum ConfigCommand {
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
+    },
+
+    /// Set or show the default export directory for `unlost export`
+    ExportDir {
+        /// Directory path to set as the default export target.
+        /// If omitted, shows the current setting.
+        path: Option<String>,
     },
 }
 

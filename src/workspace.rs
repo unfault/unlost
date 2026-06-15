@@ -456,6 +456,7 @@ pub(crate) fn load_workspace_config() -> WorkspaceConfig {
         path_index: Default::default(),
         workspaces: Default::default(),
         llm: None,
+        export_dir: None,
     }
 }
 
