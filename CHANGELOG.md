@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`unlost config llm anthropic-login`**: New SSO login command for Anthropic. Opens the browser, runs an OAuth 2.0 PKCE flow against `console.anthropic.com`, exchanges the temporary access token for a permanent `sk-ant-...` API key via Anthropic's `create_api_key` endpoint, and stores it in config — no manual key management required.
+
 ### Changed
 
 - **`docs/index.html`**: Updated landing page to cover 0.15.0 and 0.16.0 changes: added `note+local://` to the Source Pointer Registry; enriched `unlost thread` command entry with LLM synthesis, timeline rendering details, and flag examples; enriched `unlost note` entry with `--global` flag and source pointer footer behaviour; added Claude Cowork to the "Any agent. One shared memory." hero row and the Agent Integration install block.
+
 ## [0.16.0] - 2026-05-20
 
 ### Added
