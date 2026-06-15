@@ -2,10 +2,44 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-15
+
 ### Added
 
-- **`unlost export`**: New command that exports capsules as a structured, high-signal second-brain vault consumable by Obsidian, Logseq, Hugo, or any markdown-aware harness. The vault has three entry points: `decisions.md` (chronological log of every substantive decision + a dedicated failure-signal table), `symbols/<project>/` (one knowledge page per significant source file, aggregating every decision that touched it with wikilinks to related files), and `categories/<bucket>/` (15-bucket taxonomy, noise-filtered to substantive capsules only). Low-signal capsules (~47% of corpus: check-ins, replays, empty turns) are silently excluded from the category tree. Symbol pages filter out non-path tokens (CLI flags, env vars, prose words) and require ≥3 appearances to earn a page. All capsule files carry YAML front-matter (`id`, `date`, `project`, `category`, `symbols`, `failure_mode`, `tags`) for Obsidian dataview queries. Multi-workspace aware: all registered workspaces are exported together, symbol pages scoped per project. Export is incremental by default; `--force` regenerates; `--narrative` adds LLM-written category summaries.
-- **`unlost config export-dir <path>`**: Persist a default export directory in `~/.config/unlost/config.json` so `unlost export` works without a `--dir` flag on every invocation.
+- **`unlost export`**: New command that produces a high-signal second-brain
+  vault from your capsule history, consumable by Obsidian, Logseq, Hugo, or any
+  markdown-aware harness. The vault has three entry points: a root
+  `decisions.md` (chronological log of every substantive decision plus a
+  failure-signal table), a `symbols/<project>/` tree (one knowledge page per
+  significant source file, aggregating every decision that primarily touched
+  it, with Obsidian-style wikilinks to related files), and a `categories/`
+  tree of 13 README-only summaries grouped by a fixed taxonomy (debugging,
+  architecture, refactoring, testing, etc.). Multi-workspace aware: all
+  registered workspaces are exported together, with per-project scoping for
+  symbol pages.
+- **`unlost config export-dir <path>`**: Persist a default export directory
+  in `~/.config/unlost/config.json` so `unlost export` works without a
+  `--dir` flag on every invocation.
+
+### Changed
+
+- **Aggressive noise filtering on export**: about 47% of capsules
+  (check-ins, replays, empty extractions, low-signal `meta`/`other` buckets)
+  are silently dropped from the vault. Substantive capsules are those with a
+  meaningful decision **and** rationale, or any non-`none` failure mode. The
+  long tail of single-mention symbols is also dropped (≥ 8 capsules required
+  for a symbol to earn a page).
+- **Symbol attribution uses position-3 cutoff**: the LLM lists symbols in
+  rough relevance order; hub files like `src/main.rs` appear in 1000+
+  capsules at average position 11 because they're touched as boilerplate.
+  Restricting attribution to the first three positions drops `src/main.rs`
+  from 17 k lines to 1.1 k and total symbol pages from ~660 to ~60 — all
+  signal, no boilerplate.
+- **Symbol filter is git-tracked-set-aware**: instead of a hardcoded
+  blocklist of build-artefact paths, the filter uses `git ls-files` per
+  project. A path-shaped symbol earns a page only if it canonicalises to a
+  tracked file under the workspace root. Self-tunes to whatever each
+  project's `.gitignore` excludes — no per-toolchain assumptions.
 
 ## [0.17.0] - 2026-06-15
 
