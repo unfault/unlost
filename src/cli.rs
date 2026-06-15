@@ -1033,9 +1033,14 @@ pub enum LlmCommand {
 
     /// Configure Anthropic as LLM provider
     Anthropic {
-        /// Anthropic API key
+        /// Anthropic API key (mutually exclusive with --sso)
         #[arg(long, env = "ANTHROPIC_API_KEY")]
-        api_key: String,
+        api_key: Option<String>,
+
+        /// Log in via browser OAuth PKCE and generate a permanent API key
+        /// (mutually exclusive with --api-key)
+        #[arg(long, default_value_t = false)]
+        sso: bool,
 
         /// Default model to use
         #[arg(long, default_value = "claude-3-5-sonnet-20241022")]
@@ -1069,18 +1074,6 @@ pub enum LlmCommand {
 
         /// Default model to use
         #[arg(long)]
-        model: String,
-    },
-
-    /// Log in to Anthropic via browser OAuth and store a generated API key
-    ///
-    /// Opens your browser, completes the Anthropic OAuth PKCE flow, then uses
-    /// the temporary access token to create a permanent API key. The key is
-    /// stored in unlost config exactly as if you had run `unlost config llm
-    /// anthropic --api-key <key>`. The OAuth token itself is discarded.
-    AnthropicLogin {
-        /// Model to configure (default: claude-3-5-sonnet-20241022)
-        #[arg(long, default_value = "claude-3-5-sonnet-20241022")]
         model: String,
     },
 

@@ -34,7 +34,7 @@ const CREATE_KEY_URL: &str =
 const SCOPES: &str = "org:create_api_key user:profile user:inference";
 
 /// Run the full SSO login flow and store a permanent Anthropic API key.
-pub async fn run(model: String) -> anyhow::Result<()> {
+pub async fn run(model: String, base_url: Option<String>) -> anyhow::Result<()> {
     // ── 1. PKCE ────────────────────────────────────────────────────────────────
     let verifier = generate_verifier();
     let challenge = pkce_challenge(&verifier);
@@ -133,7 +133,7 @@ pub async fn run(model: String) -> anyhow::Result<()> {
     // ── 7. Persist to unlost config ───────────────────────────────────────────
     crate::llm::set_llm_config(Some(LlmConfig::Anthropic {
         api_key,
-        base_url: None,
+        base_url,
         model,
     }))
     .context("failed to save LLM config")?;

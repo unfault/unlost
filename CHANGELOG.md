@@ -4,7 +4,7 @@
 
 ### Added
 
-- **`unlost config llm anthropic-login`**: New SSO login command for Anthropic. Opens the browser, runs an OAuth 2.0 PKCE flow against `console.anthropic.com`, exchanges the temporary access token for a permanent `sk-ant-...` API key via Anthropic's `create_api_key` endpoint, and stores it in config — no manual key management required.
+- **`unlost config llm anthropic --sso`**: New SSO flag on the existing `anthropic` subcommand. Opens the browser, runs an OAuth 2.0 PKCE flow against `console.anthropic.com`, exchanges the temporary access token for a permanent `sk-ant-...` API key via Anthropic's `create_api_key` endpoint, and stores it in config — no manual key management required. `--api-key` and `--sso` are mutually exclusive.
 
 ### Changed
 

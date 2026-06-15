@@ -43,9 +43,6 @@ fn ensure_top_level_string_array_contains(root: &mut serde_json::Value, key: &st
 
 async fn handle_llm_command(cmd: LlmCommand) -> anyhow::Result<()> {
     match cmd {
-        LlmCommand::AnthropicLogin { model } => {
-            return anthropic_login::run(model).await;
-        }
         LlmCommand::Openai {
             api_key,
             base_url,
@@ -60,15 +57,31 @@ async fn handle_llm_command(cmd: LlmCommand) -> anyhow::Result<()> {
         }
         LlmCommand::Anthropic {
             api_key,
+            sso,
             base_url,
             model,
         } => {
-            crate::llm::set_llm_config(Some(LlmConfig::Anthropic {
-                api_key,
-                base_url,
-                model,
-            }))?;
-            println!("LLM provider set to Anthropic");
+            match (api_key, sso) {
+                (Some(_), true) => {
+                    anyhow::bail!("--api-key and --sso are mutually exclusive");
+                }
+                (None, false) => {
+                    anyhow::bail!(
+                        "provide either --api-key <KEY> or --sso to log in via browser"
+                    );
+                }
+                (Some(key), false) => {
+                    crate::llm::set_llm_config(Some(LlmConfig::Anthropic {
+                        api_key: key,
+                        base_url,
+                        model,
+                    }))?;
+                    println!("LLM provider set to Anthropic");
+                }
+                (None, true) => {
+                    anthropic_login::run(model, base_url).await?;
+                }
+            }
         }
         LlmCommand::Ollama { base_url, model } => {
             crate::llm::set_llm_config(Some(LlmConfig::Ollama { base_url, model }))?;
