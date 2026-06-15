@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`unlost export`**: New command that exports capsules as structured markdown to a user-selected directory, enabling a "second brain" workflow consumable by Obsidian, Logseq, Hugo, or any markdown-aware harness. Capsules are organised into per-category folders, each with a static `README.md` table; a top-level `INDEX.md` summarises all categories. Individual files include YAML front-matter (`id`, `date`, `category`, `symbols`, `failure_mode`, `tags`) for dataview queries and static-site frontends. Export is incremental by default (skips existing files); `--force` regenerates all. Pass `--narrative` to trigger LLM-written prose summaries per category README.
+- **`unlost config export-dir <path>`**: Persist a default export directory in `~/.config/unlost/config.json` so `unlost export` works without a `--dir` flag on every invocation.
+
 ## [0.17.0] - 2026-06-15
 
 ### Added

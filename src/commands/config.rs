@@ -2,6 +2,21 @@ use crate::cli::{AgentCommand, ConfigCommand, LlmCommand};
 use crate::commands::anthropic_login;
 
 use crate::config::LlmConfig;
+use crate::workspace::{load_workspace_config, save_workspace_config};
+
+/// Expand a leading `~` in a path string to the home directory.
+fn expand_tilde_str(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+            return format!("{home}/{rest}");
+        }
+    } else if path == "~" {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+            return home;
+        }
+    }
+    path.to_string()
+}
 
 fn ensure_object(v: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
     if !v.is_object() {
@@ -1085,5 +1100,26 @@ pub async fn run(command: ConfigCommand) -> anyhow::Result<()> {
     match command {
         ConfigCommand::Llm { command } => handle_llm_command(command).await,
         ConfigCommand::Agent { command } => handle_agent_command(command),
+        ConfigCommand::ExportDir { path } => {
+            match path {
+                Some(p) => {
+                    // Expand ~ so we store the canonical path
+                    let expanded = expand_tilde_str(&p);
+                    let mut cfg = load_workspace_config();
+                    cfg.export_dir = Some(expanded.clone());
+                    save_workspace_config(&cfg)?;
+                    println!("export-dir set to: {expanded}");
+                    println!("Run `unlost export` to export capsules.");
+                }
+                None => {
+                    let cfg = load_workspace_config();
+                    match cfg.export_dir {
+                        Some(d) => println!("export-dir: {d}"),
+                        None => println!("export-dir: not set\n  Set it with: unlost config export-dir ~/path/to/dir"),
+                    }
+                }
+            }
+            Ok(())
+        }
     }
 }
