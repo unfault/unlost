@@ -10,6 +10,10 @@ pub(crate) struct WorkspaceConfig {
 
     #[serde(default)]
     pub(crate) llm: Option<LlmConfig>,
+
+    /// Default directory for `unlost export`. Can be overridden per-invocation with --dir.
+    #[serde(default)]
+    pub(crate) export_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +180,7 @@ mod tests {
             path_index: std::collections::BTreeMap::new(),
             workspaces: std::collections::BTreeMap::new(),
             llm: None,
+            export_dir: None,
         };
 
         config
@@ -220,6 +225,7 @@ mod tests {
             path_index: std::collections::BTreeMap::new(),
             workspaces: std::collections::BTreeMap::new(),
             llm: None,
+            export_dir: None,
         };
 
         // Test that default fields work correctly
