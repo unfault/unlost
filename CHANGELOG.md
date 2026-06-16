@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-06-16
+
+### Fixed
+
+- **`unlost config llm anthropic --sso`**: The login flow was waiting on a
+  local TCP listener for a redirect that Anthropic never makes — the
+  authorize URL pointed at `console.anthropic.com/oauth/code/callback`,
+  which is the manual copy-code page, not a real redirect target. Switched
+  to the documented copy-code flow: the page now displays an authorization
+  code that the user pastes back into the terminal. Added a 120 s timeout on
+  the token exchange (the endpoint can take 40–60 s during platform issues
+  and the previous default would silently fail). Switched the token request
+  to `application/x-www-form-urlencoded` per Anthropic's current spec.
+- **Account selection guidance**: Added an explicit warning before the
+  browser opens that the OAuth flow uses whatever claude.ai session is
+  already active. Users with a wrong account (e.g. personal vs team) need
+  to log out of claude.ai first or open the printed URL in a private /
+  incognito window — there is no `prompt=select_account` for this PKCE
+  flow.
+- **Regression in v0.18.1**: that release was cut from a branch that had
+  not yet been merged with the second-brain export feature, so the
+  `unlost export` command was missing from the 0.18.1 binary. v0.18.2
+  restores it.
+
 ## [0.18.0] - 2026-06-15
 
 ### Added
