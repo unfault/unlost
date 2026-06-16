@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-06-16
+
 ### Fixed
 
 - **`unlost config llm anthropic --sso`**: The login flow was waiting on a
