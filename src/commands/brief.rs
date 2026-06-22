@@ -322,27 +322,30 @@ pub async fn run(
         if let Some(pb) = spinner.as_ref() {
             pb.finish_and_clear();
         }
-        // Print raw capsules without LLM narrative
-        for hit in &hits {
-            let cap = &hit.capsule;
-            println!("---");
-            println!("category:  {}", cap.category);
-            if !cap.intent.trim().is_empty() {
-                println!("intent:    {}", cap.intent);
+        if output == OutputFormat::Json {
+            println!("{}", crate::util::hits_to_json_pretty(&hits));
+        } else {
+            for hit in &hits {
+                let cap = &hit.capsule;
+                println!("---");
+                println!("category:  {}", cap.category);
+                if !cap.intent.trim().is_empty() {
+                    println!("intent:    {}", cap.intent);
+                }
+                if !cap.decision.trim().is_empty() {
+                    println!("decision:  {}", cap.decision);
+                }
+                if !cap.rationale.trim().is_empty() {
+                    println!("rationale: {}", cap.rationale);
+                }
+                if !cap.next_steps.is_empty() {
+                    println!("next:      {:?}", cap.next_steps);
+                }
+                println!("symbols:   {:?}", cap.symbols);
+                println!();
             }
-            if !cap.decision.trim().is_empty() {
-                println!("decision:  {}", cap.decision);
-            }
-            if !cap.rationale.trim().is_empty() {
-                println!("rationale: {}", cap.rationale);
-            }
-            if !cap.next_steps.is_empty() {
-                println!("next:      {:?}", cap.next_steps);
-            }
-            println!("symbols:   {:?}", cap.symbols);
             println!();
         }
-        println!();
         return Ok(());
     }
 

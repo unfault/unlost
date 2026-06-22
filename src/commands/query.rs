@@ -379,7 +379,9 @@ pub async fn run(
                 pb.finish_and_clear();
             }
 
-            if no_llm || facts {
+            if no_llm && output == crate::cli::OutputFormat::Json {
+                println!("{}", crate::util::hits_to_json_pretty(&matches));
+            } else if no_llm || facts {
                 let print_usage = |usage: &crate::types::UsageMeta| {
                     if let Some(provider_id) = usage.provider_id.as_deref() {
                         println!("provider_id: {provider_id}");

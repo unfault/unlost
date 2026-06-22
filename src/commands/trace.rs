@@ -114,7 +114,11 @@ pub async fn run(
         if let Some(pb) = spinner.as_ref() {
             pb.finish_and_clear();
         }
-        print_raw_chain(output, &chain);
+        if output == OutputFormat::Json {
+            println!("{}", crate::util::hits_to_json_pretty(&chain));
+        } else {
+            print_raw_chain(output, &chain);
+        }
         return Ok(());
     }
 
@@ -166,7 +170,11 @@ pub async fn run(
                 pb.finish_and_clear();
             }
             tracing::warn!(error = ?e, "trace narrative failed; printing raw chain");
-            print_raw_chain(output, &chain);
+            if output == OutputFormat::Json {
+                println!("{}", crate::util::hits_to_json_pretty(&chain));
+            } else {
+                print_raw_chain(output, &chain);
+            }
         }
     }
 
