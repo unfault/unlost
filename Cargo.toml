@@ -3,7 +3,7 @@ members = ["."]
 
 [package]
 name = "unlost"
-version = "0.20.0"
+version = "0.20.1"
 edition = "2024"
 authors = ["Sylvain Hellegouarch <sylvain@unfault.dev>"]
 description = "Unlost - Local-first code memory for a workspace."

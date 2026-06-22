@@ -6655,7 +6655,7 @@ checksum = "39ec24b3121d976906ece63c9daad25b85969647682eee313cb5779fdd69e14e"
 
 [[package]]
 name = "unlost"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "anyhow",
  "arrow-array",

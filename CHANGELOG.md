@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-06-22
+
+### Fixed
+
+- **Release**: Re-release of 0.20.0 with correct CI-built binaries (0.20.0 tag was corrupted by a manual release attempt).
+
 ## [0.20.0] - 2026-06-22
 
 ### Added
