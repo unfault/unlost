@@ -1,5 +1,6 @@
 pub mod anthropic_login;
 pub mod brief;
+pub mod ingest;
 pub mod challenge;
 pub mod mcp;
 pub mod checkpoint;

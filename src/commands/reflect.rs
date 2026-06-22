@@ -217,17 +217,20 @@ pub async fn run(
         if let Some(pb) = spinner.as_ref() {
             pb.finish_and_clear();
         }
-        // Print raw turn evaluation data without LLM narrative
-        println!("Turn evaluation data ({} turns):", eval_capsules.len());
-        for hit in &eval_capsules {
-            if let Some(ref eval) = hit.turn_eval {
-                println!("---");
-                println!("session:   {:?}", hit.meta.agent_session_id);
-                println!("category:  {}", hit.capsule.category);
-                println!("eval:      {:?}", eval);
+        if output == crate::cli::OutputFormat::Json {
+            println!("{}", crate::util::hits_to_json_pretty(&eval_capsules));
+        } else {
+            println!("Turn evaluation data ({} turns):", eval_capsules.len());
+            for hit in &eval_capsules {
+                if let Some(ref eval) = hit.turn_eval {
+                    println!("---");
+                    println!("session:   {:?}", hit.meta.agent_session_id);
+                    println!("category:  {}", hit.capsule.category);
+                    println!("eval:      {:?}", eval);
+                }
             }
+            println!();
         }
-        println!();
         return Ok(());
     }
 

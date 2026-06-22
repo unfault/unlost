@@ -426,9 +426,9 @@ pub(crate) fn render_narrative(output: OutputFormat, s: &str) -> String {
     let s = crate::util::strip_llm_boilerplate(s.trim().to_string());
 
     match output {
-        OutputFormat::Plain => s.trim().to_string(),
+        OutputFormat::Plain | OutputFormat::Json => s.trim().to_string(),
         OutputFormat::Ansi => {
-            // Dim “tips” lines so they read as guidance, not facts.
+            // Dim "tips" lines so they read as guidance, not facts.
             // We intentionally skip backtick-coloring inside dimmed lines, so dim stays consistent.
             let wrap_width = 80usize;
             let mut out = String::with_capacity(s.len() + 64);
@@ -1409,7 +1409,7 @@ pub(crate) fn render_brief(output: OutputFormat, s: &str) -> String {
     ];
 
     match output {
-        OutputFormat::Plain => s.trim().to_string(),
+        OutputFormat::Plain | OutputFormat::Json => s.trim().to_string(),
         OutputFormat::Ansi => {
             let wrap_width = 80usize;
             let mut out = String::with_capacity(s.len() + 128);
@@ -1488,7 +1488,7 @@ pub(crate) fn render_structured(output: OutputFormat, s: &str) -> String {
     ];
 
     match output {
-        OutputFormat::Plain => s.trim().to_string(),
+        OutputFormat::Plain | OutputFormat::Json => s.trim().to_string(),
         OutputFormat::Ansi => {
             let mut out = String::with_capacity(s.len() + 256);
             let mut first = true;
@@ -1904,7 +1904,7 @@ pub(crate) fn render_reflect(output: OutputFormat, mode: crate::cli::ReflectMode
 
     let s = crate::util::strip_llm_boilerplate(s.trim().to_string());
 
-    if output == OutputFormat::Plain {
+    if output == OutputFormat::Plain || output == OutputFormat::Json {
         return s;
     }
 

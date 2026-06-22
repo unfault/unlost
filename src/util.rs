@@ -442,3 +442,76 @@ mod tests {
         );
     }
 }
+
+// ============================================================================
+// JSON output types — stable schema for harness / agent consumption
+// ============================================================================
+
+/// Stable JSON representation of a single capsule hit.
+/// Emitted by `--no-llm --output json` (or `--json`) on all retrieval commands.
+/// Schema is intentionally flat: one object per capsule, no nesting beyond arrays.
+#[derive(serde::Serialize)]
+pub struct CapsuleJson {
+    pub id: String,
+    pub ts_ms: i64,
+    /// RFC3339 UTC timestamp (convenience copy of ts_ms)
+    pub time_utc: Option<String>,
+    pub source: String,
+    pub category: String,
+    pub intent: String,
+    pub decision: String,
+    pub rationale: String,
+    pub next_steps: Vec<String>,
+    pub symbols: Vec<String>,
+    pub failure_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_signals: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_pointer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
+}
+
+impl CapsuleJson {
+    pub fn from_hit(hit: &crate::CapsuleHit) -> Self {
+        use chrono::{SecondsFormat, TimeZone};
+        let time_utc = chrono::Utc
+            .timestamp_millis_opt(hit.ts_ms)
+            .single()
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true));
+        let failure_mode = format!("{:?}", hit.capsule.failure_mode)
+            .to_lowercase()
+            .replace("failuremode::", "");
+        CapsuleJson {
+            id: hit.id.clone(),
+            ts_ms: hit.ts_ms,
+            time_utc,
+            source: hit.meta.source.clone(),
+            category: hit.capsule.category.clone(),
+            intent: hit.capsule.intent.clone(),
+            decision: hit.capsule.decision.clone(),
+            rationale: hit.capsule.rationale.clone(),
+            next_steps: hit.capsule.next_steps.clone(),
+            symbols: hit.capsule.symbols.clone(),
+            failure_mode,
+            failure_signals: hit.capsule.failure_signals.clone(),
+            agent_session_id: hit.meta.agent_session_id.clone(),
+            source_pointer: hit.meta.source_pointer.clone(),
+            distance: if hit.distance == 0.0 { None } else { Some(hit.distance) },
+        }
+    }
+}
+
+/// Serialize a list of capsule hits to a compact JSON array string.
+pub fn hits_to_json(hits: &[crate::CapsuleHit]) -> String {
+    let items: Vec<CapsuleJson> = hits.iter().map(CapsuleJson::from_hit).collect();
+    serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Serialize a list of capsule hits to a pretty-printed JSON array string.
+pub fn hits_to_json_pretty(hits: &[crate::CapsuleHit]) -> String {
+    let items: Vec<CapsuleJson> = hits.iter().map(CapsuleJson::from_hit).collect();
+    serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string())
+}

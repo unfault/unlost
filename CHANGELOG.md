@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-22
+
+### Added
+
+- **`--output json` / `--json` flag**: All retrieval commands (`query`, `trace`, `recall`, `brief`, `explore`, `challenge`, `reflect`, `thread`) now accept `--output json` (or the `--json` shortcut). Combined with `--no-llm`, this produces a stable JSON array of capsule objects — no LLM required, no text parsing needed. Schema: `id`, `ts_ms`, `time_utc`, `source`, `category`, `intent`, `decision`, `rationale`, `next_steps`, `symbols`, `failure_mode`, `agent_session_id`, `source_pointer`, `distance`.
+- **`unlost ingest <file.md>`**: New command that chunks a markdown document into capsules by `##` / `###` heading. Parses YAML frontmatter (`target`, `target_path`, `symbols`, `related`, `category`), extracts `[[wiki-links]]`, code-fence language tags, and inline backtick identifiers as symbols. Tags capsules `category: cartography` by default (overridable with `--category`). No LLM required — uses only the embedding model. Supports multiple files in one invocation and `--global` for the global workspace.
+
 ## [0.19.0] - 2026-06-22
 
 ### Added

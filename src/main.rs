@@ -98,11 +98,12 @@ async fn main() -> anyhow::Result<()> {
             facts,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
             file,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::query::run(
                 query,
                 limit,
@@ -135,10 +136,11 @@ async fn main() -> anyhow::Result<()> {
             no_llm,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::trace::run(
                 target,
                 seeds,
@@ -183,10 +185,11 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::brief::run(target, no_llm, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
         }
@@ -198,9 +201,10 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             path,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::reflect::run(mode, session, since, no_llm, llm_model, output, path)
                 .await?;
         }
@@ -210,10 +214,11 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::explore::run(query, no_llm, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
         }
@@ -224,10 +229,11 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::challenge::run(
                 target, deep, no_llm, llm_model, output, embed_model, embed_cache_dir,
             )
@@ -242,10 +248,11 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::thread::run(
                 topic,
                 limit,
@@ -270,10 +277,11 @@ async fn main() -> anyhow::Result<()> {
             llm_model,
             output,
             plain,
+            json,
             embed_model,
             embed_cache_dir,
         } => {
-            let output = if plain { OutputFormat::Plain } else { output };
+            let output = if json { OutputFormat::Json } else if plain { OutputFormat::Plain } else { output };
             unlost::commands::recall::run(
                 target,
                 limit,
@@ -350,6 +358,16 @@ async fn main() -> anyhow::Result<()> {
                 text, source, global, stdin, embed_model, embed_cache_dir,
             )
             .await?;
+        }
+        Command::Ingest {
+            paths,
+            category,
+            global,
+            embed_model,
+            embed_cache_dir,
+        } => {
+            unlost::commands::ingest::run(paths, category, global, embed_model, embed_cache_dir)
+                .await?;
         }
         Command::Model { command } => {
             unlost::commands::model::run(command).await?;

@@ -44,6 +44,7 @@ unlost {version}
 
 Memory:
   note        Capture a manual note (terminal, stdin, any thought)
+  ingest      Ingest a markdown document into workspace memory (chunks by heading)
   query       Semantic search across recorded capsules
   trace       Trace the causal chain of decisions that led to the current state of a file, symbol, or concept
   recall      Recall the story so far (proactive overview)
@@ -111,6 +112,8 @@ pub enum OutputFormat {
     Ansi,
     /// No ANSI colors (useful for piping)
     Plain,
+    /// Machine-readable JSON (stable schema, one object per result)
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -206,6 +209,10 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         plain: bool,
 
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -272,6 +279,10 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         plain: bool,
 
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -333,6 +344,10 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         plain: bool,
 
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -383,6 +398,10 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         plain: bool,
 
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
+
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
@@ -422,6 +441,10 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         plain: bool,
 
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
+
         /// Workspace path (defaults to current directory)
         #[arg(long, default_value = ".")]
         path: String,
@@ -447,6 +470,10 @@ pub enum Command {
         /// Shortcut for `--output plain`
         #[arg(long, default_value_t = false)]
         plain: bool,
+
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
@@ -481,6 +508,10 @@ pub enum Command {
         /// Shortcut for `--output plain`
         #[arg(long, default_value_t = false)]
         plain: bool,
+
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
@@ -532,6 +563,10 @@ pub enum Command {
         /// Shortcut for `--output plain`
         #[arg(long, default_value_t = false)]
         plain: bool,
+
+        /// Shortcut for `--output json`
+        #[arg(long, default_value_t = false)]
+        json: bool,
 
         /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
@@ -659,6 +694,28 @@ pub enum Command {
         stdin: bool,
 
         /// Embedding model (fastembed). Default: Xenova/bge-small-en-v1.5
+        #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
+        embed_model: String,
+
+        /// Embedding cache directory (defaults to XDG data dir)
+        #[arg(long, env = "UNLOST_EMBED_CACHE_DIR")]
+        embed_cache_dir: Option<String>,
+    },
+
+    /// Ingest a markdown document into workspace memory (chunks by heading, no LLM required)
+    Ingest {
+        /// One or more markdown file paths to ingest
+        paths: Vec<String>,
+
+        /// Override the capsule category tag (default: cartography)
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Force the global workspace even when inside a project directory
+        #[arg(long, default_value_t = false)]
+        global: bool,
+
+        /// Embedding model (fastembed). Default: BAAI/bge-small-en-v1.5
         #[arg(long, default_value = crate::constants::DEFAULT_EMBED_MODEL)]
         embed_model: String,
 
