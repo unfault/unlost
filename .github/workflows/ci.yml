@@ -32,9 +32,7 @@ jobs:
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install protobuf
+        run: brew install protobuf
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
@@ -45,6 +43,8 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ matrix.os }}
 
       - name: Test
         run: cargo test --locked
@@ -78,9 +78,7 @@ jobs:
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install protobuf
+        run: brew install protobuf
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
@@ -93,6 +91,8 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.target }}
 
       - name: Build (release)
         run: cargo build --release --locked --target ${{ matrix.target }}

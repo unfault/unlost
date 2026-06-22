@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-06-22
+
+### Fixed
+
+- **CI/Release workflows**: `Swatinem/rust-cache` was silently missing on every run because no `shared-key` was set, causing each workflow/job combination to use a separate cache namespace. Added `shared-key: build-<target>` to all cross-target build jobs (shared between `ci.yml` and `release-crates.yml`) and `shared-key: test-ubuntu-latest` to all Linux test jobs (shared between `ci.yml`, `pr-ci.yml`, and `release-crates.yml publish-crate`). Also parallelised `publish-crate` (no longer waits for `build-binaries`), removed `brew update` from macOS protoc install, and dropped the redundant `cargo publish --dry-run` pass.
+
 ## [0.20.2] - 2026-06-22
 
 ### Fixed

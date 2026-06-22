@@ -25,6 +25,8 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-ubuntu-latest
 
       - name: Test
         run: cargo test --locked
