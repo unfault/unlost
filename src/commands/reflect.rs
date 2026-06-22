@@ -152,6 +152,7 @@ pub async fn run(
     mode: crate::cli::ReflectMode,
     session: Option<String>,
     since: Option<String>,
+    no_llm: bool,
     llm_model: Option<String>,
     output: OutputFormat,
     path: String,
@@ -209,6 +210,24 @@ pub async fn run(
             "TurnEval is collected on new sessions going forward. \
              Try again after recording a new session."
         );
+        return Ok(());
+    }
+
+    if no_llm {
+        if let Some(pb) = spinner.as_ref() {
+            pb.finish_and_clear();
+        }
+        // Print raw turn evaluation data without LLM narrative
+        println!("Turn evaluation data ({} turns):", eval_capsules.len());
+        for hit in &eval_capsules {
+            if let Some(ref eval) = hit.turn_eval {
+                println!("---");
+                println!("session:   {:?}", hit.meta.agent_session_id);
+                println!("category:  {}", hit.capsule.category);
+                println!("eval:      {:?}", eval);
+            }
+        }
+        println!();
         return Ok(());
     }
 
