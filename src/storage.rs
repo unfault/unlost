@@ -1952,9 +1952,14 @@ pub(crate) fn capsule_embed_text_with_prior(
     if let Some(prior) = prior_decision {
         let prior = prior.trim();
         if !prior.is_empty() {
-            // Truncate to keep the embed text focused
+            // Truncate to keep the embed text focused (char-boundary safe)
             let prior = if prior.len() > 120 {
-                &prior[..120]
+                let end = prior.char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i <= 120)
+                    .last()
+                    .unwrap_or(0);
+                &prior[..end]
             } else {
                 prior
             };

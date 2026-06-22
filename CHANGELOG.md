@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-06-22
+
+### Fixed
+
+- **`unlost ingest`**: Panic on non-ASCII characters (e.g. box-drawing chars `├`, `└`, `─`) caused by byte-indexing into a multi-byte UTF-8 string in `storage.rs`. Fixed to use char-boundary-safe truncation.
+- **`unlost reindex`**: Crash on capsules with `null` `next_steps` or `symbols` fields. Added `#[serde(default)]` to those fields in `JsonCapsule`. Also hardened `conn_id` and `exchange_seq` against missing values in old records.
+
 ## [0.20.1] - 2026-06-22
 
 ### Fixed

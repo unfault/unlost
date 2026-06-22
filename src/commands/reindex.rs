@@ -12,7 +12,9 @@ struct JsonCapsule {
     #[serde(default)]
     source_pointer: Option<String>,
     ts_ms: i64,
+    #[serde(default)]
     conn_id: u64,
+    #[serde(default)]
     exchange_seq: u64,
     #[serde(default)]
     request_path: String,
@@ -61,7 +63,9 @@ struct Caps {
     decision: String,
     #[serde(default)]
     rationale: String,
+    #[serde(default)]
     next_steps: Vec<String>,
+    #[serde(default)]
     symbols: Vec<String>,
     #[serde(default)]
     failure_mode: Option<String>,
