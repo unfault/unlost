@@ -100,6 +100,7 @@ fn select_hits_for_challenge(
 pub async fn run(
     target: Vec<String>,
     deep: bool,
+    no_llm: bool,
     llm_model: Option<String>,
     output: OutputFormat,
     embed_model: String,
@@ -187,6 +188,34 @@ pub async fn run(
         }
         println!("No capsules found yet for this workspace.");
         println!("Run `unlost init` or record a few coding sessions first.");
+        return Ok(());
+    }
+
+    if no_llm {
+        if let Some(pb) = spinner.as_ref() {
+            pb.finish_and_clear();
+        }
+        // Print raw scored capsules without LLM narrative
+        for hit in &hits {
+            let cap = &hit.capsule;
+            println!("---");
+            println!("category:  {}", cap.category);
+            if !cap.intent.trim().is_empty() {
+                println!("intent:    {}", cap.intent);
+            }
+            if !cap.decision.trim().is_empty() {
+                println!("decision:  {}", cap.decision);
+            }
+            if !cap.rationale.trim().is_empty() {
+                println!("rationale: {}", cap.rationale);
+            }
+            if !cap.next_steps.is_empty() {
+                println!("next:      {:?}", cap.next_steps);
+            }
+            println!("symbols:   {:?}", cap.symbols);
+            println!();
+        }
+        println!();
         return Ok(());
     }
 

@@ -295,6 +295,10 @@ pub enum Command {
         #[arg(long)]
         from_commit: Option<String>,
 
+        /// Disable LLM narrative (posts a minimal comment with raw capsule list only)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
         /// LLM model to use for the PR comment narrative
         #[arg(long)]
         llm_model: Option<String>,
@@ -312,6 +316,10 @@ pub enum Command {
     Brief {
         /// Optional scope: file path, symbol, or concept to focus the brief on
         target: Vec<String>,
+
+        /// Disable LLM narrative (prints raw scored capsules)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
 
         /// LLM model to use for the brief
         #[arg(long)]
@@ -359,6 +367,10 @@ pub enum Command {
         #[arg(long)]
         until: Option<String>,
 
+        /// Disable LLM narrative (prints raw capsules)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
         /// LLM model to use for recall narrative
         #[arg(long)]
         llm_model: Option<String>,
@@ -394,6 +406,10 @@ pub enum Command {
         #[arg(long)]
         since: Option<String>,
 
+        /// Disable LLM narrative (prints raw turn evaluation data)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
+
         /// LLM model to use for the reflection narrative
         #[arg(long)]
         llm_model: Option<String>,
@@ -415,6 +431,10 @@ pub enum Command {
     Explore {
         /// Scenario or goal to explore (e.g. "should we keep lancedb or move to sqlite+fts?")
         query: Vec<String>,
+
+        /// Disable LLM narrative (prints raw scored capsules)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
 
         /// LLM model to use for the exploration narrative
         #[arg(long)]
@@ -445,6 +465,10 @@ pub enum Command {
         /// Show full analysis: adds UNKNOWNS and PROBES sections (default: concise)
         #[arg(long, default_value_t = false)]
         deep: bool,
+
+        /// Disable LLM narrative (prints raw scored capsules)
+        #[arg(long, default_value_t = false)]
+        no_llm: bool,
 
         /// LLM model to use for the challenge narrative
         #[arg(long)]

@@ -15,6 +15,7 @@ pub async fn run(
     pr: String,
     session_id: Option<String>,
     from_commit: Option<String>,
+    no_llm: bool,
     llm_model: Option<String>,
     embed_model: String,
     embed_cache_dir: Option<String>,
@@ -83,15 +84,19 @@ pub async fn run(
     let worth_noting =
         build_worth_noting_section(&workspace_root, &pr_meta.changed_files);
 
-    // ── 5. Generate the markdown comment body via LLM ─────────────────────────
-    let comment_body = build_pr_comment_markdown(
-        llm_model.as_deref(),
-        &pr_meta,
-        &chain,
-        &worth_noting,
-        &workspace_root.to_string_lossy(),
-    )
-    .await?;
+    // ── 5. Generate the markdown comment body (LLM or raw) ───────────────────
+    let comment_body = if no_llm {
+        build_pr_comment_no_llm(&pr_meta, &chain, &worth_noting)
+    } else {
+        build_pr_comment_markdown(
+            llm_model.as_deref(),
+            &pr_meta,
+            &chain,
+            &worth_noting,
+            &workspace_root.to_string_lossy(),
+        )
+        .await?
+    };
 
     // ── 6. Post via gh pr comment ─────────────────────────────────────────────
     post_pr_comment(&pr_ref, &comment_body)
@@ -391,6 +396,71 @@ fn build_worth_noting_section(
     }
 
     notes.join("\n\n")
+}
+
+// ============================================================================
+// No-LLM fallback: minimal PR comment with raw capsule list
+// ============================================================================
+
+fn build_pr_comment_no_llm(
+    pr_meta: &PrMeta,
+    chain: &[crate::CapsuleHit],
+    worth_noting: &str,
+) -> String {
+    let mut body = String::new();
+
+    let hook = if chain.is_empty() {
+        "> **[unlost](https://unlost.unfault.dev)** found no recorded decisions for this PR.\n\n"
+            .to_string()
+    } else {
+        format!(
+            "> **[unlost](https://unlost.unfault.dev)** found {} recorded decision{} from the coding session.\n\n",
+            chain.len(),
+            if chain.len() == 1 { "" } else { "s" },
+        )
+    };
+    body.push_str(&hook);
+    body.push_str("## unlost context\n\n");
+    body.push_str(&format!(
+        "**PR #{} — {}**  \n",
+        pr_meta.number, pr_meta.title
+    ));
+    body.push_str(&format!(
+        "Changed files ({}): {}\n\n",
+        pr_meta.changed_files.len(),
+        pr_meta.changed_files.iter().take(15).cloned().collect::<Vec<_>>().join(", ")
+    ));
+
+    if !chain.is_empty() {
+        body.push_str("### Recorded decisions\n\n");
+        for (i, hit) in chain.iter().enumerate() {
+            let cap = &hit.capsule;
+            body.push_str(&format!("{}. ", i + 1));
+            if !cap.intent.trim().is_empty() {
+                body.push_str(&format!("**Intent:** {}  \n", cap.intent.replace('\n', " ")));
+            }
+            if !cap.decision.trim().is_empty() {
+                body.push_str(&format!("   **Decision:** {}  \n", cap.decision.replace('\n', " ")));
+            }
+            if !cap.rationale.trim().is_empty() {
+                body.push_str(&format!("   **Rationale:** {}  \n", cap.rationale.replace('\n', " ")));
+            }
+            if !cap.symbols.is_empty() {
+                let syms = cap.symbols.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+                body.push_str(&format!("   **Symbols:** `{}`  \n", syms));
+            }
+            body.push('\n');
+        }
+    }
+
+    if !worth_noting.is_empty() {
+        body.push_str("### Worth noting\n\n");
+        body.push_str(worth_noting);
+        body.push('\n');
+    }
+
+    body.push_str("\n---\n_[unlost](https://unlost.unfault.dev) -- local-first session memory. (no-llm mode)_\n");
+    body
 }
 
 // ============================================================================

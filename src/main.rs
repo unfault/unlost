@@ -161,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
             pr,
             session_id,
             from_commit,
+            no_llm,
             llm_model,
             embed_model,
             embed_cache_dir,
@@ -169,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 pr,
                 session_id,
                 from_commit,
+                no_llm,
                 llm_model,
                 embed_model,
                 embed_cache_dir,
@@ -177,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Brief {
             target,
+            no_llm,
             llm_model,
             output,
             plain,
@@ -184,24 +187,26 @@ async fn main() -> anyhow::Result<()> {
             embed_cache_dir,
         } => {
             let output = if plain { OutputFormat::Plain } else { output };
-            unlost::commands::brief::run(target, llm_model, output, embed_model, embed_cache_dir)
+            unlost::commands::brief::run(target, no_llm, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
         }
         Command::Reflect {
             mode,
             session,
             since,
+            no_llm,
             llm_model,
             output,
             plain,
             path,
         } => {
             let output = if plain { OutputFormat::Plain } else { output };
-            unlost::commands::reflect::run(mode, session, since, llm_model, output, path)
+            unlost::commands::reflect::run(mode, session, since, no_llm, llm_model, output, path)
                 .await?;
         }
         Command::Explore {
             query,
+            no_llm,
             llm_model,
             output,
             plain,
@@ -209,12 +214,13 @@ async fn main() -> anyhow::Result<()> {
             embed_cache_dir,
         } => {
             let output = if plain { OutputFormat::Plain } else { output };
-            unlost::commands::explore::run(query, llm_model, output, embed_model, embed_cache_dir)
+            unlost::commands::explore::run(query, no_llm, llm_model, output, embed_model, embed_cache_dir)
                 .await?;
         }
         Command::Challenge {
             target,
             deep,
+            no_llm,
             llm_model,
             output,
             plain,
@@ -223,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let output = if plain { OutputFormat::Plain } else { output };
             unlost::commands::challenge::run(
-                target, deep, llm_model, output, embed_model, embed_cache_dir,
+                target, deep, no_llm, llm_model, output, embed_model, embed_cache_dir,
             )
             .await?;
         }
@@ -260,6 +266,7 @@ async fn main() -> anyhow::Result<()> {
             provider,
             since,
             until,
+            no_llm,
             llm_model,
             output,
             plain,
@@ -274,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
                 provider,
                 since,
                 until,
+                no_llm,
                 llm_model,
                 output,
                 embed_model,

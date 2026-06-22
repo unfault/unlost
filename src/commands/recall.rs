@@ -291,6 +291,7 @@ pub async fn run(
     provider: Option<crate::cli::ProviderType>,
     since: Option<String>,
     until: Option<String>,
+    no_llm: bool,
     llm_model: Option<String>,
     output: OutputFormat,
     embed_model: String,
@@ -357,7 +358,8 @@ pub async fn run(
     // When there's no scope filter, try to serve from the most recent checkpoint
     // plus a small delta of new capsules since the checkpoint. This avoids an
     // LLM call for every recall invocation.
-    if scope_opt.is_none()
+    if !no_llm
+        && scope_opt.is_none()
         && since_ms.is_none()
         && until_ms.is_none()
         && emotion_label.is_none()
@@ -502,6 +504,34 @@ pub async fn run(
         } else {
             println!("No capsules found yet for this workspace.");
         }
+        return Ok(());
+    }
+
+    if no_llm {
+        if let Some(pb) = spinner.as_ref() {
+            pb.finish_and_clear();
+        }
+        // Print raw capsules without LLM narrative
+        for hit in &hits {
+            let cap = &hit.capsule;
+            println!("---");
+            println!("category:  {}", cap.category);
+            if !cap.intent.trim().is_empty() {
+                println!("intent:    {}", cap.intent);
+            }
+            if !cap.decision.trim().is_empty() {
+                println!("decision:  {}", cap.decision);
+            }
+            if !cap.rationale.trim().is_empty() {
+                println!("rationale: {}", cap.rationale);
+            }
+            if !cap.next_steps.is_empty() {
+                println!("next:      {:?}", cap.next_steps);
+            }
+            println!("symbols:   {:?}", cap.symbols);
+            println!();
+        }
+        println!();
         return Ok(());
     }
 

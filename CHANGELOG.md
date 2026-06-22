@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`--no-llm` flag on all LLM-using commands**: `recall`, `brief`, `reflect`, `explore`, `challenge`, and `pr-comment` now all accept `--no-llm` to skip the LLM narrative and print raw capsule data instead. Allows full use of unlost memory commands on machines without an LLM configured. `query`, `trace`, `thread`, and `init` already had this flag; this change brings the remaining commands in line.
+
 ## [0.18.3] - 2026-06-22
 
 ### Fixed

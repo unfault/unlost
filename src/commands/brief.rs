@@ -207,6 +207,7 @@ fn checkpoint_as_capsule_hit(
 
 pub async fn run(
     target: Vec<String>,
+    no_llm: bool,
     llm_model: Option<String>,
     output: OutputFormat,
     embed_model: String,
@@ -263,7 +264,7 @@ pub async fn run(
     // ── Checkpoint fast path (unscoped only) ─────────────────────────────────
     // When not scoped, try to synthesize from stored checkpoint narratives.
     // This is significantly cheaper than processing 200 raw capsules.
-    if scope_opt.is_none() {
+    if !no_llm && scope_opt.is_none() {
         if let Some(result) = try_checkpoint_brief(&ws, &workspace_root, llm_model.as_deref(), output).await {
             if let Some(pb) = spinner.as_ref() {
                 pb.finish_and_clear();
@@ -314,6 +315,34 @@ pub async fn run(
             println!("No capsules found yet for this workspace.");
             println!("Run `unlost recall` after a few coding sessions to build up memory.");
         }
+        return Ok(());
+    }
+
+    if no_llm {
+        if let Some(pb) = spinner.as_ref() {
+            pb.finish_and_clear();
+        }
+        // Print raw capsules without LLM narrative
+        for hit in &hits {
+            let cap = &hit.capsule;
+            println!("---");
+            println!("category:  {}", cap.category);
+            if !cap.intent.trim().is_empty() {
+                println!("intent:    {}", cap.intent);
+            }
+            if !cap.decision.trim().is_empty() {
+                println!("decision:  {}", cap.decision);
+            }
+            if !cap.rationale.trim().is_empty() {
+                println!("rationale: {}", cap.rationale);
+            }
+            if !cap.next_steps.is_empty() {
+                println!("next:      {:?}", cap.next_steps);
+            }
+            println!("symbols:   {:?}", cap.symbols);
+            println!();
+        }
+        println!();
         return Ok(());
     }
 
