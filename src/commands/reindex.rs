@@ -14,7 +14,9 @@ struct JsonCapsule {
     ts_ms: i64,
     conn_id: u64,
     exchange_seq: u64,
+    #[serde(default)]
     request_path: String,
+    #[serde(default)]
     source: String,
     #[serde(default)]
     usage: Option<Usage>,
@@ -51,9 +53,13 @@ struct Cache {
 
 #[derive(Deserialize)]
 struct Caps {
+    #[serde(default)]
     category: String,
+    #[serde(default)]
     intent: String,
+    #[serde(default)]
     decision: String,
+    #[serde(default)]
     rationale: String,
     next_steps: Vec<String>,
     symbols: Vec<String>,

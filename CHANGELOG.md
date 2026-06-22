@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`unlost reindex`**: Tolerate capsules with `null` string fields (`category`, `intent`, `decision`, `rationale`, `request_path`, `source`) instead of crashing with `invalid type: null, expected a string`. Adds `#[serde(default)]` to those fields so older or partially-written records are skipped gracefully rather than aborting a full reindex mid-run.
+
 ## [0.17.0] - 2026-06-15
 
 ### Added
